@@ -1,0 +1,1050 @@
+"""Main window for RadioMaster+ with menu bar, listbook, and now playing bar."""
+
+import wx
+from typing import Any
+
+from radiomaster.ui.status_bar import StatusBar
+from radiomaster.ui.now_playing_bar import NowPlayingBar
+from radiomaster.ui.lyrics_panel import LyricsPanel
+from radiomaster.ui.effects_menu import EffectsMenu
+from radiomaster.ui.radio_panel import RadioPanel
+from radiomaster.ui.podcast_panel import PodcastPanel
+from radiomaster.ui.audiobook_panel import AudiobookPanel
+from radiomaster.ui.media_player_panel import MediaPlayerPanel
+from radiomaster.ui.youtube_panel import YouTubePanel
+from radiomaster.ui.downloads_panel import DownloadsPanel
+from radiomaster.ui.scheduler_panel import SchedulerPanel
+from radiomaster.ui.search_bar import SearchBar
+from radiomaster.ui.video_frame import VideoFrame
+from radiomaster.ui.equalizer_dialog import EqualizerDialog
+from radiomaster.engine.playback_engine import PlaybackEngine
+from radiomaster.utils.config import ConfigManager
+from radiomaster.database.connection import DatabaseManager
+from radiomaster.services.sleep_timer import SleepTimer
+from radiomaster.services.station_api import StationAPI
+from radiomaster.services.station_db import StationDB
+from radiomaster.services.station_updater import StationUpdater
+from radiomaster.utils.accessibility import set_accessible_name
+from radiomaster.i18n import _
+
+
+class MainWindow(wx.Frame):
+    """Main application window."""
+
+    def __init__(self, config: ConfigManager, db: DatabaseManager,
+                 theme_manager: Any, paths: dict[str, str],
+                 scheduler_service: Any = None) -> None:
+        self._config = config
+        self._db = db
+        self._theme_manager = theme_manager
+        self._paths = paths
+        self._scheduler_service = scheduler_service
+        self._engine = PlaybackEngine()
+        # Playback-related settings (output device, normalization,
+        # ReplayGain, auto-reconnect, radio browsing prefs, accessibility)
+        # are all applied together at the end of __init__ via
+        # _apply_settings_changes(), once the UI it needs to touch exists.
+        self._sleep_timer = SleepTimer()
+        self._video_frame: VideoFrame | None = None
+        self._station_api = StationAPI()
+        self._station_db = StationDB()
+        self._station_updater = StationUpdater(self._station_api, self._station_db)
+
+        # TAB_TRAVERSAL must be part of the constructor's style, not added
+        # afterward via SetWindowStyleFlag() -- wx's control-container
+        # navigation machinery (what lets Tab escape a nested composite
+        # panel like SearchBar/NowPlayingBar up to the Frame and on to the
+        # next sibling) is wired up during construction. Retrofitting the
+        # bit later leaves the Frame LOOKING tab-traversal-enabled but
+        # never escaping nested panels -- Tab just wraps forever inside
+        # whichever panel currently has focus.
+        super().__init__(None, title=_("RadioMaster+"), size=(1200, 800),
+                          style=wx.DEFAULT_FRAME_STYLE | wx.TAB_TRAVERSAL)
+
+        self._setup_menu_bar()
+        self._setup_ui()
+        self._setup_engine_callbacks()
+        self._setup_accelerators()
+        self._bind_events()
+        # Nothing has played yet, so Fast Forward/Rewind/history nav all
+        # start out correctly greyed out rather than looking clickable
+        # until the first _on_engine_state/_on_page_changed call.
+        self._update_transport_button_states()
+
+        # Recolor whenever the theme changes -- from the menu (_apply_theme)
+        # or from the Theme Editor dialog saving/applying a custom theme.
+        self._theme_manager.on_theme_changed(lambda theme_key: self._recolor_widgets(self))
+        self._recolor_widgets(self)
+
+        # Apply the rest of the saved settings (high contrast, font,
+        # ReplayGain, radio browsing preferences...) now that the UI exists
+        # to apply them to, instead of only taking effect the first time
+        # Settings happens to be opened and saved.
+        self._apply_settings_changes()
+
+        self.Centre()
+
+    @property
+    def engine(self) -> PlaybackEngine:
+        """The shared playback engine (app.py stops it on exit)."""
+        return self._engine
+
+    def _recolor_widgets(self, window: wx.Window, colors: dict[str, str] | None = None) -> None:
+        """Recursively apply colors to window and its descendants.
+
+        With no override, uses the active theme's colors (selecting a theme
+        previously only updated a status-bar label and a config key -- no
+        control anywhere actually changed color). *colors*, when given, lets
+        callers (e.g. the high-contrast setting) force specific colors using
+        the same walk instead of duplicating it."""
+        if colors is None:
+            tm = self._theme_manager
+            colors = {
+                "bg": tm.get_color("bg_primary"),
+                "fg": tm.get_color("text_primary"),
+                "control_bg": tm.get_color("control_face"),
+                "control_fg": tm.get_color("control_text"),
+            }
+        bg = colors["bg"]
+        fg = colors["fg"]
+        control_bg = colors["control_bg"]
+        control_fg = colors["control_fg"]
+        control_types = (
+            wx.Button, wx.ListCtrl, wx.TextCtrl, wx.ComboBox, wx.Choice,
+            wx.Slider, wx.CheckBox, wx.RadioButton, wx.SpinCtrl,
+        )
+
+        def walk(win: wx.Window) -> None:
+            try:
+                if isinstance(win, control_types):
+                    win.SetBackgroundColour(control_bg)
+                    win.SetForegroundColour(control_fg)
+                else:
+                    win.SetBackgroundColour(bg)
+                    win.SetForegroundColour(fg)
+            except Exception:
+                pass
+            for child in win.GetChildren():
+                walk(child)
+            win.Refresh()
+
+        walk(window)
+        window.Layout()
+
+    def _apply_font_recursive(self, window: wx.Window, font: wx.Font) -> None:
+        """Apply *font* to window and every descendant."""
+        def walk(win: wx.Window) -> None:
+            try:
+                win.SetFont(font)
+            except Exception:
+                pass
+            for child in win.GetChildren():
+                walk(child)
+            # A changed font can change a control's natural size. Calling
+            # Layout() only on the top-level `window` re-flows just its
+            # own immediate sizer -- since search_bar/listbook/etc. are
+            # nested one level deeper under content_panel (see _setup_ui),
+            # that alone wouldn't reach the sizer that actually holds
+            # them. Layout() at every level a sizer exists does.
+            if win.GetSizer() is not None:
+                win.Layout()
+
+        walk(window)
+        window.Refresh()
+
+    def _setup_menu_bar(self) -> None:
+        """Create the menu bar."""
+        menubar = wx.MenuBar()
+        self._menu_ids: dict[str, int] = {}
+
+        # File menu
+        file_menu = wx.Menu()
+        file_menu.Append(wx.ID_OPEN, "&Open File...\tCtrl+O")
+        self._menu_ids["open_url"] = wx.NewIdRef()
+        file_menu.Append(self._menu_ids["open_url"], "Open &URL...\tCtrl+U")
+        self._menu_ids["open_folder"] = wx.NewIdRef()
+        file_menu.Append(self._menu_ids["open_folder"], "Open &Folder...\tCtrl+Shift+O")
+        file_menu.AppendSeparator()
+        self._menu_ids["import_opml"] = wx.NewIdRef()
+        file_menu.Append(self._menu_ids["import_opml"], "Import OPML...")
+        self._menu_ids["export_opml"] = wx.NewIdRef()
+        file_menu.Append(self._menu_ids["export_opml"], "Export OPML...")
+        file_menu.AppendSeparator()
+        file_menu.Append(wx.ID_EXIT, "E&xit\tAlt+F4")
+        menubar.Append(file_menu, "&File")
+
+        # View menu
+        view_menu = wx.Menu()
+        self._menu_ids["toggle_sidebar"] = wx.NewIdRef()
+        view_menu.Append(self._menu_ids["toggle_sidebar"], "Toggle &Sidebar\tCtrl+B")
+        self._menu_ids["toggle_equalizer"] = wx.NewIdRef()
+        view_menu.Append(self._menu_ids["toggle_equalizer"], "Toggle &Equalizer\tCtrl+Shift+E")
+        self._menu_ids["toggle_lyrics"] = wx.NewIdRef()
+        view_menu.Append(self._menu_ids["toggle_lyrics"], "Toggle &Lyrics Panel\tCtrl+L")
+        view_menu.AppendSeparator()
+        self._menu_ids["fullscreen"] = wx.NewIdRef()
+        view_menu.Append(self._menu_ids["fullscreen"], "&Fullscreen\tF11")
+
+        # Theme submenu
+        theme_menu = wx.Menu()
+        self._menu_ids["theme_light"] = wx.NewIdRef()
+        theme_menu.Append(self._menu_ids["theme_light"], "Default Light")
+        self._menu_ids["theme_dark"] = wx.NewIdRef()
+        theme_menu.Append(self._menu_ids["theme_dark"], "Default Dark")
+        theme_menu.AppendSeparator()
+        self._menu_ids["theme_editor"] = wx.NewIdRef()
+        theme_menu.Append(self._menu_ids["theme_editor"], "Theme Editor...")
+        view_menu.AppendSubMenu(theme_menu, "&Theme")
+
+        # Language submenu
+        lang_menu = wx.Menu()
+        self._menu_ids["lang_en"] = wx.NewIdRef()
+        lang_menu.Append(self._menu_ids["lang_en"], "English")
+        view_menu.AppendSubMenu(lang_menu, "&Language")
+        menubar.Append(view_menu, "&View")
+
+        # Effects menu (built by EffectsMenu class)
+        self._effects_menu = EffectsMenu(
+            menubar,
+            get_params=lambda eid: self._engine.get_effect_params(eid),
+            is_enabled=lambda eid: self._engine._effects.get(eid, {}).get("enabled", False),
+            on_toggle=self._on_effect_toggle,
+            on_preset=self._on_effect_preset,
+        )
+
+        # Tools menu
+        tools_menu = wx.Menu()
+        self._menu_ids["sleep_timer"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["sleep_timer"], "&Sleep Timer...\tCtrl+T")
+        self._menu_ids["download_manager"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["download_manager"], "&Download Manager...\tCtrl+D")
+        self._menu_ids["scheduler"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["scheduler"], "&Recording Scheduler...\tCtrl+R")
+        tools_menu.AppendSeparator()
+        self._menu_ids["track_identifier"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["track_identifier"], "&Track Identifier...\tCtrl+I")
+        self._menu_ids["track_splitter"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["track_splitter"], "Split &Track...")
+        self._menu_ids["shortcut_editor"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["shortcut_editor"], "&Keyboard Shortcuts...\tCtrl+K")
+        tools_menu.AppendSeparator()
+        tools_menu.Append(wx.ID_PREFERENCES, "&Settings...\tCtrl+,")
+        menubar.Append(tools_menu, "&Tools")
+
+        # Help menu
+        help_menu = wx.Menu()
+        help_menu.Append(wx.ID_ABOUT, "&About RadioMaster+")
+        self._menu_ids["check_updates"] = wx.NewIdRef()
+        help_menu.Append(self._menu_ids["check_updates"], "Check for &Updates...")
+        self._menu_ids["documentation"] = wx.NewIdRef()
+        help_menu.Append(self._menu_ids["documentation"], "&Documentation\tF1")
+        menubar.Append(help_menu, "&Help")
+
+        self.SetMenuBar(menubar)
+
+    def _setup_ui(self) -> None:
+        """Create the main UI layout using wx.Listbook (same as PyClone).
+        The listbook is placed FIRST in the tab order so it receives focus
+        before the playback controls.
+
+        Everything (except the native status bar, which wx requires to be
+        a direct child of the Frame) is parented to one wx.Panel, exactly
+        like PyClone's `panel = wx.Panel(self)` -- this isn't cosmetic:
+        wx.Frame does not reliably propagate Tab navigation from a nested
+        composite panel (SearchBar, NowPlayingBar are each their own
+        wx.Panel) up to the next sibling, confirmed empirically with a
+        minimal repro, even with TAB_TRAVERSAL set on the Frame itself.
+        wx.Panel does implement that propagation correctly. Routing every
+        top-level child through one Panel makes Tab flow through the whole
+        window (search bar -> listbook tab list -> current page's own
+        controls, in order -> transport bar -> lyrics panel, and back)
+        with zero custom EVT_NAVIGATION_KEY handling anywhere -- which is
+        exactly why PyClone never needed any."""
+        self._content_panel = wx.Panel(self)
+        frame_sizer = wx.BoxSizer(wx.VERTICAL)
+        frame_sizer.Add(self._content_panel, 1, wx.EXPAND)
+        self.SetSizer(frame_sizer)
+
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Search bar
+        self._search_bar = SearchBar(self._content_panel)
+        self._search_bar.on_search(self._on_global_search)
+        main_sizer.Add(self._search_bar, 0, wx.EXPAND | wx.ALL, 4)
+
+        # Status bar — created before the listbook so RadioPanel can use it.
+        # Must stay parented to the Frame itself (self), not the content
+        # panel: wx.Frame.SetStatusBar() requires that.
+        self._status_bar = StatusBar(self)
+        self.SetStatusBar(self._status_bar)
+
+        # Listbook for tabs — placed first so it gets focus before playback controls
+        self._listbook = wx.Listbook(self._content_panel, style=wx.LB_DEFAULT)
+        set_accessible_name(self._listbook, "Content Tabs")
+        self._listbook.GetListView().SetFocusFromKbd()
+        set_accessible_name(self._listbook.GetListView(), "Tab List")
+
+        # Create tab panels
+        self._radio_panel = RadioPanel(
+            self._listbook,
+            station_api=self._station_api,
+            station_db=self._station_db,
+            station_updater=self._station_updater,
+            engine=self._engine,
+            set_status=self._status_bar.set_status,
+        )
+        self._radio_panel.on_history_changed = self._update_transport_button_states
+        self._podcast_panel = PodcastPanel(self._listbook, self._db, self._engine)
+        self._audiobook_panel = AudiobookPanel(self._listbook, self._db, self._engine)
+        self._media_panel = MediaPlayerPanel(self._listbook, self._db, self._engine)
+        self._youtube_panel = YouTubePanel(self._listbook, self._db, self._engine)
+        self._downloads_panel = DownloadsPanel(self._listbook, self._db)
+        self._scheduler_panel = SchedulerPanel(self._listbook, self._db, self._scheduler_service)
+
+        self._listbook.AddPage(self._radio_panel, "Radio")
+        self._listbook.AddPage(self._podcast_panel, "Podcasts")
+        self._listbook.AddPage(self._audiobook_panel, "Audiobooks")
+        self._listbook.AddPage(self._media_panel, "Media Player")
+        self._listbook.AddPage(self._youtube_panel, "YouTube")
+        self._listbook.AddPage(self._downloads_panel, "Downloads")
+        self._listbook.AddPage(self._scheduler_panel, "Scheduler")
+
+        main_sizer.Add(self._listbook, 1, wx.EXPAND)
+
+        # Now Playing bar — placed right after the listbook so transport controls
+        # are the first thing reachable via Tab after content navigation
+        self._now_playing = NowPlayingBar(self._content_panel)
+        main_sizer.Add(self._now_playing, 0, wx.EXPAND)
+
+        # Lyrics/Show Notes panel
+        self._lyrics_panel = LyricsPanel(self._content_panel)
+        main_sizer.Add(self._lyrics_panel, 1, wx.EXPAND | wx.TOP, 2)
+
+        self._content_panel.SetSizer(main_sizer)
+
+        # Bind listbook page change for status announcements
+        self._listbook.Bind(wx.EVT_LISTBOOK_PAGE_CHANGED, self._on_page_changed)
+
+        # Wire LyricsPanel to LyricsService with a timer for LRC sync
+        self._lyrics_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_lyrics_timer, self._lyrics_timer)
+        self._lyrics_timer.Start(500)
+
+        # Set initial focus to the listbook's tab list.
+        # wx.Listbook's internal list view needs a moment to initialize.
+        wx.CallLater(100, self._listbook.GetListView().SetFocus)
+        wx.CallLater(300, self._listbook.GetListView().SetFocus)
+
+        # Tab order: search bar -> listbook -> now playing -> lyrics. This is
+        # already the sibling creation order above, so no MoveAfterInTabOrder
+        # calls are needed here (they previously scrambled it to
+        # listbook -> now playing -> lyrics -> search bar). No custom
+        # navigation glue needed either now (see docstring above).
+
+    def _on_lyrics_timer(self, evt: wx.TimerEvent) -> None:
+        """Update LRC line highlighting based on current playback position."""
+        if self._engine.state != "playing":
+            return
+        pos = self._engine.position
+        # Find the current LRC line
+        if hasattr(self._lyrics_panel, '_lrc_lines') and self._lyrics_panel._lrc_lines:
+            current_idx = -1
+            for i, (ts, text) in enumerate(self._lyrics_panel._lrc_lines):
+                if ts <= pos:
+                    current_idx = i
+                else:
+                    break
+            if current_idx >= 0:
+                self._lyrics_panel.highlight_sentence(current_idx)
+
+    def _on_page_changed(self, evt: wx.CommandEvent) -> None:
+        """Announce tab switch in status bar."""
+        idx = evt.GetSelection()
+        page_text = self._listbook.GetPageText(idx)
+        self._status_bar.set_status(f"Switched to {page_text}")
+        self._update_transport_button_states()
+
+    def _update_transport_button_states(self) -> None:
+        """Grey out transport controls that don't make sense right now:
+        Stop has nothing to stop when nothing is playing or paused (e.g.
+        at launch, before anything's ever been played -- it was never
+        greyed out at all before, so it was always clickable even then).
+        Fast Forward/Rewind/the position slider have nothing to seek to on
+        a live radio stream (duration is always 0 for one), and
+        First/Previous/Next/Last -- station history navigation, on the
+        Radio tab -- have nowhere to go past either end of that history."""
+        self._now_playing.set_stoppable(self._engine.state != "stopped")
+        self._now_playing.set_seekable(self._engine.duration > 0)
+        if self._listbook.GetSelection() == 0:
+            self._now_playing.set_history_state(
+                self._radio_panel.history_has_previous(),
+                self._radio_panel.history_has_next(),
+            )
+        else:
+            self._now_playing.set_history_state(True, True)
+
+    def _setup_engine_callbacks(self) -> None:
+        """Connect playback engine callbacks to UI."""
+        # PlaybackEngine's monitor thread fires these callbacks from a
+        # background thread; wx UI calls must be marshalled back to the
+        # main thread or the app crashes/hangs during playback.
+        self._engine.on_state_change(lambda state: wx.CallAfter(self._on_engine_state, state))
+        self._engine.on_position_update(lambda pos, dur: wx.CallAfter(self._on_engine_position, pos, dur))
+        self._engine.on_error(lambda message: wx.CallAfter(self._on_engine_error, message))
+        self._engine.on_track_finished(lambda: wx.CallAfter(self._media_panel.try_auto_advance))
+
+        self._now_playing.on_play(lambda: self._on_transport_play_pause())
+        self._now_playing.on_stop(lambda: self._radio_panel._on_stop() if self._listbook.GetSelection() == 0 else self._engine.stop())
+        self._now_playing.on_record(lambda: self._radio_panel._on_record() if self._listbook.GetSelection() == 0 else None)
+        self._now_playing.on_mute(lambda: self._radio_panel._on_mute() if self._listbook.GetSelection() == 0 else None)
+        self._now_playing.on_next(lambda: self._next_track())
+        self._now_playing.on_prev(lambda: self._prev_track())
+        self._now_playing.on_first(lambda: self._first_track())
+        self._now_playing.on_last(lambda: self._last_track())
+        self._now_playing.on_seek(lambda pos: self._engine.seek(pos))
+        self._now_playing.on_volume(lambda vol: self._engine.set_volume(vol))
+        self._now_playing.on_rate(lambda rate: self._engine.set_rate(rate))
+        self._now_playing.on_pan(lambda pan: self._engine.set_pan(pan))
+        self._now_playing.on_ffwd(lambda: self._fast_forward())
+        self._now_playing.on_rewind(lambda: self._rewind())
+
+    def _setup_accelerators(self) -> None:
+        """Set up global keyboard accelerators mapped to menu IDs.
+
+        Deliberately no bare (unmodified) Space/Left/Right/S entries here:
+        a wx.AcceleratorTable on the Frame intercepts those keystrokes
+        globally, before they ever reach a focused control -- so typing "s"
+        or a space anywhere (the search box, a dialog, a station-name field)
+        would vanish, swallowed as a Stop/Play-Pause/seek shortcut instead of
+        being typed. Play/Pause/Stop/Next/Prev are already reachable via the
+        transport buttons and Ctrl+P; that's enough without hijacking plain
+        text entry app-wide.
+
+        A handful of these (play_pause, stop, search, toggle_equalizer,
+        toggle_sleep_timer, toggle_fullscreen, preferences, quit) overlap
+        with actions the Keyboard Shortcuts editor (ui/shortcut_editor.py)
+        lets the user rebind. Called again after that dialog saves, so
+        edits take effect immediately without restarting the app.
+        """
+        from radiomaster.ui.shortcut_editor import shortcut_to_accel
+        saved_shortcuts: dict = self._config.get('shortcuts', default={}) or {}
+
+        def resolve(action_id: str, default_flags: int, default_key: int) -> tuple[int, int]:
+            accel = shortcut_to_accel(saved_shortcuts.get(action_id))
+            return accel if accel is not None else (default_flags, default_key)
+
+        play_pause_id = wx.NewIdRef()
+        stop_id = wx.NewIdRef()
+        search_id = wx.NewIdRef()
+
+        entries = [
+            (*resolve('play_pause', wx.ACCEL_CTRL, ord('P')), play_pause_id),
+            (*resolve('stop', wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('S')), stop_id),
+            (wx.ACCEL_CTRL, ord('O'), wx.ID_OPEN),
+            (*resolve('preferences', wx.ACCEL_CTRL, ord(',')), wx.ID_PREFERENCES),
+            (*resolve('toggle_fullscreen', wx.ACCEL_NORMAL, wx.WXK_F11), self._menu_ids["fullscreen"]),
+            (wx.ACCEL_CTRL, ord('L'), self._menu_ids["toggle_lyrics"]),
+            (*resolve('toggle_equalizer', wx.ACCEL_CTRL, ord('E')), self._menu_ids["toggle_equalizer"]),
+            (wx.ACCEL_CTRL, ord('D'), self._menu_ids["download_manager"]),
+            (wx.ACCEL_CTRL, ord('R'), self._menu_ids["scheduler"]),
+            (wx.ACCEL_CTRL, ord('I'), self._menu_ids["track_identifier"]),
+            (wx.ACCEL_CTRL, ord('K'), self._menu_ids["shortcut_editor"]),
+            (wx.ACCEL_CTRL, ord('B'), self._menu_ids["toggle_sidebar"]),
+            (wx.ACCEL_CTRL, ord('U'), self._menu_ids["open_url"]),
+            (*resolve('search', wx.ACCEL_CTRL, ord('F')), search_id),
+            (*resolve('toggle_sleep_timer', wx.ACCEL_CTRL, ord('T')), self._menu_ids["sleep_timer"]),
+            (*resolve('quit', wx.ACCEL_CTRL, ord('Q')), wx.ID_EXIT),
+        ]
+        accel_table = wx.AcceleratorTable(entries)
+        self.SetAcceleratorTable(accel_table)
+
+        # Bind accelerator-only shortcuts
+        self.Bind(wx.EVT_MENU, lambda e: self._on_play_pause_accel(), id=play_pause_id)
+        self.Bind(wx.EVT_MENU, lambda e: self._on_stop_accel(), id=stop_id)
+        self.Bind(wx.EVT_MENU, lambda e: self._on_search_focus(), id=search_id)
+
+        # Tab switching shortcuts (Ctrl+1 through Ctrl+7)
+        for tab_idx in range(7):
+            id_ref = wx.NewIdRef()
+            entries.append((wx.ACCEL_CTRL, ord(str(tab_idx + 1)), id_ref))
+            self.Bind(wx.EVT_MENU, lambda e, i=tab_idx: self._switch_tab(i), id=id_ref)
+        # Ctrl+Tab / Ctrl+Shift+Tab is handled by _on_char_hook (same as settings dialog)
+        # Rebuild the accelerator table with tab shortcuts included
+        self.SetAcceleratorTable(wx.AcceleratorTable(entries))
+
+    def _on_stop_accel(self) -> None:
+        """Handle the global Stop accelerator (default Ctrl+Shift+S)."""
+        if self._listbook.GetSelection() == 0:
+            self._radio_panel._on_stop()
+        else:
+            self._engine.stop()
+
+    def _on_transport_play_pause(self) -> None:
+        """Play/Pause from the global Now Playing bar button.
+
+        Always decided from the engine's actual current state rather than
+        the button's own label -- see NowPlayingBar._on_play_pause. Also
+        fixes a gap where, on any tab other than Radio, this previously did
+        nothing at all when resuming from pause (only the pause direction
+        was wired), leaving the button permanently stuck showing "paused".
+        """
+        if self._listbook.GetSelection() == 0:
+            self._radio_panel._on_play_pause()
+            return
+        if self._engine.state == "paused":
+            self._engine.resume()
+        elif self._engine.state in ("playing", "buffering"):
+            self._engine.pause()
+
+    def _on_play_pause_accel(self) -> None:
+        """Handle Ctrl+P / Space play/pause accelerator."""
+        if self._listbook.GetSelection() == 0:
+            self._radio_panel._on_play_pause()
+            return
+        if self._engine.state == "stopped":
+            self._engine.play("", title="Playback")
+        elif self._engine.state == "playing":
+            self._engine.pause()
+        elif self._engine.state == "paused":
+            self._engine.resume()
+
+    def _on_search_focus(self) -> None:
+        """Focus the search bar."""
+        self._search_bar.set_query("")
+
+    def _on_close(self, event: wx.CloseEvent) -> None:
+        """Stop playback before the frame is destroyed.
+
+        Without this, the engine's monitor thread keeps running after the
+        window (and its widgets) are gone, posting wx.CallAfter position
+        updates that hit already-deleted controls (RuntimeError) during
+        shutdown -- a crash that made cleanup unreliable and left the
+        ffplay subprocess orphaned and still playing.
+        """
+        self._engine.stop()
+        event.Skip()
+
+    def _bind_events(self) -> None:
+        """Bind menu and other events."""
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+        # File menu
+        self.Bind(wx.EVT_MENU, lambda e: self._on_open_file(), id=wx.ID_OPEN)
+        self.Bind(wx.EVT_MENU, lambda e: self._on_open_url(), id=self._menu_ids["open_url"])
+        self.Bind(wx.EVT_MENU, lambda e: self._on_open_folder(), id=self._menu_ids["open_folder"])
+        self.Bind(wx.EVT_MENU, lambda e: self._on_import_opml(), id=self._menu_ids["import_opml"])
+        self.Bind(wx.EVT_MENU, lambda e: self._on_export_opml(), id=self._menu_ids["export_opml"])
+        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
+
+        # View menu
+        self.Bind(wx.EVT_MENU, lambda e: self._toggle_sidebar(), id=self._menu_ids["toggle_sidebar"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_equalizer(), id=self._menu_ids["toggle_equalizer"])
+        self.Bind(wx.EVT_MENU, lambda e: self._toggle_lyrics(), id=self._menu_ids["toggle_lyrics"])
+        self.Bind(wx.EVT_MENU, lambda e: self._toggle_fullscreen(), id=self._menu_ids["fullscreen"])
+
+        # Theme menu
+        self.Bind(wx.EVT_MENU, lambda e: self._apply_theme("default"), id=self._menu_ids["theme_light"])
+        self.Bind(wx.EVT_MENU, lambda e: self._apply_theme("dark"), id=self._menu_ids["theme_dark"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_theme_editor(), id=self._menu_ids["theme_editor"])
+
+        # Language menu
+        self.Bind(wx.EVT_MENU, lambda e: self._set_language("en"), id=self._menu_ids["lang_en"])
+
+        # Tools menu
+        self.Bind(wx.EVT_MENU, lambda e: self._show_sleep_timer(), id=self._menu_ids["sleep_timer"])
+        self.Bind(wx.EVT_MENU, lambda e: self._switch_tab(5), id=self._menu_ids["download_manager"])
+        self.Bind(wx.EVT_MENU, lambda e: self._switch_tab(6), id=self._menu_ids["scheduler"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_track_identifier(), id=self._menu_ids["track_identifier"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_track_splitter(), id=self._menu_ids["track_splitter"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_shortcut_editor(), id=self._menu_ids["shortcut_editor"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_settings(), id=wx.ID_PREFERENCES)
+
+        # Help menu
+        self.Bind(wx.EVT_MENU, lambda e: self._show_about(), id=wx.ID_ABOUT)
+        self.Bind(wx.EVT_MENU, lambda e: self._check_updates(), id=self._menu_ids["check_updates"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_documentation(), id=self._menu_ids["documentation"])
+
+    def _on_open_file(self) -> None:
+        """Open a file dialog for media files."""
+        wildcard = (
+            "All supported files|*.mp3;*.flac;*.ogg;*.wav;*.aac;*.m4a;*.wma;*.opus;"
+            "*.mp4;*.mkv;*.avi;*.webm;*.mov;*.m4b"
+            "|Audio files|*.mp3;*.flac;*.ogg;*.wav;*.aac;*.m4a;*.wma;*.opus"
+            "|Video files|*.mp4;*.mkv;*.avi;*.webm;*.mov"
+            "|All files|*.*"
+        )
+        dlg = wx.FileDialog(self, "Open media file", wildcard=wildcard,
+                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        if dlg.ShowModal() == wx.ID_OK:
+            path = dlg.GetPath()
+            self._engine.play(path, title=path.split("\\")[-1].split("/")[-1])
+        dlg.Destroy()
+
+    def _show_settings(self) -> None:
+        """Show the settings dialog."""
+        from radiomaster.ui.settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self, self._config)
+        if dlg.ShowModal() == wx.ID_OK:
+            # Settings saved, apply changes
+            self._apply_settings_changes()
+        dlg.Destroy()
+    
+    def _apply_settings_changes(self) -> None:
+        """Apply settings changes after dialog closes."""
+        # Reload config
+        self._config.load()
+        
+        # Apply accessibility settings
+        # NOTE: ConfigManager.get()'s `default` is keyword-only -- passing it
+        # positionally (as this previously did) doesn't set a fallback, it's
+        # taken as a second *key* to look up, which crashes with
+        # AttributeError the moment the first key is missing (e.g. every
+        # first run, before Settings has ever been saved). This crashed
+        # _apply_settings_changes() -- and therefore Settings > OK, and now
+        # also startup -- unconditionally.
+        high_contrast = self._config.get('accessibility.high_contrast', default=False)
+        dyslexia_font = self._config.get('accessibility.dyslexia_font', default=False)
+        
+        if high_contrast:
+            # Pure black/white across every control, not just the frame/
+            # listbook/status bar -- reuses the same recursive walk built
+            # for theme switching instead of a second hand-rolled pass that
+            # only reaches three widgets.
+            self._recolor_widgets(self, {
+                "bg": "#000000", "fg": "#FFFFFF",
+                "control_bg": "#000000", "control_fg": "#FFFFFF",
+            })
+        else:
+            # Revert to whatever the active theme says, the same way
+            # picking a theme from the View menu does.
+            self._recolor_widgets(self)
+
+        # Apply font size + (optionally) the dyslexia-friendly family, to
+        # every control -- SetFont() on just the frame doesn't reach
+        # children that already exist when it's called after construction.
+        # Note: no OpenDyslexic font file is bundled with the app, so unless
+        # the user happens to have it installed separately, wx silently
+        # falls back to the system default font family here.
+        font_size = self._config.get('general.font_size', default=12)
+        face_name = "OpenDyslexic" if dyslexia_font else ""
+        font = wx.Font(font_size, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
+                        wx.FONTWEIGHT_NORMAL, False, face_name)
+        self._apply_font_recursive(self, font)
+
+        # Apply sound output device (restarts the current stream if playing)
+        self._engine.set_output_device(self._config.get('playback.output_device', default=''))
+        self._engine.toggle_effect(
+            'normalization', self._config.get('playback.normalize_audio', default=False)
+        )
+        self._engine.set_replaygain_mode(self._config.get('playback.replaygain', default='none'))
+        self._engine.set_auto_reconnect(self._config.get('radio.auto_reconnect', default=True))
+
+        # Re-apply network settings (proxy, user agent) -- StationAPI was
+        # constructed once at startup, so a change here would otherwise only
+        # take effect after restarting the app.
+        from radiomaster.utils.network import get_proxies
+        self._station_api.set_proxies(get_proxies())
+
+        # Re-apply radio browsing preferences (default country, duplicate filtering)
+        self._radio_panel._apply_sections()
+
+        # Refresh UI
+        self.Refresh()
+
+    def _show_about(self) -> None:
+        """Show the about dialog."""
+        from radiomaster import __app_name__, __version__
+        wx.MessageBox(
+            f"{__app_name__} v{__version__}\n\n"
+            "A unified media player for radio, podcasts, YouTube,\n"
+            "audiobooks, and local media.\n\n"
+            "Built with Python and wxPython.\n"
+            "Accessibility is a first-class citizen.",
+            f"About {__app_name__}",
+            wx.OK | wx.ICON_INFORMATION,
+        )
+
+    def _on_effect_toggle(self, effect_id: str, enabled: bool) -> None:
+        """Handle an effect's On/Off menu item."""
+        self._engine.toggle_effect(effect_id, enabled)
+
+    def _on_effect_preset(self, effect_id: str, preset_name: str, params: dict) -> None:
+        """Handle a preset being selected from an effect's submenu or its
+        Preset Manager. EffectsMenu syncs its own On/Off checkmark right
+        after calling this, since applying a preset auto-enables."""
+        self._engine.apply_preset(effect_id, preset_name, params)
+
+    def _on_engine_state(self, state: str) -> None:
+        """Handle playback engine state changes."""
+        self._status_bar.set_status(_(state.capitalize()))
+        self._now_playing.set_playing(state == "playing")
+        self._update_transport_button_states()
+        if state == "playing" and self._engine.is_video and not self._video_frame:
+            self._show_video_frame()
+
+        # Save play progress when stopping
+        if state == "stopped" and self._engine._current_url:
+            self._save_play_progress()
+
+        # Restore play progress when starting
+        if state == "playing" and self._engine._current_url:
+            self._restore_play_progress()
+
+        # Fetch lyrics when a new track starts playing
+        if state == "playing" and self._engine._current_title:
+            self._fetch_lyrics_for_current()
+
+    def _save_play_progress(self) -> None:
+        """Save current playback position to the database."""
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        if not config.get("playback.remember_position", default=True):
+            return
+        try:
+            self._db.execute(
+                "INSERT OR REPLACE INTO play_history (source_type, title, artist, url, position, duration) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "media",
+                    self._engine._current_title,
+                    self._engine._current_artist,
+                    self._engine._current_url,
+                    self._engine.position,
+                    self._engine.duration,
+                ),
+            )
+            self._db.commit()
+        except Exception:
+            pass
+
+    def _restore_play_progress(self) -> None:
+        """Restore playback position from the database when resuming a track."""
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        if not config.get("playback.remember_position", default=True):
+            return
+        try:
+            result = self._db.fetchone(
+                "SELECT position FROM play_history WHERE url = ? ORDER BY played_at DESC LIMIT 1",
+                (self._engine._current_url,),
+            )
+            if result and result["position"] > 5:
+                # Seek to saved position after a short delay (engine needs to buffer)
+                pos = result["position"]
+                wx.CallLater(1000, lambda: self._engine.seek(pos))
+        except Exception:
+            pass
+
+    def _fetch_lyrics_for_current(self) -> None:
+        """Fetch lyrics for the currently playing track."""
+        from radiomaster.services.lyrics_service import LyricsService
+        artist = self._engine._current_artist or ""
+        title = self._engine._current_title or ""
+        if not title:
+            return
+        result = LyricsService.fetch_lyrics(artist, title)
+        if result:
+            text = result.get("lyrics", "") or result.get("lyrics_text", "")
+            synced = result.get("lyrics_synced") or result.get("lrc_data", "")
+            if synced:
+                lines = LyricsService.parse_lrc(synced)
+                if lines:
+                    self._lyrics_panel.set_lrc_lines([(l["time"], l["text"]) for l in lines])
+                    return
+            if text:
+                self._lyrics_panel.set_content(text)
+
+    def _on_engine_position(self, position: float, duration: float) -> None:
+        """Handle playback position updates."""
+        self._now_playing.set_time(position, duration)
+        if self._video_frame:
+            self._video_frame.set_time(position, duration)
+
+    def _on_engine_error(self, message: str) -> None:
+        """Handle playback errors."""
+        wx.MessageBox(message, "Playback Error", wx.OK | wx.ICON_ERROR)
+
+    def _on_global_search(self, query: str, scope: str) -> None:
+        """Handle global search across all content types."""
+        from radiomaster.database.repository import StationRepository
+        if scope == "all" or scope == "radio":
+            repo = StationRepository(self._db)
+            results = repo.search(query)
+            if results:
+                self._listbook.SetSelection(0)  # Switch to Radio tab
+                self._radio_panel.display_search_results(results)
+                self._status_bar.set_status(f"Found {len(results)} stations")
+        if scope == "all" or scope == "media":
+            from radiomaster.database.repository import MediaRepository
+            repo = MediaRepository(self._db)
+            results = repo.search(query)
+            if results:
+                self._listbook.SetSelection(3)  # Switch to Media tab
+
+    def _show_video_frame(self) -> None:
+        """Show the video playback frame."""
+        self._video_frame = VideoFrame(self, title=self._engine.current_title)
+        self._video_frame.on_close(self._on_video_frame_close)
+        self._video_frame.Show()
+
+    def _on_video_frame_close(self) -> None:
+        """Handle video frame close."""
+        self._video_frame = None
+
+    def _show_equalizer(self) -> None:
+        """Show the equalizer dialog."""
+        dlg = EqualizerDialog(self)
+        dlg.on_bands_changed(lambda bands: self._engine.apply_effect_params("equalizer", bands))
+        if dlg.ShowModal() == wx.ID_OK and dlg.is_enabled():
+            self._engine.toggle_effect("equalizer", True)
+            bands = dlg.get_band_values()
+            self._engine.apply_effect_params("equalizer", bands)
+        dlg.Destroy()
+
+    def _show_shortcut_editor(self) -> None:
+        """Show the keyboard shortcut editor."""
+        from radiomaster.ui.shortcut_editor import ShortcutEditor
+        dlg = ShortcutEditor(self, self._config)
+        if dlg.ShowModal() == wx.ID_OK:
+            # Rebuild the live accelerator table so rebound shortcuts take
+            # effect immediately instead of requiring a restart.
+            self._setup_accelerators()
+        dlg.Destroy()
+
+    def _on_open_url(self) -> None:
+        """Open a URL dialog for streaming."""
+        dlg = wx.TextEntryDialog(self, "Enter stream URL:", "Open URL")
+        if dlg.ShowModal() == wx.ID_OK:
+            url = dlg.GetValue().strip()
+            if url:
+                self._engine.play(url, title=url)
+        dlg.Destroy()
+
+    def _on_open_folder(self) -> None:
+        """Open a folder dialog."""
+        dlg = wx.DirDialog(self, "Select a folder")
+        if dlg.ShowModal() == wx.ID_OK:
+            path = dlg.GetPath()
+            self._status_bar.set_status(f"Browsing: {path}")
+        dlg.Destroy()
+
+    def _on_import_opml(self) -> None:
+        """Import OPML file."""
+        dlg = wx.FileDialog(self, "Import OPML", wildcard="OPML files (*.opml;*.xml)|*.opml;*.xml",
+                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        if dlg.ShowModal() == wx.ID_OK:
+            from radiomaster.services.podcast_manager import PodcastManager
+            import os
+            with open(dlg.GetPath(), "r", encoding="utf-8") as f:
+                content = f.read()
+            feeds = PodcastManager.parse_opml(content)
+            from radiomaster.database.repository import PodcastRepository
+            repo = PodcastRepository(self._db)
+            for feed in feeds:
+                repo.add(feed["feed_url"], feed["title"], is_custom=True)
+            self._status_bar.set_status(f"Imported {len(feeds)} feeds")
+        dlg.Destroy()
+
+    def _on_export_opml(self) -> None:
+        """Export OPML file."""
+        from radiomaster.database.repository import PodcastRepository
+        from radiomaster.services.podcast_manager import PodcastManager
+        repo = PodcastRepository(self._db)
+        podcasts = repo.get_all()
+        opml = PodcastManager.export_opml(podcasts)
+        dlg = wx.FileDialog(self, "Export OPML", wildcard="OPML files (*.opml)|*.opml",
+                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+        if dlg.ShowModal() == wx.ID_OK:
+            with open(dlg.GetPath(), "w", encoding="utf-8") as f:
+                f.write(opml)
+        dlg.Destroy()
+
+    def _toggle_sidebar(self) -> None:
+        """Toggle the sidebar visibility."""
+        self._status_bar.set_status("Sidebar toggled")
+
+    def _toggle_lyrics(self) -> None:
+        """Toggle the lyrics panel visibility."""
+        self._lyrics_panel.Show(not self._lyrics_panel.IsShown())
+        # Layout() on the content panel, not the Frame: the Frame's own
+        # sizer just contains content_panel sized to fill the window, so
+        # laying out the Frame doesn't re-flow content_panel's *own*
+        # sizer (the one that actually holds lyrics_panel) on its own.
+        self._content_panel.Layout()
+
+    def _toggle_fullscreen(self) -> None:
+        """Toggle fullscreen mode."""
+        if self.IsFullScreen():
+            self.ShowFullScreen(False)
+        else:
+            self.ShowFullScreen(True)
+
+    def _apply_theme(self, theme_key: str) -> None:
+        """Apply a theme."""
+        self._theme_manager.apply_theme(theme_key)
+        self._status_bar.set_status(f"Theme: {theme_key}")
+
+    def _show_theme_editor(self) -> None:
+        """Show the theme editor."""
+        from radiomaster.ui.theme_editor import ThemeEditorDialog
+        dlg = ThemeEditorDialog(self, self._theme_manager)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _set_language(self, lang: str) -> None:
+        """Set the UI language."""
+        from radiomaster.i18n import I18nManager
+        I18nManager().set_language(lang)
+        self._status_bar.set_status(f"Language: {lang}")
+
+    def _switch_tab(self, index: int) -> None:
+        """Switch to a specific category by index and announce it in the status bar."""
+        if 0 <= index < self._listbook.GetPageCount():
+            self._listbook.SetSelection(index)
+            page_text = self._listbook.GetPageText(index)
+            self._status_bar.set_status(f"Switched to {page_text}")
+
+    def _show_track_identifier(self) -> None:
+        """Show the track identifier dialog with real fingerprinting."""
+        from radiomaster.services.track_identifier import TrackIdentifier
+        from radiomaster.database.repository import DownloadRepository
+
+        # If something is playing, use it
+        url = self._engine._current_url
+        title = self._engine._current_title
+        if not url:
+            # Ask user to select a file
+            dlg = wx.FileDialog(self, "Select audio file to identify",
+                wildcard="Audio files|*.mp3;*.flac;*.wav;*.m4a;*.ogg",
+                style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+            if dlg.ShowModal() != wx.ID_OK:
+                dlg.Destroy()
+                return
+            url = dlg.GetPath()
+            title = dlg.GetFilename()
+            dlg.Destroy()
+
+        identifier = TrackIdentifier()
+        api_key = self._config.get("playback.acoustid_api_key", default="")
+        if api_key:
+            identifier.set_api_key(api_key)
+        result = identifier.identify(url)
+        if result:
+            msg = (
+                f"Title: {result.get('title', 'Unknown')}\n"
+                f"Artist: {result.get('artist', 'Unknown')}\n"
+                f"Album: {result.get('album', 'Unknown')}\n"
+                f"Source: {result.get('source', 'Unknown')}"
+            )
+            wx.MessageBox(msg, "Track Identified", wx.OK | wx.ICON_INFORMATION)
+        else:
+            wx.MessageBox(
+                "Could not identify this track.\n"
+                "Ensure AcoustID and MusicBrainz are configured.",
+                "Identification Failed", wx.OK | wx.ICON_WARNING)
+
+    def _show_track_splitter(self) -> None:
+        """Show the Track Splitter dialog (silence/chapter splitting + renaming)."""
+        from radiomaster.ui.track_splitter_dialog import TrackSplitterDialog
+        dlg = TrackSplitterDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _show_sleep_timer(self) -> None:
+        """Show the sleep timer dialog."""
+        from radiomaster.ui.sleep_timer_dialog import SleepTimerDialog
+
+        def on_start(minutes: float, mode: str) -> None:
+            self._sleep_timer.start(minutes, mode)
+            self._sleep_timer.on_timeout(lambda: self._engine.stop())
+            self._sleep_timer.on_mode_action(lambda: self._engine.stop())
+            self._status_bar.set_status(f"Sleep timer: {int(minutes)} min ({mode})")
+
+        def on_stop() -> None:
+            self._sleep_timer.stop()
+            self._status_bar.set_status("Sleep timer stopped")
+
+        dlg = SleepTimerDialog(
+            self,
+            on_start=on_start,
+            on_stop=on_stop,
+            is_active=self._sleep_timer.is_active,
+            remaining=self._sleep_timer.remaining,
+        )
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _check_updates(self) -> None:
+        """Check for updates."""
+        from radiomaster.services.update_checker import UpdateChecker
+        result = UpdateChecker.check()
+        if result:
+            wx.MessageBox(
+                f"Version {result['version']} is available!\n\n{result.get('body', '')}",
+                "Update Available", wx.OK | wx.ICON_INFORMATION)
+        else:
+            from radiomaster import __version__
+            wx.MessageBox(f"You are running the latest version ({__version__}).",
+                          "No Updates", wx.OK | wx.ICON_INFORMATION)
+
+    def _show_documentation(self) -> None:
+        """Show documentation."""
+        wx.MessageBox("Documentation will open in your browser.", "Documentation",
+                      wx.OK | wx.ICON_INFORMATION)
+
+    def _next_track(self) -> None:
+        """On the Radio tab: move forward in station history. Elsewhere:
+        seek forward as a fallback (no per-tab playlist/history exists
+        yet for podcasts/audiobooks/media/YouTube)."""
+        if self._listbook.GetSelection() == 0:
+            self._status_bar.set_status("Next station")
+            self._radio_panel.history_next()
+            return
+        self._status_bar.set_status("Next track")
+        current_pos = self._engine.position
+        self._engine.seek(current_pos + 10)
+
+    def _prev_track(self) -> None:
+        """On the Radio tab: move back in station history. Elsewhere: seek
+        backward as a fallback."""
+        if self._listbook.GetSelection() == 0:
+            self._status_bar.set_status("Previous station")
+            self._radio_panel.history_previous()
+            return
+        self._status_bar.set_status("Previous track")
+        current_pos = self._engine.position
+        self._engine.seek(max(0, current_pos - 10))
+
+    def _first_track(self) -> None:
+        """On the Radio tab: jump to the first station in history.
+        Elsewhere: seek to the start."""
+        if self._listbook.GetSelection() == 0:
+            self._status_bar.set_status("First station")
+            self._radio_panel.history_first()
+            return
+        self._status_bar.set_status("First track")
+        self._engine.seek(0)
+
+    def _last_track(self) -> None:
+        """On the Radio tab: jump to the most recent station in history.
+        Elsewhere: seek near the end."""
+        if self._listbook.GetSelection() == 0:
+            self._status_bar.set_status("Last station")
+            self._radio_panel.history_last()
+            return
+        self._status_bar.set_status("Last track")
+        if self._engine.duration > 0:
+            self._engine.seek(max(0, self._engine.duration - 30))
+
+    def _fast_forward(self) -> None:
+        """Fast forward by skipping ahead 30 seconds."""
+        current_pos = self._engine.position
+        self._engine.seek(current_pos + 30)
+        self._status_bar.set_status("Fast forward")
+
+    def _rewind(self) -> None:
+        """Rewind by going back 30 seconds."""
+        current_pos = self._engine.position
+        self._engine.seek(max(0, current_pos - 30))
+        self._status_bar.set_status("Rewind")
+

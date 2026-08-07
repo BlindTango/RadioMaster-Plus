@@ -1,0 +1,357 @@
+# English translations for RadioMaster+
+# This is the base PO file. Use msgmerge to update when strings change.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: RadioMaster+ 1.0.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-04 12:00+0000\n"
+"PO-Revision-Date: 2026-08-04 12:00+0000\n"
+"Last-Translator: RadioMaster+ Team\n"
+"Language-Team: English\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: app.py
+msgid "Starting RadioMaster+"
+msgstr "Starting RadioMaster+"
+
+msgid "Shutting down RadioMaster+"
+msgstr "Shutting down RadioMaster+"
+
+#: main_window.py
+msgid "RadioMaster+"
+msgstr "RadioMaster+"
+
+msgid "Ready"
+msgstr "Ready"
+
+msgid "Playing"
+msgstr "Playing"
+
+msgid "Paused"
+msgstr "Paused"
+
+msgid "Stopped"
+msgstr "Stopped"
+
+msgid "Buffering"
+msgstr "Buffering"
+
+msgid "Recording"
+msgstr "Recording"
+
+msgid "Downloading"
+msgstr "Downloading"
+
+#: now_playing_bar.py
+msgid "Station/Media"
+msgstr "Station/Media"
+
+msgid "Track/Show"
+msgstr "Track/Show"
+
+msgid "Play"
+msgstr "Play"
+
+msgid "Pause"
+msgstr "Pause"
+
+msgid "Stop"
+msgstr "Stop"
+
+msgid "Volume"
+msgstr "Volume"
+
+#: radio_panel.py
+msgid "Categories"
+msgstr "Categories"
+
+msgid "Search Stations"
+msgstr "Search Stations"
+
+msgid "Add Custom Station"
+msgstr "Add Custom Station"
+
+msgid "Stations"
+msgstr "Stations"
+
+msgid "Play Station"
+msgstr "Play Station"
+
+#: podcast_panel.py
+msgid "Subscriptions"
+msgstr "Subscriptions"
+
+msgid "Add RSS Feed"
+msgstr "Add RSS Feed"
+
+msgid "Import OPML"
+msgstr "Import OPML"
+
+msgid "Episodes"
+msgstr "Episodes"
+
+msgid "Play Episode"
+msgstr "Play Episode"
+
+#: audiobook_panel.py
+msgid "Library"
+msgstr "Library"
+
+msgid "Browse Audiobook Folder"
+msgstr "Browse Audiobook Folder"
+
+msgid "Book Title"
+msgstr "Book Title"
+
+msgid "Chapters"
+msgstr "Chapters"
+
+msgid "Play Audiobook"
+msgstr "Play Audiobook"
+
+msgid "Read with Text to Speech"
+msgstr "Read with Text to Speech"
+
+msgid "Add Bookmark"
+msgstr "Add Bookmark"
+
+#: media_player_panel.py
+msgid "Playlist"
+msgstr "Playlist"
+
+msgid "Add to Playlist"
+msgstr "Add to Playlist"
+
+msgid "Clear Playlist"
+msgstr "Clear Playlist"
+
+#: youtube_panel.py
+msgid "Search YouTube"
+msgstr "Search YouTube"
+
+msgid "Play Video"
+msgstr "Play Video"
+
+msgid "Download"
+msgstr "Download"
+
+msgid "Download Audio Only"
+msgstr "Download Audio Only"
+
+#: settings_dialog.py
+msgid "Settings"
+msgstr "Settings"
+
+msgid "General"
+msgstr "General"
+
+msgid "Playback"
+msgstr "Playback"
+
+msgid "Radio"
+msgstr "Radio"
+
+msgid "Downloads"
+msgstr "Downloads"
+
+msgid "Recordings"
+msgstr "Recordings"
+
+msgid "Network"
+msgstr "Network"
+
+msgid "Audio"
+msgstr "Audio"
+
+msgid "Accessibility"
+msgstr "Accessibility"
+
+msgid "Language"
+msgstr "Language"
+
+msgid "Theme"
+msgstr "Theme"
+
+#: effects_menu.py
+msgid "Effects"
+msgstr "Effects"
+
+msgid "Equalizer"
+msgstr "Equalizer"
+
+msgid "Dynamic Range"
+msgstr "Dynamic Range"
+
+msgid "Reverb/Echo"
+msgstr "Reverb/Echo"
+
+msgid "Pitch/Tempo"
+msgstr "Pitch/Tempo"
+
+msgid "Crossfade"
+msgstr "Crossfade"
+
+msgid "Volume Normalization"
+msgstr "Volume Normalization"
+
+msgid "Presets"
+msgstr "Presets"
+
+msgid "Manage Presets"
+msgstr "Manage Presets"
+
+#: status_bar.py
+msgid "Status"
+msgstr "Status"
+
+msgid "Quality"
+msgstr "Quality"
+
+msgid "Source"
+msgstr "Source"
+
+#: file_tree.py
+msgid "File Browser Tree"
+msgstr "File Browser Tree"
+
+msgid "Browse Folder"
+msgstr "Browse Folder"
+
+msgid "Open File"
+msgstr "Open File"
+
+msgid "Open Archive"
+msgstr "Open Archive"
+
+#: shortcut_editor.py
+msgid "Keyboard Shortcuts"
+msgstr "Keyboard Shortcuts"
+
+msgid "Action"
+msgstr "Action"
+
+msgid "Primary Key"
+msgstr "Primary Key"
+
+msgid "Secondary Key"
+msgstr "Secondary Key"
+
+msgid "Reset to Defaults"
+msgstr "Reset to Defaults"
+
+#: scheduler_panel.py
+msgid "Schedule Calendar"
+msgstr "Schedule Calendar"
+
+msgid "Scheduled Recordings"
+msgstr "Scheduled Recordings"
+
+msgid "Add Schedule"
+msgstr "Add Schedule"
+
+msgid "Edit Schedule"
+msgstr "Edit Schedule"
+
+msgid "Delete Schedule"
+msgstr "Delete Schedule"
+
+#: downloads_panel.py
+msgid "Active Downloads"
+msgstr "Active Downloads"
+
+msgid "Download History"
+msgstr "Download History"
+
+#: video_frame.py
+msgid "Video Player"
+msgstr "Video Player"
+
+msgid "Video Display"
+msgstr "Video Display"
+
+msgid "Fullscreen"
+msgstr "Fullscreen"
+
+#: equalizer_dialog.py
+msgid "Equalizer"
+msgstr "Equalizer"
+
+msgid "Enable Equalizer"
+msgstr "Enable Equalizer"
+
+msgid "Save Preset"
+msgstr "Save Preset"
+
+msgid "Delete Preset"
+msgstr "Delete Preset"
+
+#: search_bar.py
+msgid "Global Search"
+msgstr "Global Search"
+
+msgid "Search Scope"
+msgstr "Search Scope"
+
+msgid "All"
+msgstr "All"
+
+#: playlist_widget.py
+msgid "Playlist Selector"
+msgstr "Playlist Selector"
+
+msgid "New Playlist"
+msgstr "New Playlist"
+
+msgid "Delete Playlist"
+msgstr "Delete Playlist"
+
+msgid "Play Item"
+msgstr "Play Item"
+
+msgid "Remove Item"
+msgstr "Remove Item"
+
+msgid "Shuffle"
+msgstr "Shuffle"
+
+#: about dialog
+msgid "About RadioMaster+"
+msgstr "About RadioMaster+"
+
+msgid "A unified media player for radio, podcasts, YouTube, audiobooks, and local media."
+msgstr "A unified media player for radio, podcasts, YouTube, audiobooks, and local media."
+
+msgid "Built with Python and wxPython. Accessibility is a first-class citizen."
+msgstr "Built with Python and wxPython. Accessibility is a first-class citizen."
+
+#: errors
+msgid "FFplay not found. Please install FFmpeg."
+msgstr "FFplay not found. Please install FFmpeg."
+
+msgid "Failed to start playback"
+msgstr "Failed to start playback"
+
+msgid "Playback Error"
+msgstr "Playback Error"
+
+msgid "No lyrics found for"
+msgstr "No lyrics found for"
+
+msgid "Invalid ZIP file"
+msgstr "Invalid ZIP file"
+
+msgid "Error"
+msgstr "Error"
+
+msgid "Success"
+msgstr "Success"
+
+msgid "Confirm"
+msgstr "Confirm"
+
+msgid "Info"
+msgstr "Info"

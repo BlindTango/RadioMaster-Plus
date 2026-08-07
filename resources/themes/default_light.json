@@ -1,0 +1,18 @@
+{
+    "name": "Default Light",
+    "bg_primary": "#FFFFFF",
+    "bg_secondary": "#F0F0F0",
+    "bg_tertiary": "#E0E0E0",
+    "text_primary": "#000000",
+    "text_secondary": "#333333",
+    "accent": "#0078D4",
+    "accent_hover": "#106EBE",
+    "highlight": "#FFFF00",
+    "highlight_text": "#000000",
+    "success": "#107C10",
+    "warning": "#FF8C00",
+    "error": "#E81123",
+    "border": "#CCCCCC",
+    "control_face": "#E0E0E0",
+    "control_text": "#000000"
+}

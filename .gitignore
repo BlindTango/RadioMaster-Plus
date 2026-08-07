@@ -1,0 +1,64 @@
+# RadioMaster+ - Python wxPython media player
+# Git ignore rules
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+*.db
+*.sqlite3
+radiomaster.db
+
+# Build artifacts
+dist/
+build/
+*.spec
+*.exe
+*.msi
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Downloads and recordings (user data)
+downloads/
+recordings/
+
+# Config (user-specific)
+config/
+
+# Portable-mode runtime data (created by --portable / dev runs)
+/data/
+
+# Bundled third-party binaries (ffmpeg/ffplay/ffprobe exceed GitHub's
+# 100MB file limit anyway) -- fetched separately, not committed
+tools/*.exe
+
+# Test/automation caches and scratch logs
+.pytest_cache/
+@AutomationLog.txt
+acclog.txt

@@ -1,0 +1,708 @@
+"""Playback engine: dispatches to one of two backends depending on content.
+
+Audio-only content (radio, podcasts, audiobooks, local audio files,
+YouTube audio) goes through LiveAudioEngine (engine/live_audio_engine.py),
+a direct PyAV-decode + sounddevice/WASAPI-output pipeline that supports
+genuinely live volume/pan/rate/effects changes -- no restart, matching the
+README's "real-time... no restart required" promise.
+
+Video goes through the original ffplay subprocess (unchanged) -- ffplay
+still handles the actual video rendering, which this class was never
+trying to replace; only its audio-control limitations motivated
+LiveAudioEngine. Effect/rate/pan changes during video playback still
+restart ffplay, same as before, since ffplay has no live filter-graph
+reload API.
+"""
+
+import logging
+import subprocess
+import threading
+import time
+import os
+from typing import Any, Callable
+
+from radiomaster.utils.tools import get_ffplay
+from radiomaster.utils.logging_setup import log_io
+from radiomaster.engine.live_audio_engine import LiveAudioEngine, build_effects_filters
+
+log = logging.getLogger("radiomaster")
+
+
+class PlaybackEngine:
+    """Manages audio/video playback (see module docstring for backends)."""
+
+    STATE_STOPPED = "stopped"
+    STATE_PLAYING = "playing"
+    STATE_PAUSED = "paused"
+    STATE_BUFFERING = "buffering"
+
+    # Video-only: changing rate/pan/effects/output-device restarts ffplay
+    # (it has no live filter-graph reload). A slider fires EVT_SLIDER on
+    # every tick while being dragged, so restarting synchronously on each
+    # call would relaunch ffplay dozens of times a second. Debounce so
+    # only the last change in a burst actually triggers a restart.
+    RESTART_DEBOUNCE_SECONDS = 0.4
+
+    def __init__(self) -> None:
+        # --- Video (ffplay subprocess) backend state ---
+        self._process: subprocess.Popen | None = None
+        self._state = self.STATE_STOPPED
+        self._duration: float = 0.0
+        self._position: float = 0.0
+        self._output_device: str = ""  # "" = system default; SDL device name for ffplay
+        self._monitor_thread: threading.Thread | None = None
+        self._monitor_running = False
+        self._restart_timer: threading.Timer | None = None
+        self._restart_lock = threading.Lock()
+        self._reconnect_timer: threading.Timer | None = None
+        self._volume_timer: threading.Timer | None = None
+        self._volume_lock = threading.Lock()
+        self._crossfade_generation = 0
+
+        # --- Shared state (both backends) ---
+        self._current_url: str = ""
+        self._current_title: str = ""
+        self._current_artist: str = ""
+        self._volume: float = 0.8
+        self._rate: float = 1.0
+        self._pan: float = 0.0
+        self._replaygain_mode: str = "none"  # "none", "track", or "album"
+        self._replaygain_db: float = 0.0
+        self._auto_reconnect: bool = False
+        self._reconnect_attempts: int = 0
+        self._MAX_RECONNECT_ATTEMPTS = 5
+        self._is_video: bool = False
+        self._is_video_active: bool = False  # which backend owns the *current* session
+
+        self._effects: dict[str, dict[str, Any]] = {
+            "echo": {"enabled": False, "preset": "Medium Delay", "params": {}},
+            "equalizer": {"enabled": False, "preset": "Flat", "params": {}},
+            "reverb": {"enabled": False, "preset": "Small Room", "params": {}},
+            "dynamic_range": {"enabled": False, "preset": "Light Compression", "params": {}},
+            "pitch_tempo": {"enabled": False, "preset": "Semitone Down", "params": {}},
+            "chorus": {"enabled": False, "preset": "Classic Chorus", "params": {}},
+            "compressor": {"enabled": False, "preset": "Standard", "params": {}},
+            "distortion": {"enabled": False, "preset": "Light Grit", "params": {}},
+            "flanger": {"enabled": False, "preset": "Classic Flange", "params": {}},
+            "gargle": {"enabled": False, "preset": "Classic Gargle", "params": {}},
+            "normalization": {"enabled": False, "preset": "Standard (-16 LUFS)", "params": {}},
+        }
+
+        # Callbacks
+        self._on_state_change: Callable[[str], None] | None = None
+        self._on_position_update: Callable[[float, float], None] | None = None
+        self._on_track_change: Callable[[str, str], None] | None = None
+        self._on_buffering: Callable[[int], None] | None = None
+        self._on_error: Callable[[str], None] | None = None
+        self._on_track_finished: Callable[[], None] | None = None
+
+        # --- Audio (LiveAudioEngine) backend ---
+        self._live = LiveAudioEngine()
+        self._wire_live_callbacks(self._live)
+
+    def _wire_live_callbacks(self, live: LiveAudioEngine) -> None:
+        """Hook a LiveAudioEngine instance's callbacks up to this engine's
+        own listeners. Shared between __init__'s single long-lived instance
+        and crossfade_to()'s temporary "incoming" instance."""
+        live.on_state_change(lambda _s: self._notify_state())
+        live.on_position_update(
+            lambda p, d: self._on_position_update(p, d) if self._on_position_update else None
+        )
+        live.on_error(lambda m: self._notify_error(m))
+        live.on_track_finished(lambda: self._on_track_finished() if self._on_track_finished else None)
+
+    # ---------------------------------------------------------------------
+    # Public accessors
+    # ---------------------------------------------------------------------
+    @property
+    def state(self) -> str:
+        """Current playback state (stopped, playing, paused, buffering)."""
+        return self._state if self._is_video_active else self._live.state
+
+    def play(self, url: str, title: str = "", artist: str = "",
+              is_video: bool = False, duration: float = 0.0) -> None:
+        """Start playback of a URL or file."""
+        self.stop()
+        self._current_url = url
+        self._current_title = title
+        self._current_artist = artist
+        self._is_video = is_video
+        self._is_video_active = is_video
+        self._duration = duration
+        self._reconnect_attempts = 0
+        self._replaygain_db = self._compute_replaygain(url)
+
+        if is_video:
+            self._position = 0.0
+            self._state = self.STATE_BUFFERING
+            self._notify_state()
+            self._start_process(url, is_video)
+        else:
+            self._live.set_auto_reconnect(self._auto_reconnect)
+            self._live.set_replaygain_db(self._replaygain_db)
+            self._live.set_volume(self._volume)
+            self._live.set_pan(self._pan)
+            self._live.set_rate(self._rate)
+            self._live.play(url, title, artist, duration)
+
+    def crossfade_to(self, url: str, title: str = "", artist: str = "",
+                      duration: float = 0.0, fade_seconds: float = 5.0) -> None:
+        """Switch to *url* with a real overlapping crossfade against
+        whatever's currently playing, instead of a hard stop/start cut.
+
+        Audio-only: video always hard-cuts (ffplay has no live mixing).
+        Also hard-cuts if nothing is actually playing yet, or fade_seconds
+        is 0 -- nothing to overlap against.
+
+        Two independent LiveAudioEngine instances -- each with its own
+        sounddevice.OutputStream -- play simultaneously for the fade
+        window; WASAPI's shared mode mixes concurrent streams from the
+        same process at the OS level, so no manual PCM mixing is needed
+        here, just opposing volume ramps on each engine.
+        """
+        if self._is_video_active or fade_seconds <= 0 or self._live.state not in (
+            LiveAudioEngine.STATE_PLAYING, LiveAudioEngine.STATE_BUFFERING
+        ):
+            self.play(url, title, artist, duration=duration)
+            return
+
+        self._crossfade_generation += 1
+        generation = self._crossfade_generation
+
+        outgoing = self._live
+        outgoing_start_volume = outgoing.volume
+
+        incoming = LiveAudioEngine()
+        self._wire_live_callbacks(incoming)
+        incoming.set_auto_reconnect(self._auto_reconnect)
+        incoming.set_replaygain_db(self._compute_replaygain(url))
+        incoming.set_volume(0.0)
+        incoming.set_pan(self._pan)
+        incoming.set_rate(self._rate)
+        incoming.play(url, title, artist, duration)
+
+        self._live = incoming
+        self._current_url = url
+        self._current_title = title
+        self._current_artist = artist
+        self._duration = duration
+        self._reconnect_attempts = 0
+
+        target_volume = self._volume
+        threading.Thread(
+            target=self._run_crossfade_ramp,
+            args=(generation, outgoing, incoming, outgoing_start_volume, target_volume, fade_seconds),
+            daemon=True,
+        ).start()
+
+    def _run_crossfade_ramp(self, generation: int, outgoing: LiveAudioEngine, incoming: LiveAudioEngine,
+                             outgoing_start_volume: float, target_volume: float, fade_seconds: float) -> None:
+        steps = max(1, int(fade_seconds * 20))  # ~20 volume updates/sec
+        for i in range(1, steps + 1):
+            if generation != self._crossfade_generation:
+                # Superseded by a newer play()/crossfade_to() call -- stop
+                # ramping (whatever superseded this owns the volume now)
+                # but still tear down our own outgoing stream below, or
+                # it would keep playing forever in the background.
+                break
+            t = i / steps
+            incoming.set_volume(target_volume * t)
+            outgoing.set_volume(outgoing_start_volume * (1 - t))
+            time.sleep(fade_seconds / steps)
+        outgoing.stop()
+
+    def set_replaygain_mode(self, mode: str) -> None:
+        """Set ReplayGain mode: "none", "track", or "album"."""
+        self._replaygain_mode = mode if mode in ("track", "album") else "none"
+        if self._current_url:
+            self._replaygain_db = self._compute_replaygain(self._current_url)
+            if self._is_video_active:
+                if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+                    self._schedule_restart()
+            else:
+                self._live.set_replaygain_db(self._replaygain_db)
+
+    def _compute_replaygain(self, url: str) -> float:
+        """ReplayGain only makes sense for local files with tags -- radio
+        streams and remote URLs have no metadata to read."""
+        if self._replaygain_mode == "none" or not os.path.isfile(url):
+            return 0.0
+        from radiomaster.utils.replaygain import read_replaygain_db
+        return read_replaygain_db(url, self._replaygain_mode)
+
+    def stop(self) -> None:
+        """Stop playback. Stops whichever backend might be active -- each
+        call is a safe no-op on the backend that wasn't in use."""
+        self._crossfade_generation += 1  # let any in-flight ramp exit early
+        self._live.stop()
+
+        self._monitor_running = False
+        with self._restart_lock:
+            if self._restart_timer is not None:
+                self._restart_timer.cancel()
+                self._restart_timer = None
+            if self._reconnect_timer is not None:
+                # Without this, a dropped stream's pending auto-reconnect
+                # attempt (scheduled by _monitor_loop, up to 2s in the
+                # future) fires anyway after the user has already pressed
+                # Stop, silently relaunching ffplay behind their back.
+                self._reconnect_timer.cancel()
+                self._reconnect_timer = None
+        with self._volume_lock:
+            if self._volume_timer is not None:
+                self._volume_timer.cancel()
+                self._volume_timer = None
+        if self._process:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=3)
+            except Exception:
+                if self._process:
+                    self._process.kill()
+            self._process = None
+        self._state = self.STATE_STOPPED
+        self._position = 0.0
+        self._notify_state()
+
+    def pause(self) -> None:
+        """Pause playback."""
+        if not self._is_video_active:
+            self._live.pause()
+            return
+        if self._process and self._state == self.STATE_PLAYING:
+            # FFplay: 'p' or Space toggles pause via stdin
+            self._send_ffplay_key("p")
+            self._state = self.STATE_PAUSED
+            self._notify_state()
+
+    def resume(self) -> None:
+        """Resume from pause."""
+        if not self._is_video_active:
+            self._live.resume()
+            return
+        if self._process and self._state == self.STATE_PAUSED:
+            self._send_ffplay_key("p")
+            self._state = self.STATE_PLAYING
+            self._notify_state()
+
+    def _send_ffplay_key(self, key: str) -> None:
+        """Send a key command to FFplay via stdin."""
+        if self._process and self._process.stdin:
+            try:
+                self._process.stdin.write(key.encode())
+                self._process.stdin.flush()
+            except Exception:
+                pass
+
+    def seek(self, position_seconds: float) -> None:
+        """Seek to a position in the current track."""
+        if not self._is_video_active:
+            self._live.seek(position_seconds)
+            return
+        # FFplay: 's' + seconds + '\n' seeks to absolute position
+        self._send_ffplay_key(f"s{position_seconds}\n")
+
+    # Volume changes are applied live (README promises no-restart dynamic
+    # control). Rapid slider dragging fires this many times a second, so a
+    # short debounce collapses each burst to one WASAPI call instead of one
+    # per tick -- much shorter than RESTART_DEBOUNCE_SECONDS since setting
+    # a session volume is cheap and doesn't touch the ffplay process at all.
+    # (Video-only backstop: LiveAudioEngine applies volume as a direct
+    # numpy gain, no debounce needed there at all.)
+    VOLUME_DEBOUNCE_SECONDS = 0.08
+
+    def set_volume(self, volume: float) -> None:
+        """Set volume (0.0 to 1.0), applied live without restarting playback."""
+        self._volume = max(0.0, min(1.0, volume))
+        if not self._is_video_active:
+            self._live.set_volume(self._volume)
+            return
+        if self._process is None:
+            return
+        with self._volume_lock:
+            if self._volume_timer is not None:
+                self._volume_timer.cancel()
+            self._volume_timer = threading.Timer(
+                self.VOLUME_DEBOUNCE_SECONDS, self._apply_volume_live
+            )
+            self._volume_timer.daemon = True
+            self._volume_timer.start()
+
+    def _apply_volume_live(self) -> None:
+        """Set the running ffplay process's own WASAPI session volume --
+        the same mechanism the Windows Volume Mixer uses per-app, and the
+        only way to change a running ffplay's volume without restarting it
+        (see utils/session_volume.py for why the old stdin-key approach
+        never worked). Video path only -- LiveAudioEngine handles audio."""
+        process = self._process
+        if process is None:
+            return
+        from radiomaster.utils.session_volume import set_process_volume
+        applied = set_process_volume(process.pid, self._volume)
+        if not applied and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+            # WASAPI session not found (e.g. ffplay hasn't opened its
+            # audio stream) or COM unavailable on this thread -- fall back
+            # to a restart so the change still takes effect one way or
+            # another rather than being silently dropped.
+            self._schedule_restart()
+
+    def _apply_volume_live_with_retry(self, process: subprocess.Popen,
+                                       attempts: int = 30, delay: float = 0.25) -> None:
+        """Retry applying self._volume to *process*'s WASAPI session for a
+        few seconds after launch -- ffplay doesn't open its audio stream
+        (and therefore doesn't have a session to find) the instant Popen()
+        returns. Measured up to ~4.5s in practice for a real stream, so
+        this retries for up to 7.5s before giving up."""
+        from radiomaster.utils.session_volume import set_process_volume
+        for _ in range(attempts):
+            if self._process is not process:
+                return  # superseded by a stop/restart/reconnect since we started
+            if set_process_volume(process.pid, self._volume):
+                return
+            time.sleep(delay)
+
+    def set_rate(self, rate: float) -> None:
+        """Set playback rate (0.5 to 3.0), applied live for audio."""
+        self._rate = max(0.5, min(3.0, rate))
+        if not self._is_video_active:
+            self._live.set_rate(self._rate)
+            return
+        if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+            self._schedule_restart()
+
+    def set_pan(self, pan: float) -> None:
+        """Set stereo pan (-1.0 to 1.0), applied live for audio."""
+        self._pan = max(-1.0, min(1.0, pan))
+        if not self._is_video_active:
+            self._live.set_pan(self._pan)
+            return
+        if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+            self._schedule_restart()
+
+    def set_auto_reconnect(self, enabled: bool) -> None:
+        """Automatically retry a dropped live stream (radio) up to
+        _MAX_RECONNECT_ATTEMPTS times. Never applies to finite-duration
+        media (local files, on-demand URLs) reaching a normal end."""
+        self._auto_reconnect = enabled
+        self._live.set_auto_reconnect(enabled)
+
+    def set_output_device(self, device_name: str) -> None:
+        """Set the audio output device by name (see utils/audio_devices.py),
+        or "" for the system default."""
+        self._output_device = device_name
+        if self._is_video_active:
+            if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+                self._schedule_restart()
+            return
+        index = _resolve_sounddevice_index(device_name) if device_name else None
+        self._live.set_output_device(index)
+
+    def toggle_effect(self, effect_id: str, enabled: bool) -> None:
+        """Enable or disable an effect."""
+        if effect_id in self._effects:
+            self._effects[effect_id]["enabled"] = enabled
+            self._live.toggle_effect(effect_id, enabled)
+            if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+                self._schedule_restart()
+
+    def apply_preset(self, effect_id: str, preset_name: str, params: dict[str, Any]) -> None:
+        """Apply a named preset (built-in or user-created -- the caller
+        resolves the name to params; this just applies them) to an
+        effect, auto-enabling it."""
+        if effect_id in self._effects:
+            self._effects[effect_id]["preset"] = preset_name
+            self._effects[effect_id]["params"] = params
+            self._effects[effect_id]["enabled"] = True
+            self._live.apply_preset(effect_id, preset_name, params)
+            if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+                self._schedule_restart()
+
+    def get_effect_params(self, effect_id: str) -> dict[str, Any]:
+        """Get current parameters for an effect."""
+        return self._effects.get(effect_id, {}).get("params", {})
+
+    def apply_effect_params(self, effect_id: str, params: dict[str, Any]) -> None:
+        """Apply raw effect parameters directly (e.g. from equalizer dialog)."""
+        if effect_id in self._effects:
+            self._effects[effect_id]["params"] = params
+            self._effects[effect_id]["enabled"] = True
+            self._live.apply_effect_params(effect_id, params)
+            if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
+                self._schedule_restart()
+
+    def _schedule_restart(self) -> None:
+        """Debounce _restart_with_effects() -- see RESTART_DEBOUNCE_SECONDS.
+        Video-only; audio changes apply live via LiveAudioEngine."""
+        with self._restart_lock:
+            if self._restart_timer is not None:
+                self._restart_timer.cancel()
+            self._restart_timer = threading.Timer(
+                self.RESTART_DEBOUNCE_SECONDS, self._restart_with_effects
+            )
+            self._restart_timer.daemon = True
+            self._restart_timer.start()
+
+    def _start_process(self, url: str, is_video: bool) -> None:
+        """Start the FFplay subprocess (video only)."""
+        cmd = self._build_ffplay_command(url, is_video)
+        # ffplay has no CLI flag for choosing an output device -- it goes
+        # through SDL2, which picks the device from this env var on the
+        # child process. See utils/audio_devices.py for how the exact name
+        # is derived (has to match SDL's own enumeration precisely).
+        from radiomaster.utils.network import get_ffplay_http_proxy_env
+        proxy_env = get_ffplay_http_proxy_env()
+        env = None
+        if self._output_device or proxy_env:
+            env = dict(os.environ)
+            if self._output_device:
+                env["SDL_AUDIO_DEVICE_NAME"] = self._output_device
+            env.update(proxy_env)
+        try:
+            log_io(log, "spawning ffplay: %s", cmd)
+            self._process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                env=env,
+            )
+            self._state = self.STATE_PLAYING
+            self._notify_state()
+            self._start_monitor()
+            # A fresh process is a fresh WASAPI audio session at 100%
+            # (session volume doesn't carry over from the previous
+            # process/PID) -- (re)apply the saved level. ffplay may not
+            # have opened its audio stream yet, so this retries briefly in
+            # the background instead of failing outright.
+            threading.Thread(
+                target=self._apply_volume_live_with_retry, args=(self._process,), daemon=True
+            ).start()
+        except FileNotFoundError:
+            self._notify_error("FFplay not found. Ensure ffplay.exe is in the tools/ folder.")
+        except Exception as e:
+            self._notify_error(f"Failed to start playback: {e}")
+
+    def _build_ffplay_command(self, url: str, is_video: bool) -> list[str]:
+        """Build the FFplay command line with current settings (video only)."""
+        cmd = [get_ffplay(), "-nodisp", "-autoexit", "-exitonmousedown"]
+
+        # Volume is intentionally NOT set here via -volume: it's applied
+        # live afterwards through the process's own WASAPI session (see
+        # _apply_volume_live / utils/session_volume.py), so every fresh
+        # process launches at ffplay's own 100% default and self._volume
+        # is the sole, unambiguous source of truth for the actual level --
+        # stacking a -volume flag on top of a WASAPI session scale would
+        # double-apply the same change.
+
+        filters = []
+
+        # ReplayGain -- a per-file volume trim read from tags, applied
+        # ahead of the (already-clamped) main volume so quiet/loud tracks
+        # play back at a consistent perceived level.
+        if self._replaygain_db:
+            filters.append(f"volume={self._replaygain_db}dB")
+
+        # Pan (rate + effects are built by the same shared helper the
+        # audio backend uses, so the two backends apply identical DSP for
+        # identical settings).
+        if self._pan != 0.0:
+            pan_val = max(-1.0, min(1.0, self._pan))
+            left_gain = 1.0 - max(0, pan_val)
+            right_gain = 1.0 - max(0, -pan_val)
+            filters.append(f"pan=stereo|c0={left_gain}*c0|c1={right_gain}*c1")
+
+        filters.extend(build_effects_filters(self._rate, self._effects))
+
+        if filters:
+            cmd.extend(["-af", ",".join(filters)])
+
+        # Video window
+        if is_video:
+            cmd.remove("-nodisp")
+
+        cmd.append(url)
+        return cmd
+
+    def _restart_with_effects(self) -> None:
+        """Restart playback with current effect settings (video only)."""
+        if not self._current_url:
+            return
+        pos = self._position
+        old_state = self._state
+        # Stop the old process first to avoid leaking subprocesses
+        self._monitor_running = False
+        if self._process:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=2)
+            except Exception:
+                if self._process:
+                    self._process.kill()
+            self._process = None
+        self._start_process(self._current_url, self._is_video)
+        # Only seek if the restart succeeded (state changed to playing)
+        if pos > 0 and self._state == self.STATE_PLAYING:
+            threading.Timer(0.5, lambda: self.seek(pos)).start()
+        elif self._state != self.STATE_PLAYING:
+            # Restore old state on failure
+            self._state = old_state
+
+    def _start_monitor(self) -> None:
+        """Start a monitoring thread for playback position (video only)."""
+        self._monitor_running = True
+        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread.start()
+
+    def _monitor_loop(self) -> None:
+        """Monitor playback and update position (video only)."""
+        start_time = time.time()
+        while self._monitor_running and self._process:
+            if self._state == self.STATE_PLAYING:
+                self._position = time.time() - start_time
+                if self._on_position_update:
+                    self._on_position_update(self._position, self._duration)
+
+                # A live stream that's stayed connected for a while is
+                # healthy again -- forgive earlier reconnect attempts so a
+                # brief blip long ago doesn't count against a fresh drop.
+                if self._position > 10.0:
+                    self._reconnect_attempts = 0
+
+                # Check if process is still running
+                if self._process.poll() is not None:
+                    self._monitor_running = False
+                    # duration == 0 is this engine's existing signal for a
+                    # live/unbounded stream (radio.play() never sets one);
+                    # only those are worth auto-reconnecting -- a finite
+                    # file/track hitting this point just reached its end.
+                    if (self._auto_reconnect and self._duration == 0.0
+                            and self._current_url
+                            and self._reconnect_attempts < self._MAX_RECONNECT_ATTEMPTS):
+                        self._reconnect_attempts += 1
+                        self._state = self.STATE_BUFFERING
+                        self._notify_state()
+                        url, is_video = self._current_url, self._is_video
+                        with self._restart_lock:
+                            self._reconnect_timer = threading.Timer(
+                                2.0, lambda: self._start_process(url, is_video)
+                            )
+                            self._reconnect_timer.daemon = True
+                            self._reconnect_timer.start()
+                    else:
+                        if self._auto_reconnect and self._reconnect_attempts >= self._MAX_RECONNECT_ATTEMPTS:
+                            self._notify_error("Lost connection to the stream and could not reconnect.")
+                        self._state = self.STATE_STOPPED
+                        self._notify_state()
+                    break
+            time.sleep(0.25)
+
+    def _notify_state(self) -> None:
+        """Notify listeners of state change (always the *effective*
+        current state -- whichever backend is active)."""
+        if self._on_state_change:
+            self._on_state_change(self.state)
+
+    def _notify_error(self, message: str) -> None:
+        """Notify listeners of an error."""
+        if self._on_error:
+            self._on_error(message)
+
+    # Callback setters
+    def on_state_change(self, cb: Callable[[str], None]) -> None:
+        self._on_state_change = cb
+
+    def on_position_update(self, cb: Callable[[float, float], None]) -> None:
+        self._on_position_update = cb
+
+    def on_track_change(self, cb: Callable[[str, str], None]) -> None:
+        self._on_track_change = cb
+
+    def on_buffering(self, cb: Callable[[int], None]) -> None:
+        self._on_buffering = cb
+
+    def on_error(self, cb: Callable[[str], None]) -> None:
+        self._on_error = cb
+
+    def on_track_finished(self, cb: Callable[[], None]) -> None:
+        """Fired only when the current track reaches its own natural end
+        (not a user Stop, not a crossfade takeover) -- audio-only, since
+        video's ffplay backend has no equivalent natural-end signal."""
+        self._on_track_finished = cb
+
+    @property
+    def position(self) -> float:
+        return self._position if self._is_video_active else self._live.position
+
+    @property
+    def duration(self) -> float:
+        return self._duration if self._is_video_active else self._live.duration
+
+    @property
+    def volume(self) -> float:
+        return self._volume
+
+    @property
+    def current_url(self) -> str:
+        return self._current_url
+
+    @property
+    def current_title(self) -> str:
+        return self._current_title
+
+    @property
+    def current_artist(self) -> str:
+        return self._current_artist
+
+    @property
+    def is_video(self) -> bool:
+        return self._is_video
+
+    @property
+    def rate(self) -> float:
+        return self._rate
+
+    @property
+    def pan(self) -> float:
+        return self._pan
+
+    # ------------------------------------------------------------------
+    # Track navigation helpers (used by MainWindow callbacks)
+    # ------------------------------------------------------------------
+    def fast_forward(self, seconds: float = 10.0) -> None:
+        """Fast-forward by *seconds* (default 10)."""
+        new_pos = self.position + seconds
+        if self.duration > 0 and new_pos > self.duration:
+            new_pos = self.duration
+        self.seek(new_pos)
+
+    def rewind(self, seconds: float = 10.0) -> None:
+        """Rewind by *seconds* (default 10)."""
+        new_pos = self.position - seconds
+        if new_pos < 0:
+            new_pos = 0
+        self.seek(new_pos)
+
+
+def _resolve_sounddevice_index(device_name: str) -> int | None:
+    """Best-effort match of a saved SDL-scheme device name (see
+    utils/audio_devices.py) against sounddevice/PortAudio's own device
+    list, which enumerates and names devices differently. Returns None
+    (system default) if nothing matches closely enough."""
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+    except Exception:
+        return None
+    # Strip the "N- " disambiguation prefix and match on the core name.
+    core = device_name.split("- ", 1)[-1].strip().lower()
+    best_index = None
+    for i, d in enumerate(devices):
+        if d.get("max_output_channels", 0) <= 0:
+            continue
+        name = str(d.get("name", "")).lower()
+        if core and core in name:
+            return i
+        if best_index is None and device_name.strip().lower() in name:
+            best_index = i
+    return best_index

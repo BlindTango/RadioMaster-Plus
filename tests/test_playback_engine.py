@@ -1,0 +1,376 @@
+"""Tests for the playback engine."""
+
+import sys
+import time
+
+import pytest
+from unittest.mock import patch, MagicMock
+from radiomaster.engine.playback_engine import PlaybackEngine
+from radiomaster.engine.effects_engine import EffectsEngine
+
+
+class TestPlaybackEngine:
+    """Test playback engine state management."""
+
+    def test_initial_state(self) -> None:
+        engine = PlaybackEngine()
+        assert engine.state == "stopped"
+        assert engine.position == 0.0
+        assert engine.volume == 0.8
+
+    def test_volume_range(self) -> None:
+        engine = PlaybackEngine()
+        engine.set_volume(0.5)
+        assert engine.volume == 0.5
+        engine.set_volume(2.0)  # Above max
+        assert engine.volume == 1.0
+        engine.set_volume(-0.5)  # Below min
+        assert engine.volume == 0.0
+
+    def test_rate_range(self) -> None:
+        engine = PlaybackEngine()
+        engine.set_rate(1.5)
+        assert engine.rate == 1.5
+        engine.set_rate(0.25)  # Below min
+        assert engine.rate == 0.5
+        engine.set_rate(5.0)  # Above max
+        assert engine.rate == 3.0
+
+    def test_pan_range(self) -> None:
+        engine = PlaybackEngine()
+        engine.set_pan(0.5)
+        assert engine.pan == 0.5
+        engine.set_pan(-2.0)  # Below min
+        assert engine.pan == -1.0
+        engine.set_pan(2.0)  # Above max
+        assert engine.pan == 1.0
+
+    def test_toggle_effect(self) -> None:
+        engine = PlaybackEngine()
+        engine.toggle_effect("equalizer", True)
+        assert engine._effects["equalizer"]["enabled"] is True
+        engine.toggle_effect("equalizer", False)
+        assert engine._effects["equalizer"]["enabled"] is False
+
+    def test_stop_cancels_pending_auto_reconnect(self) -> None:
+        """A dropped stream schedules a threading.Timer to relaunch ffplay
+        2s later. If stop() doesn't cancel that timer, pressing Stop looks
+        like it worked (process dies, state -> stopped) but playback comes
+        back on its own moments later -- the exact bug reported live: Stop
+        appeared to do nothing until the whole app was killed."""
+
+        class FakeProc:
+            def __init__(self):
+                self.stdin = MagicMock()
+                self.returncode = None
+
+            def poll(self):
+                # Every launch "fails" (stream unreachable) instantly.
+                return 1
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                pass
+
+            def kill(self):
+                pass
+
+        with patch("radiomaster.engine.playback_engine.subprocess.Popen") as popen, \
+             patch("radiomaster.engine.playback_engine.get_ffplay", return_value="ffplay"):
+            popen.return_value = FakeProc()
+
+            engine = PlaybackEngine()
+            engine.set_auto_reconnect(True)
+            # is_video=True: this test exercises the ffplay-subprocess
+            # backend's own reconnect-timer bookkeeping specifically.
+            # Audio-only playback (the default) now goes through
+            # LiveAudioEngine instead, which has its own reconnect logic
+            # covered separately.
+            engine.play("http://example.invalid/stream", is_video=True)  # duration=0.0 -> "live"
+
+            # Let the monitor thread notice the instant "exit" and schedule
+            # its 2s reconnect timer.
+            deadline = time.time() + 2.0
+            while engine._reconnect_timer is None and time.time() < deadline:
+                time.sleep(0.05)
+            assert engine._reconnect_timer is not None, "reconnect wasn't scheduled"
+
+            calls_before_stop = popen.call_count
+            engine.stop()
+            assert engine._reconnect_timer is None
+
+            # Wait past the 2s window the reconnect timer would have fired in.
+            time.sleep(2.3)
+
+            assert popen.call_count == calls_before_stop, (
+                "stop() did not cancel the pending auto-reconnect -- "
+                "ffplay was relaunched after the user pressed Stop"
+            )
+            assert engine.state == "stopped"
+
+    def test_set_volume_does_not_restart_process(self) -> None:
+        """Volume changes must apply live via WASAPI, not by killing and
+        relaunching ffplay -- restarting mid-stream (audible dropout, a
+        live radio reconnect) is exactly the behavior the README's
+        'real-time... no restart required' promise rules out."""
+
+        class FakeProc:
+            def __init__(self):
+                self.stdin = MagicMock()
+                self.pid = 4242
+
+            def poll(self):
+                return None  # still running
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                pass
+
+            def kill(self):
+                pass
+
+        with patch("radiomaster.engine.playback_engine.subprocess.Popen") as popen, \
+             patch("radiomaster.engine.playback_engine.get_ffplay", return_value="ffplay"), \
+             patch("radiomaster.utils.session_volume.set_process_volume", return_value=True) as set_vol:
+            popen.return_value = FakeProc()
+
+            engine = PlaybackEngine()
+            # is_video=True: WASAPI-session volume is the ffplay-subprocess
+            # backend's mechanism specifically. Audio-only playback (the
+            # default) uses LiveAudioEngine, which applies volume as a
+            # direct numpy gain -- no process or session involved at all.
+            engine.play("http://example.invalid/stream", is_video=True)
+            time.sleep(0.1)  # let the post-launch initial apply settle
+            calls_before = popen.call_count
+
+            engine.set_volume(0.3)
+            time.sleep(engine.VOLUME_DEBOUNCE_SECONDS + 0.2)
+
+            assert popen.call_count == calls_before, (
+                "set_volume() relaunched ffplay instead of applying the "
+                "change live through the running process's WASAPI session"
+            )
+            assert (4242, 0.3) in [c.args for c in set_vol.call_args_list]
+            engine.stop()
+
+
+class TestLiveAudioEngine:
+    """Tests for the audio-only backend (PyAV decode + sounddevice output)
+    that gives Volume/Pan/Rate/effects genuinely live, no-restart changes."""
+
+    def test_initial_state(self) -> None:
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine
+        engine = LiveAudioEngine()
+        assert engine.state == "stopped"
+        assert engine.volume == 0.8
+        assert engine.rate == 1.0
+        assert engine.pan == 0.0
+
+    def test_volume_pan_rate_apply_without_playback(self) -> None:
+        """These are just numpy-gain/filter-spec parameters -- setting them
+        with nothing playing must not error or require a process/session."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine
+        engine = LiveAudioEngine()
+        engine.set_volume(0.3)
+        engine.set_pan(-0.5)
+        engine.set_rate(1.5)
+        assert engine.volume == 0.3
+        assert engine.pan == -0.5
+        assert engine.rate == 1.5
+
+    def test_reconnect_closes_previous_output_stream(self) -> None:
+        """A dropped-and-retried connection calls _start_output_stream()
+        again on the same engine instance without going through stop()
+        first. If the old stream isn't closed, its callback keeps running
+        concurrently with the new one -- both consuming the PCM queue and
+        both incrementing self._position, which looked exactly like
+        position racing far ahead of real time (worse with every retry)."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine
+
+        with patch("radiomaster.engine.live_audio_engine.sd.OutputStream") as out_stream_cls:
+            first = MagicMock()
+            second = MagicMock()
+            out_stream_cls.side_effect = [first, second]
+
+            engine = LiveAudioEngine()
+            engine._start_output_stream()
+            assert engine._output_stream is first
+            first.close.assert_not_called()
+
+            engine._start_output_stream()
+            assert engine._output_stream is second
+            first.stop.assert_called_once()
+            first.close.assert_called_once()
+
+    def test_decode_loop_does_not_start_output_after_stop(self) -> None:
+        """_decode_loop() opens the container (can take real seconds --
+        e.g. a fresh TCP connection on a reconnect retry) before it had
+        ever checked _stop_flag. If Stop was clicked during that window,
+        the reconnect finished anyway and started a brand new output
+        stream right after -- Stop looked like it worked (briefly silent)
+        then played again moments later."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine
+
+        fake_stream = MagicMock()
+        fake_stream.type = "audio"
+        fake_container = MagicMock()
+        fake_container.streams = [fake_stream]
+        fake_container.demux.return_value = iter([])  # no packets either way
+
+        engine = LiveAudioEngine()
+        with patch("radiomaster.engine.live_audio_engine.av.open", return_value=fake_container), \
+             patch.object(engine, "_start_output_stream") as start_output:
+            engine._stop_flag.set()  # simulate Stop landing right after av.open() returns
+            engine._decode_loop("http://example.invalid/stream")
+            start_output.assert_not_called()
+
+    def test_build_effects_filters_rate_only(self) -> None:
+        from radiomaster.engine.live_audio_engine import build_effects_filters
+        effects = LiveAudioEngineDefaults.effects()
+        filters = build_effects_filters(1.5, effects)
+        assert filters == ["atempo=1.5"]
+
+    def test_build_effects_filters_equalizer(self) -> None:
+        from radiomaster.engine.live_audio_engine import build_effects_filters
+        effects = LiveAudioEngineDefaults.effects()
+        effects["equalizer"]["enabled"] = True
+        effects["equalizer"]["params"] = {"32": 5, "1k": -3}
+        filters = build_effects_filters(1.0, effects)
+        assert len(filters) == 1
+        assert "firequalizer" in filters[0]
+
+    @staticmethod
+    def _assert_graph_configures(filter_specs) -> None:
+        """Actually build+configure a real libavfilter graph from these
+        specs -- add() alone doesn't validate a filter's argument string,
+        only configure() (link resolution) does. This is exactly how
+        firequalizer/compand/aecho/acrossfade args that looked fine at
+        add() time turned out to be invalid and crashed live playback the
+        moment that effect was actually turned on."""
+        import av
+        graph = av.filter.Graph()
+        node = graph.add("abuffer", sample_rate="48000", sample_fmt="fltp", channel_layout="stereo")
+        for spec in filter_specs:
+            name, _, args = spec.partition("=")
+            nxt = graph.add(name, args) if args else graph.add(name)
+            node.link_to(nxt)
+            node = nxt
+        sink = graph.add("abuffersink")
+        node.link_to(sink)
+        graph.configure()  # raises if any filter's args are invalid
+
+    def test_every_effect_produces_a_valid_filter_graph(self) -> None:
+        """One real libavfilter validation per effect (plus rate, plus all
+        of them combined) -- catches invalid filter syntax that only
+        surfaces at graph-configure time, which a plain string-shape
+        assertion (e.g. 'firequalizer' in filters[0]) would never catch."""
+        from radiomaster.engine.live_audio_engine import build_effects_filters
+
+        cases = [
+            ("rate only", 1.5, {}),
+            ("equalizer", 1.0, {"equalizer": {"enabled": True, "params": {"32": 5, "1k": -3}}}),
+            ("dynamic_range", 1.0, {"dynamic_range": {"enabled": True,
+             "params": {"threshold": -20, "attack": 5, "release": 50}}}),
+            ("echo", 1.0, {"echo": {"enabled": True,
+             "params": {"delay": 500, "decay": 0.4, "in_gain": 0.8, "out_gain": 0.88}}}),
+            ("reverb", 1.0, {"reverb": {"enabled": True,
+             "params": {"room_size": 0.4, "decay": 0.4, "mix": 0.3}}}),
+            ("pitch_tempo", 1.0, {"pitch_tempo": {"enabled": True, "params": {"cents": 700, "tempo": 1.0}}}),
+            ("chorus", 1.0, {"chorus": {"enabled": True,
+             "params": {"delay": 50, "decay": 0.4, "speed": 2.0, "depth": 2.0}}}),
+            ("compressor", 1.0, {"compressor": {"enabled": True,
+             "params": {"threshold": 0.1, "ratio": 4, "attack": 20, "release": 250, "makeup": 1}}}),
+            ("distortion", 1.0, {"distortion": {"enabled": True, "params": {"bits": 8, "mix": 0.6}}}),
+            ("flanger", 1.0, {"flanger": {"enabled": True,
+             "params": {"delay": 10, "depth": 2, "speed": 0.5}}}),
+            ("gargle", 1.0, {"gargle": {"enabled": True, "params": {"rate": 20, "depth": 0.7}}}),
+            ("normalization", 1.0, {"normalization": {"enabled": True, "params": {"target": -16}}}),
+        ]
+        for label, rate, overrides in cases:
+            effects = LiveAudioEngineDefaults.effects()
+            for k, v in overrides.items():
+                effects[k].update(v)
+            filters = build_effects_filters(rate, effects)
+            self._assert_graph_configures(filters), f"{label} produced an invalid filter graph"
+
+        # And all of them enabled together (rate + every effect at once).
+        effects = LiveAudioEngineDefaults.effects()
+        for effect_id in effects:
+            effects[effect_id]["enabled"] = True
+        filters = build_effects_filters(1.2, effects)
+        self._assert_graph_configures(filters)
+
+    def test_build_effects_filters_matches_ffplay_command_builder(self) -> None:
+        """PlaybackEngine's video (ffplay) path and LiveAudioEngine's audio
+        path must apply identical DSP for identical settings -- they now
+        share this exact function, so this just confirms the wiring."""
+        from radiomaster.engine.playback_engine import PlaybackEngine
+        from radiomaster.engine.live_audio_engine import build_effects_filters
+
+        engine = PlaybackEngine()
+        engine._rate = 1.2
+        engine._effects["normalization"]["enabled"] = True
+        cmd = engine._build_ffplay_command("http://example.invalid", is_video=True)
+        af_index = cmd.index("-af")
+        af_value = cmd[af_index + 1]
+        expected = ",".join(build_effects_filters(1.2, engine._effects))
+        assert af_value == expected
+
+
+class LiveAudioEngineDefaults:
+    @staticmethod
+    def effects() -> dict:
+        return {
+            "echo": {"enabled": False, "preset": "Medium Delay", "params": {}},
+            "equalizer": {"enabled": False, "preset": "Flat", "params": {}},
+            "reverb": {"enabled": False, "preset": "Small Room", "params": {}},
+            "dynamic_range": {"enabled": False, "preset": "Light Compression", "params": {}},
+            "pitch_tempo": {"enabled": False, "preset": "Semitone Down", "params": {}},
+            "chorus": {"enabled": False, "preset": "Classic Chorus", "params": {}},
+            "compressor": {"enabled": False, "preset": "Standard", "params": {}},
+            "distortion": {"enabled": False, "preset": "Light Grit", "params": {}},
+            "flanger": {"enabled": False, "preset": "Classic Flange", "params": {}},
+            "gargle": {"enabled": False, "preset": "Classic Gargle", "params": {}},
+            "normalization": {"enabled": False, "preset": "Standard (-16 LUFS)", "params": {}},
+        }
+
+
+class TestEffectsEngine:
+    """Test effects engine filter graph generation."""
+
+    def test_empty_filter_graph(self) -> None:
+        engine = EffectsEngine()
+        result = engine.build_filter_graph()
+        assert result is None
+
+    def test_rate_filter(self) -> None:
+        engine = EffectsEngine()
+        result = engine.build_filter_graph(rate=1.5)
+        assert result == "atempo=1.5"
+
+    def test_pan_filter(self) -> None:
+        engine = EffectsEngine()
+        result = engine.build_filter_graph(pan=0.5)
+        assert "pan=stereo" in result
+
+    def test_equalizer_enabled(self) -> None:
+        engine = EffectsEngine()
+        engine.set_enabled("equalizer", True)
+        engine.set_params("equalizer", {"32": 5, "1k": -3})
+        result = engine.build_filter_graph()
+        assert result is not None
+        assert "firequalizer" in result
+
+    def test_multiple_effects(self) -> None:
+        engine = EffectsEngine()
+        engine.set_enabled("equalizer", True)
+        engine.set_enabled("normalization", True)
+        result = engine.build_filter_graph(rate=1.2)
+        assert result is not None
+        assert "atempo=1.2" in result
+        assert "firequalizer" in result
+        assert "dynaudnorm" in result

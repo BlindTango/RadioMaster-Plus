@@ -1,0 +1,18 @@
+{
+    "name": "Default Dark",
+    "bg_primary": "#1E1E1E",
+    "bg_secondary": "#252526",
+    "bg_tertiary": "#2D2D2D",
+    "text_primary": "#D4D4D4",
+    "text_secondary": "#AAAAAA",
+    "accent": "#0078D4",
+    "accent_hover": "#1A8AD4",
+    "highlight": "#FFFF00",
+    "highlight_text": "#000000",
+    "success": "#4EC94E",
+    "warning": "#FF8C00",
+    "error": "#F14C4C",
+    "border": "#3C3C3C",
+    "control_face": "#333333",
+    "control_text": "#D4D4D4"
+}
