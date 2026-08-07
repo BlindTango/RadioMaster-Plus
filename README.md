@@ -90,7 +90,7 @@ Smart timer with countdown, end-of-track, and end-of-playlist options.
 ## Installation
 
 ### From Installer
-Download the latest release from the [Releases page](https://github.com/radiomaster/radiomaster-plus/releases) and run the Inno Setup installer. The installer offers:
+Download the latest release from the [Releases page](https://github.com/BlindTango/RadioMaster-Plus/releases) and run the Inno Setup installer. The installer offers:
 
 1. **Installation Mode**: All users (admin) or current user only
 2. **Installation Type**: Standard (Start Menu, file associations) or Portable (no registry)
@@ -100,8 +100,8 @@ Download the latest release from the [Releases page](https://github.com/radiomas
 
 ```bash
 # Clone the repository
-git clone https://github.com/radiomaster/radiomaster-plus.git
-cd radiomaster-plus
+git clone https://github.com/BlindTango/RadioMaster-Plus.git
+cd RadioMaster-Plus
 
 # Install dependencies
 pip install -r requirements.txt
