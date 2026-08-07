@@ -146,6 +146,18 @@ begin
   end;
 end;
 
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // Portable mode's whole point is "everything stays inside the install
+  // folder, nothing touches the registry or the user profile" -- that
+  // requires the app itself to know it's portable at runtime.
+  // get_paths() (utils/paths.py) checks for a "portable.txt" marker file
+  // next to the exe, but nothing was ever creating one, so a portable
+  // install silently used the normal per-user AppData/Music folders anyway.
+  if (CurStep = ssPostInstall) and IsPortable then
+    SaveStringToFile(ExpandConstant('{app}\portable.txt'), '', False);
+end;
+
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   { Skip Start Menu page for portable mode }

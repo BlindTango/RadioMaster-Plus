@@ -222,8 +222,13 @@ class YouTubePanel(wx.Panel):
         app = wx.GetApp()
         if hasattr(app, 'download_manager') and hasattr(app.download_manager, 'add_download'):
             from radiomaster.utils.paths import get_paths
+            # Was always get_paths()["downloads"] regardless of what the
+            # user set in Settings > Downloads > Download Location --
+            # ignoring their choice entirely rather than just using it as
+            # the default when nothing's been set.
+            output_dir = config.get("downloads.download_path", default=str(get_paths()["downloads"]))
             app.download_manager.add_download(
-                download_id, video_url, output_dir=get_paths()["downloads"],
+                download_id, video_url, output_dir=output_dir,
                 title=video.get('title', 'YouTube Video'),
                 format=quality,
             )
@@ -255,8 +260,9 @@ class YouTubePanel(wx.Panel):
         app = wx.GetApp()
         if hasattr(app, 'download_manager') and hasattr(app.download_manager, 'add_download'):
             from radiomaster.utils.paths import get_paths
+            output_dir = config.get("downloads.download_path", default=str(get_paths()["downloads"]))
             app.download_manager.add_download(
-                download_id, video_url, output_dir=get_paths()["downloads"],
+                download_id, video_url, output_dir=output_dir,
                 title=video.get('title', 'YouTube Audio'),
                 format=audio_fmt, extract_audio=True,
             )

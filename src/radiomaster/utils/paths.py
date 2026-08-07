@@ -1,9 +1,30 @@
 """Path resolution for RadioMaster+."""
 
 import os
+import sys
 from platformdirs import user_config_dir, user_data_dir, user_cache_dir
 
 from radiomaster import __app_name__
+
+
+def _app_dir() -> str:
+    """Directory the application actually lives in: the .exe's own folder
+    for a packaged/frozen build, the repo root when running from source.
+
+    Deliberately NOT derived from this module's own __file__ the same way
+    for both cases -- that assumes a fixed source-tree depth
+    (src/radiomaster/utils/paths.py, 3 levels up to the repo root), which
+    does not hold once PyInstaller has extracted this module into its own
+    bundle layout. Using __file__ there landed "../../../portable.txt" and
+    the portable data folder somewhere inside the bundle's temp/_internal
+    structure instead of next to RadioMaster+.exe -- so a portable install
+    silently fell back to the regular per-user AppData/Music paths every
+    time, defeating the entire point of "portable". Same pattern already
+    used in utils/tools.py for locating the bundled ffmpeg/yt-dlp.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.join(os.path.dirname(__file__), "..", "..", "..")
 
 
 def get_paths() -> dict[str, str]:
@@ -16,14 +37,11 @@ def get_paths() -> dict[str, str]:
     """
     app_name = __app_name__.replace("+", "Plus")
 
-    # Check for portable mode
-    import sys
-    portable = "--portable" in sys.argv or os.path.exists(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "portable.txt")
-    )
+    app_dir = _app_dir()
+    portable = "--portable" in sys.argv or os.path.exists(os.path.join(app_dir, "portable.txt"))
 
     if portable:
-        base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
+        base = os.path.join(app_dir, "data")
         return {
             "config": os.path.join(base, "config"),
             "data": os.path.join(base, "data"),
