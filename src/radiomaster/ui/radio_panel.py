@@ -89,11 +89,10 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.tree.on_station_activated = self._on_station_activated
         self.tree.on_selection_changed = self._on_tree_sel_changed
 
-        # Restore saved volume
-        from radiomaster.utils.config import ConfigManager
-        config = ConfigManager.get_instance()
-        saved_volume = config.get("playback.volume", default=0.8)
-        self.engine.set_volume(saved_volume)
+        # Volume/rate/pan restoration happens once, centrally, in
+        # MainWindow.__init__ (after this panel and the engine both
+        # exist) -- not here, to avoid two places independently reading
+        # "the saved volume" at slightly different times.
 
         self.tree.add_custom_section(self.station_db.get_custom_stations())
 
@@ -295,17 +294,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         """Toggle mute."""
         self.engine.set_volume(0.0 if self.engine._volume > 0 else 0.8)
         self.set_status("Status: Muted" if self.engine._volume == 0 else "Status: Unmuted")
-
-    def _on_volume_changed(self, percent: int) -> None:
-        self.engine.set_volume(percent / 100)
-        from radiomaster.utils.config import ConfigManager
-        ConfigManager.get_instance().set("playback.volume", percent / 100)
-
-    def _on_pan_changed(self, percent: int) -> None:
-        pan = (percent - 50) / 50
-        self.engine.set_pan(pan)
-        from radiomaster.utils.config import ConfigManager
-        ConfigManager.get_instance().set("playback.pan", pan)
 
     def _on_add_custom(self, event: wx.CommandEvent) -> None:
         dlg = wx.TextEntryDialog(self, "Enter station URL:", "Add Custom Station")

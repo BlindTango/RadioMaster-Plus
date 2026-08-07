@@ -273,6 +273,14 @@ class NowPlayingBar(wx.Panel):
         """Set the volume slider position (0.0 to 1.0)."""
         self._volume_slider.SetValue(int(volume * 100))
 
+    def set_rate(self, rate: float) -> None:
+        """Set the rate slider position (0.5x to 3.0x)."""
+        self._rate_slider.SetValue(int(rate * 100))
+
+    def set_pan(self, pan: float) -> None:
+        """Set the pan slider position (-1.0 to 1.0)."""
+        self._pan_slider.SetValue(int(pan * 100))
+
     def set_cover_art(self, image_data: bytes | None = None, file_path: str | None = None) -> None:
         """Set the cover art image from raw bytes or a file path.
 

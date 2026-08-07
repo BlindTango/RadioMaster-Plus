@@ -95,6 +95,12 @@ class RadioMasterApp(wx.App):
             # normally stops playback before the frame is destroyed. Cheap
             # to call again here in case exit happened some other way.
             self._main_window.engine.stop()
+        if self._config:
+            # Same backstop reasoning as engine.stop() above: MainWindow's
+            # _on_close (EVT_CLOSE) is what normally persists
+            # volume/rate/pan and any other in-memory config changes to
+            # disk; this covers exit paths that bypass it.
+            self._config.save()
         if self._download_manager:
             self._download_manager.stop()
         if self._scheduler_service:

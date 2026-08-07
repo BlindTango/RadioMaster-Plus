@@ -82,6 +82,19 @@ class MainWindow(wx.Frame):
         # Settings happens to be opened and saved.
         self._apply_settings_changes()
 
+        # Restore last session's volume/rate/pan. Deliberately separate
+        # from _apply_settings_changes() above -- that function also runs
+        # every time Settings > OK is pressed, and re-applying rate there
+        # would trigger an unwanted ffplay restart (rate changes restart
+        # video playback) any time the user saves an unrelated setting
+        # while a video happens to be playing. This runs once, at startup.
+        self._now_playing.set_volume(self._config.get("playback.volume", default=0.8))
+        self._now_playing.set_rate(self._config.get("playback.rate", default=1.0))
+        self._now_playing.set_pan(self._config.get("playback.pan", default=0.0))
+        self._engine.set_volume(self._config.get("playback.volume", default=0.8))
+        self._engine.set_rate(self._config.get("playback.rate", default=1.0))
+        self._engine.set_pan(self._config.get("playback.pan", default=0.0))
+
         self.Centre()
 
     @property
@@ -402,9 +415,9 @@ class MainWindow(wx.Frame):
         self._now_playing.on_first(lambda: self._first_track())
         self._now_playing.on_last(lambda: self._last_track())
         self._now_playing.on_seek(lambda pos: self._engine.seek(pos))
-        self._now_playing.on_volume(lambda vol: self._engine.set_volume(vol))
-        self._now_playing.on_rate(lambda rate: self._engine.set_rate(rate))
-        self._now_playing.on_pan(lambda pan: self._engine.set_pan(pan))
+        self._now_playing.on_volume(self._on_volume_change)
+        self._now_playing.on_rate(self._on_rate_change)
+        self._now_playing.on_pan(self._on_pan_change)
         self._now_playing.on_ffwd(lambda: self._fast_forward())
         self._now_playing.on_rewind(lambda: self._rewind())
 
@@ -522,6 +535,7 @@ class MainWindow(wx.Frame):
         ffplay subprocess orphaned and still playing.
         """
         self._engine.stop()
+        self._config.save()
         event.Skip()
 
     def _bind_events(self) -> None:
@@ -673,6 +687,24 @@ class MainWindow(wx.Frame):
         Preset Manager. EffectsMenu syncs its own On/Off checkmark right
         after calling this, since applying a preset auto-enables."""
         self._engine.apply_preset(effect_id, preset_name, params)
+
+    # Volume/rate/pan are saved to config on every change (not just on
+    # exit) so a crash or a kill-by-Task-Manager doesn't lose the last
+    # setting -- ConfigManager.set() is an in-memory update, cheap enough
+    # to call on every slider tick; the disk write in .save() is not, so
+    # that's deferred to actual exit (see _on_close/App.OnExit) rather than
+    # done here on every tick.
+    def _on_volume_change(self, volume: float) -> None:
+        self._engine.set_volume(volume)
+        self._config.set("playback.volume", value=volume)
+
+    def _on_rate_change(self, rate: float) -> None:
+        self._engine.set_rate(rate)
+        self._config.set("playback.rate", value=rate)
+
+    def _on_pan_change(self, pan: float) -> None:
+        self._engine.set_pan(pan)
+        self._config.set("playback.pan", value=pan)
 
     def _on_engine_state(self, state: str) -> None:
         """Handle playback engine state changes."""

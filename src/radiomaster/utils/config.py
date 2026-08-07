@@ -19,6 +19,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fade_out_duration": 0,
         "buffer_size": 4096,
         "default_rate": 1.0,
+        # Last-used values, restored on next launch -- distinct from
+        # default_volume/default_rate above, which are Settings-dialog
+        # starting points, not "what was playing when you last closed
+        # the app".
+        "volume": 0.8,
+        "rate": 1.0,
+        "pan": 0.0,
     },
     "radio": {
         "auto_sync_on_startup": True,
