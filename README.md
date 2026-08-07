@@ -1,5 +1,10 @@
 # RadioMaster+
 
+[![Release](https://img.shields.io/github/v/release/BlindTango/RadioMaster-Plus)](https://github.com/BlindTango/RadioMaster-Plus/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/BlindTango/RadioMaster-Plus/total)](https://github.com/BlindTango/RadioMaster-Plus/releases/latest)
+[![License](https://img.shields.io/github/license/BlindTango/RadioMaster-Plus)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/BlindTango/RadioMaster-Plus/releases/latest)
+
 A unified media player for Windows with full accessibility support. Stream radio, podcasts, YouTube videos, audiobooks (including DAISY 2.02 and NISO 39.86), and local media files — all from a single accessible interface.
 
 ## Features
