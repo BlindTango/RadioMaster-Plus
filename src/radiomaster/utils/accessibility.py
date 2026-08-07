@@ -14,6 +14,23 @@ class _NamedAccessible(wx.Accessible):
         return (wx.ACC_OK, self._name)
 
 
+# wx.Window.SetAccessible() does not take a reference-counted hold on the
+# Python object it's given, so without keeping one alive somewhere, a
+# _NamedAccessible can be garbage-collected the moment set_accessible_name()
+# returns, leaving the C++ side pointing at freed memory (undefined
+# behavior, not a clean failure -- intermittently "worked" depending on
+# whether that freed memory happened to be overwritten yet). Storing it as
+# an attribute on `window` itself doesn't reliably fix this: wx.Window
+# objects obtained via GetChildren() are transient per-call Python wrapper
+# objects around the same underlying C++ window (confirmed via id() --
+# each GetChildren() call can mint a new wrapper), so an attribute set on
+# one wrapper is invisible on the next. A plain module-level list, keyed by
+# nothing in particular (never popped -- these live for the app's runtime
+# anyway, same as the widgets they name), sidesteps wrapper identity
+# entirely.
+_KEEPALIVE: list[wx.Accessible] = []
+
+
 def set_accessible_name(window: wx.Window, name: str) -> None:
     """Set the name a screen reader announces for *window*.
 
@@ -25,5 +42,24 @@ def set_accessible_name(window: wx.Window, name: str) -> None:
     announcing that glyph no matter what SetName() is given. Overriding via
     wx.Accessible is what's actually required to change it.
     """
-    window.SetAccessible(_NamedAccessible(window, name))
+    accessible = _NamedAccessible(window, name)
+    window.SetAccessible(accessible)
+    _KEEPALIVE.append(accessible)  # see _KEEPALIVE's comment above
     window.SetName(name)
+
+
+def set_search_ctrl_accessible_name(search_ctrl: wx.SearchCtrl, name: str) -> None:
+    """Set the announced name for a wx.SearchCtrl.
+
+    wx.SearchCtrl is a composite: on MSW it's a container window plus a
+    native child TextCtrl (the part that actually gets keyboard focus and
+    is what NVDA reads) plus button children for the search-icon/clear
+    "x". set_accessible_name() on the SearchCtrl itself only names the
+    outer container -- Tabbing in still lands on the unnamed inner
+    TextCtrl, which is what a screen reader actually announces. Name both.
+    """
+    set_accessible_name(search_ctrl, name)
+    for child in search_ctrl.GetChildren():
+        if isinstance(child, wx.TextCtrl):
+            set_accessible_name(child, name)
+            break

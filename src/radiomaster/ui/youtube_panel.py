@@ -4,7 +4,7 @@ import wx
 from typing import Any
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
-from radiomaster.utils.accessibility import set_accessible_name
+from radiomaster.utils.accessibility import set_accessible_name, set_search_ctrl_accessible_name
 
 
 class YouTubePanel(wx.Panel):
@@ -25,7 +25,7 @@ class YouTubePanel(wx.Panel):
         # Search bar
         search_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._search_ctrl = wx.SearchCtrl(self, style=wx.TE_PROCESS_ENTER, size=(400, -1))
-        set_accessible_name(self._search_ctrl, "Search YouTube")
+        set_search_ctrl_accessible_name(self._search_ctrl, "Search YouTube")
         self._search_ctrl.ShowSearchButton(True)
         search_sizer.Add(self._search_ctrl, 0, wx.ALL, 4)
 

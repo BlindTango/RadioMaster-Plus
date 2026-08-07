@@ -2,7 +2,7 @@
 
 import wx
 from typing import Any, Callable
-from radiomaster.utils.accessibility import set_accessible_name
+from radiomaster.utils.accessibility import set_accessible_name, set_search_ctrl_accessible_name
 
 
 class SearchBar(wx.Panel):
@@ -22,7 +22,7 @@ class SearchBar(wx.Panel):
 
         # Search input
         self._search_ctrl = wx.SearchCtrl(self, style=wx.TE_PROCESS_ENTER, size=(300, -1))
-        set_accessible_name(self._search_ctrl, "Global Search")
+        set_search_ctrl_accessible_name(self._search_ctrl, "Global Search")
         self._search_ctrl.ShowSearchButton(True)
         self._search_ctrl.ShowCancelButton(True)
         sizer.Add(self._search_ctrl, 1, wx.RIGHT, 4)

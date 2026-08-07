@@ -116,17 +116,31 @@ class NowPlayingBar(wx.Panel):
         self._pan_slider.SetName("Pan")
         controls_sizer.Add(self._pan_slider, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
 
-        # Record button
-        self._btn_record = wx.Button(self, label="\u25cf Record Off", size=(60, 30), id=wx.NewIdRef())
+        # Record button. Fixed width, not auto-sized to the initial label:
+        # SetLabel() later swaps in "Recording On" (see set_recording()),
+        # which needs more room than "Record Off" -- sized here for the
+        # longer of the two so neither ever clips.
+        self._btn_record = wx.Button(self, label="\u25cf Record Off", size=(115, 30), id=wx.NewIdRef())
         set_accessible_name(self._btn_record, "Record Off")
         controls_sizer.Add(self._btn_record, 0, wx.LEFT, 4)
 
-        # Mute button
-        self._btn_mute = wx.Button(self, label="\U0001F507 Mute Off", size=(60, 30), id=wx.NewIdRef())
+        # Mute button, same reasoning (set_muted() swaps in "Mute On").
+        self._btn_mute = wx.Button(self, label="\U0001F507 Mute Off", size=(95, 30), id=wx.NewIdRef())
         set_accessible_name(self._btn_mute, "Mute Off")
         controls_sizer.Add(self._btn_mute, 0, wx.LEFT, 4)
 
-        main_sizer.Add(controls_sizer, 0, wx.EXPAND | wx.ALL, 4)
+        # Stretch spacers on both sides center the transport row when the
+        # window is wider than the row needs (e.g. maximized on a large
+        # monitor) instead of leaving it packed at the left edge with a
+        # large empty gap to the right. They collapse to zero width when
+        # there isn't extra room, so this doesn't fight WrapSizer's own
+        # wrap-instead-of-clip behavior on narrow windows (see the comment
+        # above controls_sizer's construction).
+        transport_row = wx.BoxSizer(wx.HORIZONTAL)
+        transport_row.AddStretchSpacer(1)
+        transport_row.Add(controls_sizer, 0)
+        transport_row.AddStretchSpacer(1)
+        main_sizer.Add(transport_row, 0, wx.EXPAND | wx.ALL, 4)
 
         # === Info row (SECOND) ===
         info_sizer = wx.BoxSizer(wx.HORIZONTAL)

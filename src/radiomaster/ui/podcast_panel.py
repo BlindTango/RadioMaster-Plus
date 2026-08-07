@@ -10,7 +10,7 @@ import wx
 from typing import Any
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
-from radiomaster.utils.accessibility import set_accessible_name
+from radiomaster.utils.accessibility import set_accessible_name, set_search_ctrl_accessible_name
 
 
 class PodcastPanel(wx.Panel):
@@ -112,7 +112,7 @@ class PodcastPanel(wx.Panel):
         dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
         dir_sizer.Add(wx.StaticText(col3, label="Search Directory:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self._dir_search = wx.SearchCtrl(col3, style=wx.TE_PROCESS_ENTER)
-        set_accessible_name(self._dir_search, "Search Podcast Directory")
+        set_search_ctrl_accessible_name(self._dir_search, "Search Podcast Directory")
         self._dir_search.ShowSearchButton(True)
         dir_sizer.Add(self._dir_search, 1, wx.EXPAND)
         col3_sizer.Add(dir_sizer, 0, wx.EXPAND | wx.ALL, 4)

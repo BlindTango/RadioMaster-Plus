@@ -221,6 +221,27 @@ class StationTree(wx.Panel):
         self.station_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_station_selected)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_station_activated_event)
 
+        # Column widths above are fixed pixel values with no resize
+        # handling, so a maximized/wide window left them exactly as narrow
+        # as at the default size instead of using the extra room -- long
+        # station/group names truncated the same amount regardless of how
+        # much space was actually available. Grow the leading (name)
+        # column to absorb whatever's left after the others' fixed widths.
+        self.group_list.Bind(wx.EVT_SIZE, self._on_group_list_resize)
+        self.station_list.Bind(wx.EVT_SIZE, self._on_station_list_resize)
+
+    def _on_group_list_resize(self, event: wx.SizeEvent) -> None:
+        event.Skip()
+        available = self.group_list.GetClientSize().width
+        fixed = 80  # "Stations" column
+        self.group_list.SetColumnWidth(0, max(220, available - fixed))
+
+    def _on_station_list_resize(self, event: wx.SizeEvent) -> None:
+        event.Skip()
+        available = self.station_list.GetClientSize().width
+        fixed = 140 + 80  # "Country" + "Bitrate" columns
+        self.station_list.SetColumnWidth(0, max(240, available - fixed))
+
     def load_sections(self) -> None:
         total = self.db.station_count()
         self._section_groups = {

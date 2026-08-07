@@ -60,6 +60,12 @@ class MainWindow(wx.Frame):
         # whichever panel currently has focus.
         super().__init__(None, title=_("RadioMaster+"), size=(1200, 800),
                           style=wx.DEFAULT_FRAME_STYLE | wx.TAB_TRAVERSAL)
+        # Without a floor, a sighted user can drag/snap the window down to
+        # a size where controls start clipping or overlapping (the
+        # transport bar alone -- First/Rewind/.../Last, Vol/Rate/Pan,
+        # Record, Mute -- needs ~900px to lay out without crowding).
+        # Nothing enforced this before.
+        self.SetMinSize((900, 650))
 
         self._setup_menu_bar()
         self._setup_ui()
@@ -322,6 +328,18 @@ class MainWindow(wx.Frame):
         self._listbook.AddPage(self._downloads_panel, "Downloads")
         self._listbook.AddPage(self._scheduler_panel, "Scheduler")
 
+        # wx.Listbook's native list panel on MSW uses a small fixed
+        # default width that ignores actual tab-label content entirely --
+        # confirmed via testing that neither InvalidateBestSize(),
+        # SendSizeEvent(), nor tab insertion order changes it. Without
+        # this, "Media Player"/"Downloads"/"Audiobooks" visually clip to
+        # "Media ..."/"Downlo..."/"Audiob...". Re-applying the needed
+        # width via CallAfter (so it runs after the native layout pass,
+        # which otherwise reasserts its own fixed width and wins if set
+        # synchronously) is the only way found to make it respect content.
+        self._listbook.Bind(wx.EVT_SIZE, lambda e: (wx.CallAfter(self._fix_listbook_tab_width), e.Skip()))
+        wx.CallAfter(self._fix_listbook_tab_width)
+
         main_sizer.Add(self._listbook, 1, wx.EXPAND)
 
         # Now Playing bar — placed right after the listbook so transport controls
@@ -369,6 +387,21 @@ class MainWindow(wx.Frame):
                     break
             if current_idx >= 0:
                 self._lyrics_panel.highlight_sentence(current_idx)
+
+    def _fix_listbook_tab_width(self) -> None:
+        """Widen the listbook's tab list to fit its widest label -- see
+        the binding site (in _setup_ui) for why this is needed at all."""
+        if not self._listbook:
+            return
+        lv = self._listbook.GetListView()
+        dc = wx.ClientDC(lv)
+        dc.SetFont(lv.GetFont())
+        labels = [self._listbook.GetPageText(i) for i in range(self._listbook.GetPageCount())]
+        needed = max((dc.GetTextExtent(t).width for t in labels), default=80) + 40
+        current = lv.GetSize()
+        if current.width != needed:
+            lv.SetSize((needed, current.height))
+            lv.SetColumnWidth(0, needed - 20)
 
     def _on_page_changed(self, evt: wx.CommandEvent) -> None:
         """Announce tab switch in status bar."""
