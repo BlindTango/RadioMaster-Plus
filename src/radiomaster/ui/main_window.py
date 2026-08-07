@@ -1,5 +1,7 @@
 """Main window for RadioMaster+ with menu bar, listbook, and now playing bar."""
 
+import logging
+import os
 import wx
 from typing import Any
 
@@ -67,6 +69,14 @@ class MainWindow(wx.Frame):
         # Nothing enforced this before.
         self.SetMinSize((900, 650))
 
+        from radiomaster.utils.paths import get_resource_path
+        icon_path = get_resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            self.SetIcon(wx.Icon(icon_path, wx.BITMAP_TYPE_ICO))
+
+        from radiomaster.utils.global_hotkeys import GlobalHotkeyManager
+        self._global_hotkey_manager = GlobalHotkeyManager(self)
+
         self._setup_menu_bar()
         self._setup_ui()
         self._setup_engine_callbacks()
@@ -100,6 +110,11 @@ class MainWindow(wx.Frame):
         self._engine.set_volume(self._config.get("playback.volume", default=0.8))
         self._engine.set_rate(self._config.get("playback.rate", default=1.0))
         self._engine.set_pan(self._config.get("playback.pan", default=0.0))
+
+        self._register_global_hotkeys()
+
+        if self._config.get("updates.check_on_startup", default=True):
+            self._check_updates(silent=True)
 
         self.Centre()
 
@@ -246,6 +261,8 @@ class MainWindow(wx.Frame):
         tools_menu.Append(self._menu_ids["track_splitter"], "Split &Track...")
         self._menu_ids["shortcut_editor"] = wx.NewIdRef()
         tools_menu.Append(self._menu_ids["shortcut_editor"], "&Keyboard Shortcuts...\tCtrl+K")
+        self._menu_ids["global_hotkeys"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["global_hotkeys"], "&Global Hotkeys...")
         tools_menu.AppendSeparator()
         tools_menu.Append(wx.ID_PREFERENCES, "&Settings...\tCtrl+,")
         menubar.Append(tools_menu, "&Tools")
@@ -569,6 +586,7 @@ class MainWindow(wx.Frame):
         """
         self._engine.stop()
         self._config.save()
+        self._global_hotkey_manager.unregister_all()
         event.Skip()
 
     def _bind_events(self) -> None:
@@ -604,6 +622,7 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_identifier(), id=self._menu_ids["track_identifier"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_splitter(), id=self._menu_ids["track_splitter"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_shortcut_editor(), id=self._menu_ids["shortcut_editor"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_global_hotkeys(), id=self._menu_ids["global_hotkeys"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_settings(), id=wx.ID_PREFERENCES)
 
         # Help menu
@@ -876,6 +895,48 @@ class MainWindow(wx.Frame):
             self._setup_accelerators()
         dlg.Destroy()
 
+    def _show_global_hotkeys(self) -> None:
+        """Show the global (system-wide) hotkeys dialog."""
+        from radiomaster.ui.hotkeys_dialog import GlobalHotkeysDialog
+        dlg = GlobalHotkeysDialog(self, self._config)
+        if dlg.ShowModal() == wx.ID_OK:
+            self._register_global_hotkeys()
+        dlg.Destroy()
+
+    def _register_global_hotkeys(self) -> None:
+        """(Re)register every configured global hotkey. Safe to call
+        repeatedly -- GlobalHotkeyManager unregisters everything first."""
+        hotkeys = self._config.get("hotkeys", default={}) or {}
+        if not hotkeys:
+            return
+        handlers = {
+            "play_pause": lambda: self._on_transport_play_pause(),
+            "stop": lambda: self._on_stop_action(),
+            "next_track": lambda: self._next_track(),
+            "prev_track": lambda: self._prev_track(),
+            "volume_up": lambda: self._on_volume_change(min(1.0, self._engine._volume + 0.05)),
+            "volume_down": lambda: self._on_volume_change(max(0.0, self._engine._volume - 0.05)),
+            "mute": lambda: self._radio_panel._on_mute(),
+            "record": lambda: self._radio_panel._on_record(),
+            "open_settings": lambda: self._show_settings(),
+            "open_scheduler": lambda: self._switch_tab(6),
+            "open_help": lambda: self._show_documentation(),
+        }
+        warnings = self._global_hotkey_manager.register_all(hotkeys, handlers)
+        if warnings:
+            log = logging.getLogger("radiomaster")
+            for warning in warnings:
+                log.warning(f"Global hotkey: {warning}")
+
+    def _on_stop_action(self) -> None:
+        """Same routing as the transport bar's Stop button (see
+        _setup_engine_callbacks): Stop on the Radio tab only stops
+        playback, never an in-progress recording of the same station."""
+        if self._listbook.GetSelection() == 0:
+            self._radio_panel._on_stop()
+        else:
+            self._engine.stop()
+
     def _on_open_url(self) -> None:
         """Open a URL dialog for streaming."""
         dlg = wx.TextEntryDialog(self, "Enter stream URL:", "Open URL")
@@ -1039,23 +1100,66 @@ class MainWindow(wx.Frame):
         dlg.ShowModal()
         dlg.Destroy()
 
-    def _check_updates(self) -> None:
-        """Check for updates."""
-        from radiomaster.services.update_checker import UpdateChecker
-        result = UpdateChecker.check()
-        if result:
-            wx.MessageBox(
-                f"Version {result['version']} is available!\n\n{result.get('body', '')}",
-                "Update Available", wx.OK | wx.ICON_INFORMATION)
-        else:
-            from radiomaster import __version__
-            wx.MessageBox(f"You are running the latest version ({__version__}).",
-                          "No Updates", wx.OK | wx.ICON_INFORMATION)
+    def _check_updates(self, silent: bool = False) -> None:
+        """Check GitHub for a newer release. silent=True (startup auto-check)
+        stays quiet on failure or "no update found" -- only a manual Help >
+        Check for Updates reports either of those with a dialog."""
+        import threading
+        from radiomaster.services.update_checker import UpdateChecker, UpdateCheckError
+        from radiomaster import __version__
+        from radiomaster.utils.wx_safe import call_after_safe
+
+        checker = UpdateChecker()
+
+        def worker():
+            try:
+                info = checker.check(__version__)
+            except UpdateCheckError as exc:
+                if silent:
+                    logging.getLogger("radiomaster").info(f"Silent update check failed: {exc}")
+                else:
+                    call_after_safe(self, self._update_check_failed, str(exc))
+                return
+            call_after_safe(self, self._update_check_result, checker, info, silent)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_check_failed(self, message: str) -> None:
+        wx.MessageBox(message, "Check for Updates", wx.OK | wx.ICON_ERROR, self)
+
+    def _update_check_result(self, checker, info, silent: bool) -> None:
+        from radiomaster import __version__
+        if info is None:
+            if not silent:
+                wx.MessageBox(
+                    f"You're up to date -- RadioMaster+ {__version__} is the latest version.",
+                    "Check for Updates", wx.OK | wx.ICON_INFORMATION, self)
+            return
+        if silent and self._config.get("updates.skip_version", default="") == info.version:
+            return
+        from radiomaster.ui.update_dialog import UpdateAvailableDialog
+        dlg = UpdateAvailableDialog(self, checker, info, self._on_ready_to_install)
+        result = dlg.ShowModal()
+        if result == wx.ID_NO:
+            self._config.set("updates.skip_version", value=info.version)
+            self._config.save()
+        dlg.Destroy()
+
+    def _on_ready_to_install(self, installer_path: str) -> None:
+        import subprocess
+        try:
+            subprocess.Popen([installer_path])
+        except OSError as exc:
+            wx.MessageBox(f"Could not launch the installer: {exc}", "Update", wx.OK | wx.ICON_ERROR, self)
+            return
+        self.Close()
 
     def _show_documentation(self) -> None:
-        """Show documentation."""
-        wx.MessageBox("Documentation will open in your browser.", "Documentation",
-                      wx.OK | wx.ICON_INFORMATION)
+        """Show the in-app Help dialog (F1 / Help > Documentation)."""
+        from radiomaster.ui.help_dialog import HelpDialog
+        dlg = HelpDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
 
     def _next_track(self) -> None:
         """On the Radio tab: move forward in station history. Elsewhere:

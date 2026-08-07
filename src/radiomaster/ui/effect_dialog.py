@@ -16,7 +16,12 @@ class EffectParamsDialog(wx.Dialog):
                  title: str | None = None) -> None:
         self._effect_id = effect_id
         self._param_defs = PARAM_DEFS[effect_id]
-        super().__init__(parent, title=title or f"{EFFECT_LABELS[effect_id]} Parameters", size=(420, 340))
+        # No fixed size: the number of parameters ranges from 2 (Distortion)
+        # to 10 (Equalizer) -- a size picked for the middle of that range
+        # left Equalizer's rows clipped at the bottom (needed 398px tall,
+        # given only 340). SetSizerAndFit() below sizes to actual content
+        # instead.
+        super().__init__(parent, title=title or f"{EFFECT_LABELS[effect_id]} Parameters")
         self._controls: dict[str, wx.Slider] = {}
         self._labels: dict[str, wx.StaticText] = {}
         self._scales: dict[str, float] = {}
@@ -51,7 +56,7 @@ class EffectParamsDialog(wx.Dialog):
         btn_sizer = self.CreateButtonSizer(wx.OK | wx.CANCEL)
         sizer.Add(btn_sizer, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
 
-        self.SetSizer(sizer)
+        self.SetSizerAndFit(sizer)
 
     def _on_param_change(self, event: wx.CommandEvent) -> None:
         slider = event.GetEventObject()

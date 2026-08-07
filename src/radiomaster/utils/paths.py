@@ -27,6 +27,26 @@ def _app_dir() -> str:
     return os.path.join(os.path.dirname(__file__), "..", "..", "..")
 
 
+def get_resource_path(*parts: str) -> str:
+    """Resolve a path under resources/ (icon, themes, default shortcuts...)
+    for both a source run and a PyInstaller bundle.
+
+    Mirrors utils/tools.py's _get_tools_dir(): PyInstaller's COLLECT step
+    puts bundled datas in _internal/ for a onedir build, so _MEIPASS/resources
+    doesn't exist there -- check _internal/resources first, then the bundle
+    root, before falling back to the source tree.
+    """
+    if hasattr(sys, "_MEIPASS"):
+        meipass = sys._MEIPASS
+        internal = os.path.join(meipass, "_internal", "resources", *parts)
+        if os.path.exists(internal):
+            return internal
+        root = os.path.join(meipass, "resources", *parts)
+        if os.path.exists(root):
+            return root
+    return os.path.join(_app_dir(), "resources", *parts)
+
+
 def get_paths() -> dict[str, str]:
     """Get platform-appropriate paths for config, data, and cache.
 

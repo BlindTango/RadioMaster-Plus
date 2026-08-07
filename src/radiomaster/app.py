@@ -34,6 +34,14 @@ class RadioMasterApp(wx.App):
         self.SetAppName(__app_name__)
         self.SetVendorName(__app_name__)
 
+        # OnInit() runs before MainLoop() starts, so nothing is pumping
+        # events yet -- wx.Yield() forces the splash to actually paint
+        # once before the (potentially slow: SQLite station catalog,
+        # service startup) synchronous init below blocks the thread.
+        from radiomaster.ui.splash import show_splash
+        splash = show_splash()
+        wx.Yield()
+
         # Initialize paths
         self._paths = get_paths()
 
@@ -84,6 +92,7 @@ class RadioMasterApp(wx.App):
         )
         self._main_window.Show()
         self.SetTopWindow(self._main_window)
+        splash.Close()
 
         return True
 

@@ -2,7 +2,7 @@
 ; Requires Inno Setup 7
 
 #define MyAppName "RadioMaster+"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "RadioMaster+ Team"
 #define MyAppURL "https://radiomaster.app"
 #define MyAppExeName "RadioMaster+.exe"
@@ -20,6 +20,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
 OutputBaseFilename=RadioMaster+_Setup_v{#MyAppVersion}
+SetupIconFile=..\resources\icon.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

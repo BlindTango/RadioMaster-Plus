@@ -24,6 +24,7 @@ class EqualizerDialog(wx.Dialog):
     def __init__(self, parent: wx.Window) -> None:
         super().__init__(parent, title="Equalizer", size=(500, 400))
         self._band_sliders: dict[str, wx.Slider] = {}
+        self._band_labels: dict[str, wx.StaticText] = {}
         self._current_preset = "Flat"
         self._custom_presets: dict[str, dict[str, int]] = {}
 
@@ -71,12 +72,11 @@ class EqualizerDialog(wx.Dialog):
             slider = wx.Slider(bands_panel, value=0, minValue=-12, maxValue=12,
                                size=(30, 200), style=wx.SL_VERTICAL | wx.SL_INVERSE | wx.SL_AUTOTICKS)
             set_accessible_name(slider, f"EQ {band} Hz")
-            slider.SetTickFreq(3, 1)
+            slider.SetTickFreq(3)
             self._band_sliders[band] = slider
-            band_sizer.Add(slider, 1, wx.ALIGN_CENTER | wx.EXPAND)
+            band_sizer.Add(slider, 1, wx.EXPAND)
 
             # Value label
-            self._band_labels: dict[str, wx.StaticText] = {}
             value_label = wx.StaticText(bands_panel, label="0 dB", style=wx.ALIGN_CENTER)
             self._band_labels[band] = value_label
             band_sizer.Add(value_label, 0, wx.ALIGN_CENTER | wx.TOP, 4)
