@@ -13,16 +13,17 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **All audio/video formats** via FFmpeg (MP3, FLAC, OGG, WAV, AAC, Opus, MP4, MKV, AVI, WebM, MOV, and more)
 - **Streaming protocols**: HTTP/HTTPS (Icecast/SHOUTcast), HLS, DASH, UDP/RTP
 - **Transport controls**: Play, Pause, Stop, Seek, Fast Forward, Rewind, Next/Previous/First/Last Track
-- **Real-time effects**: Equalizer (10-band), Dynamic Range, Reverb/Echo, Pitch/Tempo, Crossfade, Volume Normalization — all dynamic, no restart required
+- **Real-time effects**: Equalizer (10-band), Echo, Reverb, Dynamic Range, Pitch/Tempo, Chorus, Compressor, Distortion, Flanger, Gargle, Crossfade, Volume Normalization — all dynamic, no restart required, each with an On/Off toggle and a built-in/custom preset picker, and all remembered across restarts
 - **Volume, Pan, and Playback speed** (0.5x to 3.0x) — also dynamic, no restart required, for audio content (radio, podcasts, audiobooks, local audio, YouTube audio). Video playback still restarts on these changes, since it goes through a separate video-rendering path.
 - **Video**: Separate resizable frame with fullscreen support
 
 ### Radio
 - **Free Radio Browser** integration (30k+ stations)
 - **Categories**: Alphabetical, Countries, Languages, Genres, Networks
-- **Offline database**: Full station catalog stored in SQLite
+- **Offline database**: Full station catalog stored in SQLite, refreshed automatically on a configurable schedule (off/daily/weekly/monthly/quarterly/6-monthly/yearly)
 - **Custom stations**: Add your own station URLs
 - **Stream metadata**: ICY/SHOUTcast parsing for current song info
+- **Resume last station**: optionally auto-plays whatever was on when you last closed the app
 
 ### Podcasts
 - **RSS feed subscription** management
@@ -89,17 +90,20 @@ Smart timer with countdown, end-of-track, and end-of-playlist options.
 - **Theme editor** with live preview (light, dark, custom)
 - **Keyboard shortcut editor** with conflict detection
 - **Multi-language UI** via gettext/PO files
-- **Settings dialog** with 8 categories
+- **Settings dialog** with 9 categories (General, Playback, Radio, Podcasts, Downloads, Recordings, Network, Accessibility, Advanced)
 - **Portable mode** available via installer
 
 ## Installation
 
 ### From Installer
-Download the latest release from the [Releases page](https://github.com/BlindTango/RadioMaster-Plus/releases) and run the Inno Setup installer. The installer offers:
+Download the latest release from the [Releases page](https://github.com/BlindTango/RadioMaster-Plus/releases) and run the Inno Setup installer. A single "Choose Installation Type" page offers:
 
-1. **Installation Mode**: All users (admin) or current user only
-2. **Installation Type**: Standard (Start Menu, file associations) or Portable (no registry)
-3. **Destination Folder**: Browse to choose install location
+- **Full installation**: Start Menu shortcuts, file associations (.mp3, .flac, .m4b, .pls), uninstaller — installs to Program Files by default, elevating only if needed
+- **Portable**: copy anywhere (e.g. a USB drive) — no shortcuts, no registry changes
+
+The app itself is portable by default regardless of install type — it write-probes its own folder and only falls back to a per-user data directory if that folder isn't writable (e.g. Program Files).
+
+Already running RadioMaster+? The installer detects it and closes it for you before installing.
 
 ### From Source
 
@@ -158,20 +162,17 @@ RadioMaster+/
 ├── pyproject.toml
 ├── requirements.txt
 ├── src/radiomaster/
-│   ├── __main__.py          # Entry point
-│   ├── app.py               # Application class
-│   ├── main_window.py       # Main window
-│   ├── settings_dialog.py   # Settings
-│   ├── shortcut_editor.py   # Keyboard shortcuts
-│   ├── database/            # SQLite layer
-│   ├── engine/              # Playback engine
-│   ├── services/            # Business logic
-│   ├── ui/                  # UI components
-│   ├── utils/               # Utilities
-│   └── i18n/               # Translations
-├── tests/                   # Test suite
-├── resources/               # Icons, themes, shortcuts
-└── packaging/              # PyInstaller spec, Inno Setup script
+│   ├── __main__.py       # Entry point
+│   ├── app.py            # Application class
+│   ├── database/         # SQLite layer
+│   ├── engine/           # Playback engine (rate/pan/effects, live audio)
+│   ├── services/         # Business logic (lyrics, podcasts, downloads, station updates, updater, ...)
+│   ├── ui/               # UI components (main_window, settings_dialog, shortcut_editor, panels, dialogs)
+│   ├── utils/            # Utilities
+│   └── i18n/             # Translations
+├── tests/                # Test suite
+├── resources/            # Icons, themes, shortcuts
+└── packaging/            # PyInstaller spec, Inno Setup script
 ```
 
 ## License
