@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -57,6 +58,26 @@ class UpdateChecker:
                 url, timeout=timeout, proxies=self.proxies,
                 headers={"Accept": "application/vnd.github+json", "User-Agent": _USER_AGENT},
             )
+            if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
+                # GitHub's unauthenticated API allows only 60 requests/hour
+                # per source IP, shared across everyone behind the same
+                # NAT/office network -- easy to exhaust, and the raw
+                # "403 Client Error: rate limit exceeded" requests message
+                # gave the user no idea what happened or what to do about
+                # it. X-RateLimit-Reset is a Unix timestamp for when the
+                # window resets.
+                reset_at = resp.headers.get("X-RateLimit-Reset")
+                if reset_at:
+                    wait_min = max(1, int((int(reset_at) - time.time()) / 60))
+                    raise UpdateCheckError(
+                        f"GitHub's update-check limit has been reached for this network "
+                        f"(shared by everyone behind the same internet connection). "
+                        f"Try again in about {wait_min} minute{'s' if wait_min != 1 else ''}."
+                    )
+                raise UpdateCheckError(
+                    "GitHub's update-check limit has been reached for this network. "
+                    "Try again in a bit -- it resets hourly."
+                )
             resp.raise_for_status()
             data = resp.json()
         except (requests.RequestException, ValueError) as exc:

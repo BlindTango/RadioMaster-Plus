@@ -17,7 +17,7 @@ class TestConfig:
     def test_default_values(self, config: ConfigManager) -> None:
         assert config.get("playback", "default_volume") == 0.8
         assert config.get("general", "language") == "en"
-        assert config.get("radio", "auto_sync_on_startup") is True
+        assert config.get("radio", "station_update_frequency") == "weekly"
 
     def test_set_and_get(self, config: ConfigManager) -> None:
         config.set("playback", "default_volume", value=0.5)

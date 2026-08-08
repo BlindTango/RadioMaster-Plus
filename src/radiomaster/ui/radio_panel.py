@@ -135,6 +135,11 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def refresh_after_station_update(self) -> None:
+        """Called after a scheduled (or manual Refresh Database) station DB
+        update completes, so the tree reflects the newly-synced catalog."""
+        self._apply_sections()
+
     def _apply_sections(self) -> None:
         from radiomaster.utils.config import ConfigManager
         config = ConfigManager.get_instance()

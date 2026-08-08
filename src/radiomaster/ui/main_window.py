@@ -58,6 +58,13 @@ class MainWindow(wx.Frame):
         self._station_api = StationAPI()
         self._station_db = StationDB()
         self._station_updater = StationUpdater(self._station_api, self._station_db)
+        from radiomaster.services.station_update_scheduler import StationUpdateScheduler
+        self._station_update_scheduler = StationUpdateScheduler(
+            self._station_updater, on_result=self._on_station_update_result,
+        )
+        self._station_update_scheduler.start(
+            self._config.get("radio.station_update_frequency", default="weekly")
+        )
 
         # TAB_TRAVERSAL must be part of the constructor's style, not added
         # afterward via SetWindowStyleFlag() -- wx's control-container
@@ -127,7 +134,7 @@ class MainWindow(wx.Frame):
         # startup.
         wx.CallAfter(self._radio_panel.play_last_station_if_enabled)
 
-        if self._config.get("updates.check_on_startup", default=True):
+        if self._config.get("updates.check_on_startup", default=True) and self._update_check_due():
             self._check_updates(silent=True)
 
         self.Centre()
@@ -601,6 +608,7 @@ class MainWindow(wx.Frame):
         ffplay subprocess orphaned and still playing.
         """
         self._engine.stop()
+        self._station_update_scheduler.shutdown()
         self._config.save()
         self._global_hotkey_manager.unregister_all()
         event.Skip()
@@ -730,6 +738,12 @@ class MainWindow(wx.Frame):
         # Re-apply radio browsing preferences (default country, duplicate filtering)
         self._radio_panel._apply_sections()
 
+        # Re-apply the station-list update schedule -- takes effect
+        # immediately rather than only on the next launch.
+        self._station_update_scheduler.set_frequency(
+            self._config.get('radio.station_update_frequency', default='weekly')
+        )
+
         # Refresh UI
         self.Refresh()
 
@@ -762,6 +776,22 @@ class MainWindow(wx.Frame):
         or manual param edit (e.g. the equalizer dialog's band sliders)."""
         self._config.set(f"effects.{effect_id}", value=state)
         self._config.save()
+
+    def _on_station_update_result(self, result) -> None:
+        """Fired by StationUpdateScheduler on its own background thread
+        (both the cron schedule and the Radio tab's Refresh Database
+        button share this scheduler), so UI touches must go through
+        wx.CallAfter."""
+        from radiomaster.utils.wx_safe import call_after_safe
+        if result.ok:
+            call_after_safe(
+                self, self._status_bar.set_status,
+                f"Status: Station list updated ({result.changed} changed, {result.unchanged} unchanged)"
+            )
+            call_after_safe(self, self._radio_panel.refresh_after_station_update)
+        else:
+            call_after_safe(self, self._status_bar.set_status,
+                             f"Status: Station list update failed ({result.error})")
 
     # Volume/rate/pan are saved to config on every change (not just on
     # exit) so a crash or a kill-by-Task-Manager doesn't lose the last
@@ -1144,16 +1174,39 @@ class MainWindow(wx.Frame):
         dlg.ShowModal()
         dlg.Destroy()
 
+    def _update_check_due(self) -> bool:
+        """Whether enough time has passed since the last update check to run
+        another one -- GitHub's unauthenticated API allows only 60
+        requests/hour per source IP (shared across everyone behind the same
+        NAT/office network), which a check on every single launch burns
+        through fast. updates.check_frequency_days already existed as a
+        config setting but nothing ever read it; this is what actually
+        enforces it for the silent startup check. Manual Help > Check for
+        Updates always runs regardless -- that's explicit user intent."""
+        import time
+        days = self._config.get("updates.check_frequency_days", default=7)
+        last_check = self._config.get("updates.last_check_timestamp", default=0)
+        return time.time() - last_check >= days * 86400
+
     def _check_updates(self, silent: bool = False) -> None:
         """Check GitHub for a newer release. silent=True (startup auto-check)
         stays quiet on failure or "no update found" -- only a manual Help >
         Check for Updates reports either of those with a dialog."""
         import threading
+        import time
         from radiomaster.services.update_checker import UpdateChecker, UpdateCheckError
         from radiomaster import __version__
         from radiomaster.utils.wx_safe import call_after_safe
 
         checker = UpdateChecker()
+
+        # Recorded before the network call completes (not just on success)
+        # so a rate-limited or otherwise failed attempt doesn't get retried
+        # on every subsequent launch until check_frequency_days actually
+        # elapses -- that retry-storm is exactly what causes the rate limit
+        # in the first place.
+        self._config.set("updates.last_check_timestamp", value=time.time())
+        self._config.save()
 
         def worker():
             try:

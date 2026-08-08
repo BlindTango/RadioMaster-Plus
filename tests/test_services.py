@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 from radiomaster.services.podcast_manager import PodcastManager
 from radiomaster.services.lyrics_service import LyricsService
 from radiomaster.services.radio_browser import RadioBrowserClient
+from radiomaster.services.update_checker import UpdateChecker, UpdateCheckError
 
 
 class TestPodcastManager:
@@ -60,3 +61,49 @@ class TestRadioBrowser:
         for server in client._base_urls:
             assert server.startswith("https://")
             assert "radio-browser.info" in server
+
+
+class TestUpdateChecker:
+    """GitHub's unauthenticated API rate-limits to 60 req/hour per source
+    IP -- easy to hit, especially behind a shared NAT/office connection.
+    A raw 403 requests exception used to be shown to the user verbatim
+    ("Could not check for updates: 403 Client Error: rate limit exceeded
+    for url: ..."); check() now recognizes that specific case and raises
+    a clear, actionable message instead."""
+
+    def test_rate_limit_with_reset_header(self) -> None:
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "9999999999"}
+        with patch("radiomaster.services.update_checker.requests.get", return_value=resp):
+            checker = UpdateChecker()
+            with pytest.raises(UpdateCheckError) as exc_info:
+                checker.check("1.0.0")
+        message = str(exc_info.value)
+        assert "rate limit exceeded" not in message.lower()
+        assert "limit has been reached" in message.lower()
+
+    def test_rate_limit_without_reset_header(self) -> None:
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.headers = {"X-RateLimit-Remaining": "0"}
+        with patch("radiomaster.services.update_checker.requests.get", return_value=resp):
+            checker = UpdateChecker()
+            with pytest.raises(UpdateCheckError) as exc_info:
+                checker.check("1.0.0")
+        assert "resets hourly" in str(exc_info.value).lower()
+
+    def test_403_without_rate_limit_header_falls_through(self) -> None:
+        # A plain 403 (e.g. a genuinely private/missing repo) isn't a rate
+        # limit -- should fall through to raise_for_status()'s normal error,
+        # not the rate-limit-specific message.
+        import requests as requests_module
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.headers = {}
+        resp.raise_for_status.side_effect = requests_module.HTTPError("403 Forbidden")
+        with patch("radiomaster.services.update_checker.requests.get", return_value=resp):
+            checker = UpdateChecker()
+            with pytest.raises(UpdateCheckError) as exc_info:
+                checker.check("1.0.0")
+        assert "limit has been reached" not in str(exc_info.value).lower()

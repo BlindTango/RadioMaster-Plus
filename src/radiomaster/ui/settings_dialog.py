@@ -223,11 +223,22 @@ class RadioPanel(SettingsPanel):
         self.auto_play_last_chk.SetValue(self.config.get("radio.auto_play_last_station", default=False))
         sizer.Add(self.auto_play_last_chk, 0, wx.ALL, 5)
 
+        from radiomaster.services.station_update_scheduler import FREQUENCIES, FREQUENCY_LABELS
+        sizer.Add(wx.StaticText(self, label="Station list update frequency:"), 0, wx.ALL, 5)
+        self.update_freq_choice = wx.Choice(self, choices=[FREQUENCY_LABELS[f] for f in FREQUENCIES])
+        current_freq = self.config.get("radio.station_update_frequency", default="weekly")
+        self.update_freq_choice.SetSelection(
+            FREQUENCIES.index(current_freq) if current_freq in FREQUENCIES else FREQUENCIES.index("weekly"))
+        set_accessible_name(self.update_freq_choice, "Station list update frequency")
+        sizer.Add(self.update_freq_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
     def onSave(self) -> None:
+        from radiomaster.services.station_update_scheduler import FREQUENCIES
         self.config.set("radio.default_country", value=self.country_combo.GetStringSelection().lower())
         self.config.set("radio.show_duplicates", value=self.show_duplicates_chk.IsChecked())
         self.config.set("radio.auto_reconnect", value=self.auto_reconnect_chk.IsChecked())
         self.config.set("radio.auto_play_last_station", value=self.auto_play_last_chk.IsChecked())
+        self.config.set("radio.station_update_frequency", value=FREQUENCIES[self.update_freq_choice.GetSelection()])
 
 
 class PodcastsPanel(SettingsPanel):

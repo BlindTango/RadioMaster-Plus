@@ -28,8 +28,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pan": 0.0,
     },
     "radio": {
-        "auto_sync_on_startup": True,
-        "sync_interval_hours": 24,
+        # How often the local station catalog is refreshed from Radio
+        # Browser in the background -- see services/station_update_scheduler.py.
+        # One of FREQUENCIES in that module ("off", "daily", "weekly", ...).
+        "station_update_frequency": "weekly",
         "connection_timeout": 10,
         "retry_count": 3,
         "auto_play_last_station": False,
