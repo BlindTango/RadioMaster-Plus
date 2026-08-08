@@ -1441,7 +1441,14 @@ class MainWindow(wx.Frame):
         except OSError as exc:
             wx.MessageBox(f"Could not launch the installer: {exc}", "Update", wx.OK | wx.ICON_ERROR, self)
             return
-        self.Close()
+        # Must actually exit, not just self.Close() -- since v1.1.10, Close()
+        # with "Close to system tray" enabled just hides the window instead
+        # of quitting. If that setting is on, the running app's DLLs/files
+        # stayed locked exactly while the installer just launched tries to
+        # overwrite them -- the likely cause of "failed to load Python DLL"
+        # after an in-app update. request_exit() is the only path that's
+        # guaranteed to actually terminate the process, tray setting or not.
+        self.request_exit()
 
     def _show_documentation(self) -> None:
         """Show the in-app Help dialog (F1 / Help > Documentation)."""

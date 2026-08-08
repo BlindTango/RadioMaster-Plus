@@ -14,7 +14,7 @@
 ; of that page AND a redundant native one stacked in front of it.
 
 #define MyAppName "RadioMaster+"
-#define MyAppVersion "1.1.12"
+#define MyAppVersion "1.1.13"
 #define MyAppPublisher "RadioMaster+ Team"
 #define MyAppURL "https://radiomaster.app"
 #define MyAppExeName "RadioMaster+.exe"
@@ -102,6 +102,25 @@ begin
   Result := InstallModePage.SelectedValueIndex = 1;
 end;
 
+// Whether an existing install of this exact AppId is already on the
+// system (an update/reinstall) rather than a genuinely first-time
+// install. Setup itself already knows this and auto-fills DirEdit with
+// wherever that install actually lives -- CurPageChanged below used to
+// unconditionally stomp on that with a freshly computed Full/Portable
+// default every single time, so an update always "landed" wherever the
+// Full/Portable choice implied instead of the folder the app was already
+// running from. That's how an update could silently end up in a second,
+// different location from the copy that launched it -- the previous
+// install completely unaware it now had a stale sibling.
+function IsUpgrade: Boolean;
+var
+  UninstallKey, Value: string;
+begin
+  UninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B8A3C4D5-E6F7-4890-A1B2-C3D4E5F67890}_is1';
+  Result := RegQueryStringValue(HKCU, UninstallKey, 'UninstallString', Value) or
+            RegQueryStringValue(HKLM, UninstallKey, 'UninstallString', Value);
+end;
+
 procedure InitializeWizard;
 begin
   InstallModePage := CreateInputOptionPage(wpWelcome,
@@ -115,7 +134,11 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
-  if CurPageID = wpSelectDir then
+  // Only impose a computed default directory for a genuinely fresh
+  // install -- an upgrade keeps whichever folder Setup already detected
+  // the existing install in, so "run the installer to update" always
+  // lands in the same place instead of leaving the question open.
+  if (CurPageID = wpSelectDir) and not IsUpgrade then
   begin
     if IsPortableMode then
       WizardForm.DirEdit.Text := ExpandConstant('{sd}\RadioMaster+_Portable')

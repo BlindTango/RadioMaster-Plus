@@ -130,6 +130,16 @@ class UpdateChecker:
                         downloaded += len(chunk)
                         if progress_cb:
                             progress_cb(downloaded, total)
+            # A dropped connection or proxy hiccup mid-stream doesn't always
+            # surface as a requests exception -- iter_content can just end
+            # early. Without this check, a truncated .exe was silently
+            # accepted as "downloaded" and handed straight to the installer,
+            # which is exactly the kind of corruption that produces
+            # confusing "failed to load Python DLL" errors after updating.
+            if total and downloaded != total:
+                raise UpdateCheckError(
+                    f"Download incomplete ({downloaded} of {total} bytes) -- try again."
+                )
             os.replace(tmp_path, dest_path)
         except OSError as exc:
             raise UpdateCheckError(f"Could not save the downloaded update: {exc}") from exc
