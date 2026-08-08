@@ -19,6 +19,17 @@ from radiomaster import __app_name__, __version__
 class RadioMasterApp(wx.App):
     """Main application class for RadioMaster+."""
 
+    # Must match packaging/radiomaster.iss's AppMutex exactly -- that's
+    # what lets the installer reliably detect "is RadioMaster+ currently
+    # running" *before* it starts overwriting files, instead of only
+    # reacting after hitting a locked file mid-copy. Without this, the
+    # in-app updater's launch-installer-then-close-self sequence raced
+    # against the installer overwriting _internal/*.dll while the old
+    # process was still shutting down, occasionally leaving a corrupted
+    # DLL behind ("Failed to load Python DLL... LoadLibrary: the
+    # specified module could not be found" on the very next launch).
+    INSTANCE_MUTEX_NAME = "RadioMasterPlusSingleInstance"
+
     def __init__(self) -> None:
         self._config: ConfigManager | None = None
         self._paths: dict[str, str] = {}
@@ -27,12 +38,25 @@ class RadioMasterApp(wx.App):
         self._main_window: MainWindow | None = None
         self._download_manager: DownloadManager | None = None
         self._scheduler_service: SchedulerService | None = None
+        self._instance_mutex = None
         super().__init__()
 
     def OnInit(self) -> bool:
         """Initialize the application."""
         self.SetAppName(__app_name__)
         self.SetVendorName(__app_name__)
+
+        # Held for the process's entire lifetime (released/closed in
+        # OnExit) -- its mere existence is the signal AppMutex checks for,
+        # not anything the value is used for.
+        try:
+            import ctypes
+            self._instance_mutex = ctypes.windll.kernel32.CreateMutexW(
+                None, False, self.INSTANCE_MUTEX_NAME
+            )
+        except Exception:
+            self.logger = logging.getLogger(__app_name__)
+            self.logger.warning("Could not create single-instance mutex", exc_info=True)
 
         # OnInit() runs before MainLoop() starts, so nothing is pumping
         # events yet -- wx.Yield() forces the splash to actually paint
@@ -116,6 +140,17 @@ class RadioMasterApp(wx.App):
             self._scheduler_service.stop()
         if self._db:
             self._db.close()
+        if self._instance_mutex:
+            # Releases the AppMutex signal an installer update checks for
+            # -- without this the OS wouldn't reclaim it until process
+            # exit anyway, but that's exactly the ambiguous window (frame
+            # closed, cleanup still running) an installer launched by the
+            # in-app updater could race against.
+            try:
+                import ctypes
+                ctypes.windll.kernel32.CloseHandle(self._instance_mutex)
+            except Exception:
+                pass
         return 0
 
     @property

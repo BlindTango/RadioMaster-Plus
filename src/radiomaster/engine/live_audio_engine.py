@@ -392,26 +392,43 @@ class LiveAudioEngine:
     def set_replaygain_db(self, db: float) -> None:
         self._replaygain_db = db
 
+    # Chunks of already-decoded, old-setting PCM left in the queue after a
+    # rate/effects change instead of draining it to empty -- see
+    # _drain_queue_for_immediate_effect for why full draining caused
+    # exactly the "glitchy"/"chorus sounds terrible" symptom it was
+    # reported as. ~170ms at 1024 samples/48kHz: long enough that the
+    # output is never left with nothing real to play, short enough that
+    # the change still feels close to instant.
+    DRAIN_KEEP_CHUNKS = 8
+
     def _drain_queue_for_immediate_effect(self) -> None:
-        """Discard already-decoded, not-yet-played PCM so a rate/effects
-        change is audible on the *next* output callback instead of after
-        however much is already queued finishes playing first.
+        """Trim (not empty) the queue so a rate/effects change is audible
+        soon, without ever forcing the output completely dry.
 
         Volume/Pan are applied at the output callback itself (right as
         queued audio is consumed), so they're unaffected by queue depth
         and always feel instant. Rate and the filter-graph effects are
         baked into the audio *when it's decoded*, well before it reaches
         the queue -- so a change here only affects frames decoded from
-        this point on. With QUEUE_MAXSIZE holding ~4s of buffered audio
-        (needed so network jitter doesn't starve the output), the old
-        setting kept playing out of the queue for up to ~4s after the
-        slider moved, which read as "the control doesn't work" (it did;
-        it just hadn't caught up to what's audible yet).
+        this point on. This used to drain the queue to fully empty, which
+        for a real-time network stream (radio) forced the decode thread
+        to refill the whole ~4s queue from scratch at whatever the
+        network could sustain -- on a connection only marginally faster
+        than the stream's own bitrate, that refill could take several
+        seconds, with the queue trickling in a few chunks at a time and
+        the output underrunning between each one: audible as a burst of
+        glitches every time *any* effect was turned on, not just the one
+        moment of the change itself, and worse yet on a modulating effect
+        like chorus, where the choppy audio and the effect's own
+        modulation compounded into "sounds terrible" rather than a single
+        click. Leaving a small cushion means the output always has real
+        (if briefly old-setting) audio to play while the decode thread
+        catches back up, so it never needs to fabricate silence at all.
         """
         with self._callback_lock:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
             self._leftover_was_padded = False
-        while True:
+        while self._pcm_queue.qsize() > self.DRAIN_KEEP_CHUNKS:
             try:
                 self._pcm_queue.get_nowait()
             except queue.Empty:

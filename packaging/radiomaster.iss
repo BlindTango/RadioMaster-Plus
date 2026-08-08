@@ -14,7 +14,7 @@
 ; of that page AND a redundant native one stacked in front of it.
 
 #define MyAppName "RadioMaster+"
-#define MyAppVersion "1.1.5"
+#define MyAppVersion "1.1.6"
 #define MyAppPublisher "RadioMaster+ Team"
 #define MyAppURL "https://radiomaster.app"
 #define MyAppExeName "RadioMaster+.exe"
@@ -41,6 +41,16 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
+; Must match RadioMasterApp.INSTANCE_MUTEX_NAME in app.py exactly -- lets
+; Setup detect a running RadioMaster+ *before* it starts overwriting
+; files (and offer to close it) instead of only reacting after hitting a
+; locked file mid-copy. Without this, the in-app updater's launch-
+; installer-then-close-self sequence could race the installer overwriting
+; _internal\*.dll against the old process still shutting down, leaving a
+; corrupted DLL behind ("Failed to load Python DLL... LoadLibrary: the
+; specified module could not be found" on the very next launch).
+AppMutex=RadioMasterPlusSingleInstance
+CloseApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
