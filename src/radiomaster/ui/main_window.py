@@ -42,6 +42,11 @@ class MainWindow(wx.Frame):
         self._paths = paths
         self._scheduler_service = scheduler_service
         self._engine = PlaybackEngine()
+        # Restore saved effect enabled/preset/params state before anything
+        # that reads it (the Effects menu, built below, queries the engine
+        # directly for its initial checkmarks) -- otherwise every effect
+        # would silently reset to "off" on every launch.
+        self._engine.restore_effects_state(self._config.get("effects", default={}))
         self._is_muted = False
         self._pre_mute_volume = 0.8
         # Playback-related settings (output device, normalization,
@@ -253,6 +258,7 @@ class MainWindow(wx.Frame):
             is_enabled=lambda eid: self._engine._effects.get(eid, {}).get("enabled", False),
             on_toggle=self._on_effect_toggle,
             on_preset=self._on_effect_preset,
+            get_preset=lambda eid: self._engine.get_effect_preset(eid),
         )
 
         # Tools menu
@@ -464,6 +470,7 @@ class MainWindow(wx.Frame):
         self._engine.on_position_update(lambda pos, dur: wx.CallAfter(self._on_engine_position, pos, dur))
         self._engine.on_error(lambda message: wx.CallAfter(self._on_engine_error, message))
         self._engine.on_track_finished(lambda: wx.CallAfter(self._media_panel.try_auto_advance))
+        self._engine.on_effects_changed(self._on_effects_state_changed)
 
         self._now_playing.on_play(lambda: self._on_transport_play_pause())
         self._now_playing.on_stop(lambda: self._radio_panel._on_stop() if self._listbook.GetSelection() == 0 else self._engine.stop())
@@ -748,6 +755,13 @@ class MainWindow(wx.Frame):
         Preset Manager. EffectsMenu syncs its own On/Off checkmark right
         after calling this, since applying a preset auto-enables."""
         self._engine.apply_preset(effect_id, preset_name, params)
+
+    def _on_effects_state_changed(self, effect_id: str, state: dict) -> None:
+        """Persist an effect's enabled/preset/params so it survives a
+        restart -- fired by PlaybackEngine on every toggle, preset pick,
+        or manual param edit (e.g. the equalizer dialog's band sliders)."""
+        self._config.set(f"effects.{effect_id}", value=state)
+        self._config.save()
 
     # Volume/rate/pan are saved to config on every change (not just on
     # exit) so a crash or a kill-by-Task-Manager doesn't lose the last

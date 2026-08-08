@@ -95,6 +95,7 @@ class PlaybackEngine:
         self._on_buffering: Callable[[int], None] | None = None
         self._on_error: Callable[[str], None] | None = None
         self._on_track_finished: Callable[[], None] | None = None
+        self._on_effects_changed: Callable[[str, dict[str, Any]], None] | None = None
 
         # --- Audio (LiveAudioEngine) backend ---
         self._live = LiveAudioEngine()
@@ -404,6 +405,7 @@ class PlaybackEngine:
             self._live.toggle_effect(effect_id, enabled)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                 self._schedule_restart()
+            self._notify_effects_changed(effect_id)
 
     def apply_preset(self, effect_id: str, preset_name: str, params: dict[str, Any]) -> None:
         """Apply a named preset (built-in or user-created -- the caller
@@ -416,10 +418,15 @@ class PlaybackEngine:
             self._live.apply_preset(effect_id, preset_name, params)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                 self._schedule_restart()
+            self._notify_effects_changed(effect_id)
 
     def get_effect_params(self, effect_id: str) -> dict[str, Any]:
         """Get current parameters for an effect."""
         return self._effects.get(effect_id, {}).get("params", {})
+
+    def get_effect_preset(self, effect_id: str) -> str:
+        """Get the name of the currently-selected preset for an effect."""
+        return self._effects.get(effect_id, {}).get("preset", "")
 
     def apply_effect_params(self, effect_id: str, params: dict[str, Any]) -> None:
         """Apply raw effect parameters directly (e.g. from equalizer dialog)."""
@@ -427,6 +434,24 @@ class PlaybackEngine:
             self._effects[effect_id]["params"] = params
             self._effects[effect_id]["enabled"] = True
             self._live.apply_effect_params(effect_id, params)
+            self._notify_effects_changed(effect_id)
+
+    def restore_effects_state(self, saved: dict[str, dict[str, Any]]) -> None:
+        """Restore enabled/preset/params for each effect from config at
+        startup -- called before any playback starts and before the
+        Effects menu is built, so both the filter graph (next play()) and
+        the menu's initial checkmarks reflect last session's state.
+
+        Deliberately not just an in-place dict update: apply_preset()/
+        toggle_effect() also push the state into the LiveAudioEngine
+        mirror (self._live._effects), which is what actually builds the
+        ffmpeg filter chain.
+        """
+        for effect_id, state in saved.items():
+            if effect_id not in self._effects:
+                continue
+            self.apply_preset(effect_id, state.get("preset", ""), dict(state.get("params", {})))
+            self.toggle_effect(effect_id, state.get("enabled", False))
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                 self._schedule_restart()
 
@@ -629,6 +654,21 @@ class PlaybackEngine:
         (not a user Stop, not a crossfade takeover) -- audio-only, since
         video's ffplay backend has no equivalent natural-end signal."""
         self._on_track_finished = cb
+
+    def on_effects_changed(self, cb: Callable[[str, dict[str, Any]], None]) -> None:
+        """Fired whenever an effect's enabled/preset/params state changes
+        (toggle, preset selection, or manual param edit e.g. the equalizer
+        dialog), so callers can persist it across restarts."""
+        self._on_effects_changed = cb
+
+    def _notify_effects_changed(self, effect_id: str) -> None:
+        if self._on_effects_changed:
+            state = self._effects.get(effect_id, {})
+            self._on_effects_changed(effect_id, {
+                "enabled": state.get("enabled", False),
+                "preset": state.get("preset", ""),
+                "params": dict(state.get("params", {})),
+            })
 
     @property
     def position(self) -> float:

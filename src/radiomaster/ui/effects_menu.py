@@ -23,13 +23,20 @@ class EffectsMenu:
     def __init__(self, parent: wx.MenuBar, get_params: Callable[[str], dict[str, Any]],
                  is_enabled: Callable[[str], bool],
                  on_toggle: Callable[[str, bool], None],
-                 on_preset: Callable[[str, str, dict[str, Any]], None]) -> None:
+                 on_preset: Callable[[str, str, dict[str, Any]], None],
+                 get_preset: Callable[[str], str] = lambda eid: "") -> None:
         self._parent = parent
         self._get_params = get_params
         self._is_enabled = is_enabled
         self._on_toggle = on_toggle
         self._on_preset = on_preset
+        self._get_preset = get_preset
         self._toggle_items: dict[str, wx.MenuItem] = {}
+        # Preset radio items per effect, keyed by preset name -- lets a
+        # preset applied programmatically (e.g. via the Preset Manager,
+        # which doesn't go through the radio item's own click handling)
+        # still get its checkmark synced via set_preset() below.
+        self._preset_items: dict[str, dict[str, wx.MenuItem]] = {}
         self._menu = wx.Menu()
         self._build_menu()
         parent.Append(self._menu, "&Effects")
@@ -56,14 +63,25 @@ class EffectsMenu:
 
         submenu.AppendSeparator()
 
+        # Radio items (not plain Append) so exactly one preset shows as
+        # selected -- AppendRadioItem groups consecutive radio items
+        # automatically when the user clicks one, but applying a preset
+        # from the Preset Manager dialog bypasses that click handling, so
+        # set_preset() below re-syncs the group manually in that case.
+        preset_items: dict[str, wx.MenuItem] = {}
         for preset_name, params in BUILTIN_PRESETS.get(effect_id, {}).items():
             preset_id = wx.NewIdRef()
-            submenu.Append(preset_id, preset_name)
+            item = submenu.AppendRadioItem(preset_id, preset_name)
+            preset_items[preset_name] = item
             submenu.Bind(
                 wx.EVT_MENU,
                 lambda e, eid=effect_id, name=preset_name, p=params: self._apply_preset(eid, name, p),
                 preset_id,
             )
+        self._preset_items[effect_id] = preset_items
+        current_preset = self._get_preset(effect_id)
+        if current_preset in preset_items:
+            self.set_preset(effect_id, current_preset)
 
         submenu.AppendSeparator()
 
@@ -76,6 +94,7 @@ class EffectsMenu:
     def _apply_preset(self, effect_id: str, name: str, params: dict[str, Any]) -> None:
         self._on_preset(effect_id, name, params)
         self.set_enabled(effect_id, True)
+        self.set_preset(effect_id, name)
 
     def _open_manager(self, effect_id: str) -> None:
         from radiomaster.ui.preset_manager_dialog import PresetManagerDialog
@@ -92,3 +111,12 @@ class EffectsMenu:
         item = self._toggle_items.get(effect_id)
         if item:
             item.Check(enabled)
+
+    def set_preset(self, effect_id: str, preset_name: str) -> None:
+        """Sync the selected-preset radio mark (e.g. after the Preset
+        Manager dialog applies a preset without clicking the menu item
+        itself). wx doesn't auto-uncheck radio siblings when Check() is
+        called programmatically -- only on an actual user click -- so
+        every item in the group has to be set explicitly here."""
+        for name, item in self._preset_items.get(effect_id, {}).items():
+            item.Check(name == preset_name)

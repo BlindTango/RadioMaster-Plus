@@ -73,6 +73,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "logging": {
         "level": "info",
     },
+    # Per-effect {enabled, preset, params}, keyed by effect id (echo,
+    # equalizer, chorus, ...) -- see PlaybackEngine._effects for the
+    # matching in-memory shape. Only effects the user has actually
+    # touched get an entry here; everything else uses PlaybackEngine's
+    # own built-in defaults.
+    "effects": {},
 }
 
 
