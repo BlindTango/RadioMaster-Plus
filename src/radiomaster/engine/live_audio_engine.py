@@ -328,7 +328,20 @@ class LiveAudioEngine:
                 self._on_position_update(self._position, self._duration)
             time.sleep(0.5)
 
-    def stop(self) -> None:
+    def stop(self, wait: bool = True) -> None:
+        """*wait=False* (app shutdown only -- see MainWindow._on_close)
+        skips the decode thread join below entirely. It's a daemon
+        thread, so it dies with the process regardless; the join only
+        matters for a genuine Stop click during continued app use (so a
+        following play() doesn't race the old thread). Blocking here
+        during window close made EVT_CLOSE handling take up to 3s (longer
+        if the decode thread was stuck in a network read with its own
+        longer timeout) -- long enough that Inno Setup's own "close
+        running applications before installing" wait gave up, leaving
+        the old process still holding the exe/DLL files locked exactly
+        when the installer tried to overwrite them ("DeleteFile failed;
+        Access is denied").
+        """
         if self._state == self.STATE_STOPPED and self._decode_thread is None:
             return
         self._stop_flag.set()
@@ -356,7 +369,8 @@ class LiveAudioEngine:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
             self._leftover_was_padded = False
         if self._decode_thread is not None:
-            self._decode_thread.join(timeout=3)
+            if wait:
+                self._decode_thread.join(timeout=3)
             self._decode_thread = None
         self._state = self.STATE_STOPPED
         self._position = 0.0

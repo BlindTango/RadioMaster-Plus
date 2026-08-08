@@ -233,11 +233,16 @@ class PlaybackEngine:
         from radiomaster.utils.replaygain import read_replaygain_db
         return read_replaygain_db(url, self._replaygain_mode)
 
-    def stop(self) -> None:
+    def stop(self, wait: bool = True) -> None:
         """Stop playback. Stops whichever backend might be active -- each
-        call is a safe no-op on the backend that wasn't in use."""
+        call is a safe no-op on the backend that wasn't in use.
+
+        *wait=False* (app shutdown only) skips blocking waits on both
+        backends -- see LiveAudioEngine.stop()'s docstring for why a slow
+        EVT_CLOSE handler mattered enough to break the installer's
+        close-running-app detection."""
         self._crossfade_generation += 1  # let any in-flight ramp exit early
-        self._live.stop()
+        self._live.stop(wait=wait)
 
         self._monitor_running = False
         with self._restart_lock:
@@ -262,7 +267,8 @@ class PlaybackEngine:
         if self._process:
             try:
                 self._process.terminate()
-                self._process.wait(timeout=3)
+                if wait:
+                    self._process.wait(timeout=3)
             except Exception:
                 if self._process:
                     self._process.kill()

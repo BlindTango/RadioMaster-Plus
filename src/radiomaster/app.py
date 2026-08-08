@@ -127,7 +127,10 @@ class RadioMasterApp(wx.App):
             # Backstop for MainWindow._on_close (EVT_CLOSE), which is what
             # normally stops playback before the frame is destroyed. Cheap
             # to call again here in case exit happened some other way.
-            self._main_window.engine.stop()
+            # wait=False for the same reason _on_close uses it -- OnExit()
+            # blocking here delays process exit exactly when an installer
+            # (see AppMutex) may be waiting on it to actually be gone.
+            self._main_window.engine.stop(wait=False)
         if self._config:
             # Same backstop reasoning as engine.stop() above: MainWindow's
             # _on_close (EVT_CLOSE) is what normally persists

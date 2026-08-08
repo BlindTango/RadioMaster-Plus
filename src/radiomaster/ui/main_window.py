@@ -630,8 +630,19 @@ class MainWindow(wx.Frame):
         updates that hit already-deleted controls (RuntimeError) during
         shutdown -- a crash that made cleanup unreliable and left the
         ffplay subprocess orphaned and still playing.
+
+        wait=False: the process is exiting anyway (daemon threads die
+        with it regardless), so there's no need to block this handler on
+        engine.stop()'s internal joins/waits -- stop_flag is still set
+        and the output stream still aborted immediately either way, just
+        without the up-to-3s wait for full thread teardown. That wait
+        used to make EVT_CLOSE handling slow enough that Inno Setup's
+        "close running applications" check (see AppMutex in
+        radiomaster.iss) gave up before the process actually exited,
+        leaving files locked exactly when the installer tried to
+        overwrite them mid-update ("DeleteFile failed; Access is denied").
         """
-        self._engine.stop()
+        self._engine.stop(wait=False)
         self._station_update_scheduler.shutdown()
         self._config.save()
         self._global_hotkey_manager.unregister_all()
