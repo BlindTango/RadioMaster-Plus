@@ -102,3 +102,36 @@ def get_paths() -> dict[str, str]:
         "recordings": os.path.join(os.path.expanduser("~"), "Music", app_name, "Recordings"),
         "logs": os.path.join(user_data_dir(app_name, app_name), "logs"),
     }
+
+
+def get_recordings_dir() -> str:
+    """Settings > Recordings > Recording Location, self-healing against a
+    stale saved value.
+
+    That setting is only ever written once, when Settings is saved -- if
+    it happened to be saved while running non-portable (e.g. installed to
+    Program Files, or before being moved to a portable location), the
+    Music-folder path it captured then keeps being used forever after,
+    even once the app is genuinely running portable and get_paths() would
+    otherwise resolve inside the app's own folder as documented ("The app
+    itself is portable by default regardless of install type"). Comparing
+    the saved value against *both* modes' auto-computed defaults (not just
+    the current one) tells an actual deliberate custom folder (respected
+    always) apart from a stale snapshot of whichever default happened to
+    be live the one time Settings was opened.
+    """
+    from radiomaster.utils.config import ConfigManager
+    config = ConfigManager.get_instance()
+    saved = config.get("recordings", "recording_path", default="").strip()
+    current_default = str(get_paths()["recordings"])
+    if not saved:
+        return current_default
+
+    app_name = __app_name__.replace("+", "Plus")
+    music_default = os.path.join(os.path.expanduser("~"), "Music", app_name, "Recordings")
+    stale_defaults = {os.path.normcase(os.path.normpath(current_default)),
+                       os.path.normcase(os.path.normpath(music_default))}
+    if os.path.normcase(os.path.normpath(saved)) in stale_defaults \
+            and os.path.normpath(saved) != os.path.normpath(current_default):
+        return current_default
+    return saved

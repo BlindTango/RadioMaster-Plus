@@ -213,8 +213,19 @@ class PodcastPanel(wx.Panel):
         seq = self._search_seq
 
         def worker():
-            from radiomaster.services.podcast_directory import search_all
-            results = search_all(query)
+            from radiomaster.services.podcast_directory import PodcastAPIError, search_all
+            try:
+                results = search_all(query)
+            except PodcastAPIError as exc:
+                if seq != self._search_seq:
+                    return
+                # Previously any failure (network down, bad proxy, DNS,
+                # SSL, a firewall blocking itunes.apple.com) was swallowed
+                # and just showed "0 results" -- indistinguishable from a
+                # real search that genuinely found nothing, and impossible
+                # to diagnose. Show the actual reason instead.
+                wx.CallAfter(self._set_status, f"Status: Podcast search failed -- {exc}")
+                return
             if seq != self._search_seq:
                 return  # a newer search superseded this one; discard stale results
             wx.CallAfter(self._apply_search_results, results, query)

@@ -99,7 +99,8 @@ class RadioMasterApp(wx.App):
         self._download_manager = DownloadManager(max_concurrent)
         self._download_manager.start()
 
-        rec_dir = self._config.get("recordings", "recording_path", default="") or self._paths["recordings"]
+        from radiomaster.utils.paths import get_recordings_dir
+        rec_dir = get_recordings_dir()
         self._scheduler_service = SchedulerService(rec_dir)
         from radiomaster.database.repository import ScheduleRepository
         self._scheduler_service.load_schedules(ScheduleRepository(self._db).get_all())

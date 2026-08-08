@@ -17,6 +17,13 @@ from typing import Any
 logger = logging.getLogger("radiomaster")
 
 
+class PodcastAPIError(RuntimeError):
+    """A directory search actually failed (network, timeout, bad response)
+    -- distinct from a request that succeeded and simply found nothing, so
+    the UI can tell a real failure apart from "no results" instead of both
+    silently looking like an empty list."""
+
+
 class PodcastDirectory:
     """Browse and search podcast directories (iTunes/Apple Podcasts API)."""
 
@@ -39,7 +46,11 @@ class PodcastDirectory:
 
     @staticmethod
     def search(term: str, limit: int = 25, country: str = "US") -> list[dict[str, Any]]:
-        """Search for podcasts on iTunes/Apple Podcasts."""
+        """Search for podcasts on iTunes/Apple Podcasts. Raises
+        PodcastAPIError on a genuine failure (network/timeout/bad
+        response) -- previously this swallowed every exception and just
+        returned [], making a real failure (blocked network, bad proxy,
+        DNS, SSL) indistinguishable from "no podcasts matched"."""
         try:
             resp = requests.get(
                 PodcastDirectory.ITUNES_SEARCH_URL,
@@ -52,29 +63,34 @@ class PodcastDirectory:
                 },
                 **PodcastDirectory._request_kwargs(),
             )
-            if resp.status_code == 200:
-                results = []
-                for item in resp.json().get("results", []):
-                    feed_url = item.get("feedUrl", "")
-                    if not feed_url:
-                        continue
-                    results.append({
-                        "id": item.get("collectionId", 0),
-                        "title": item.get("collectionName", ""),
-                        "author": item.get("artistName", ""),
-                        "artwork_url": item.get("artworkUrl600", ""),
-                        "feed_url": feed_url,
-                        "description": item.get("description", ""),
-                        "episode_count": item.get("trackCount", 0),
-                        "genre": item.get("primaryGenreName", ""),
-                        "country": item.get("country", ""),
-                        "release_date": item.get("releaseDate", ""),
-                        "directory": "iTunes / Apple Podcasts",
-                    })
-                return results
-        except Exception as e:
-            logger.error(f"Podcast search failed: {e}")
-        return []
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as exc:
+            logger.error(f"Podcast search failed: {exc}")
+            raise PodcastAPIError(f"Could not reach iTunes/Apple Podcasts: {exc}") from exc
+        except ValueError as exc:
+            logger.error(f"Podcast search returned invalid JSON: {exc}")
+            raise PodcastAPIError(f"iTunes/Apple Podcasts returned an unexpected response: {exc}") from exc
+
+        results = []
+        for item in data.get("results", []):
+            feed_url = item.get("feedUrl", "")
+            if not feed_url:
+                continue
+            results.append({
+                "id": item.get("collectionId", 0),
+                "title": item.get("collectionName", ""),
+                "author": item.get("artistName", ""),
+                "artwork_url": item.get("artworkUrl600", ""),
+                "feed_url": feed_url,
+                "description": item.get("description", ""),
+                "episode_count": item.get("trackCount", 0),
+                "genre": item.get("primaryGenreName", ""),
+                "country": item.get("country", ""),
+                "release_date": item.get("releaseDate", ""),
+                "directory": "iTunes / Apple Podcasts",
+            })
+        return results
 
     @staticmethod
     def lookup(podcast_id: int) -> dict[str, Any] | None:
@@ -178,38 +194,51 @@ class PodcastIndexDirectory:
                 headers=headers, timeout=get_timeout(default=10),
                 proxies=get_proxies() or None,
             )
-            if resp.status_code == 200:
-                results = []
-                for item in resp.json().get("feeds", []):
-                    feed_url = item.get("url", "")
-                    if not feed_url:
-                        continue
-                    categories = item.get("categories")
-                    genre = ", ".join(categories.values()) if isinstance(categories, dict) else ""
-                    results.append({
-                        "id": 0,
-                        "title": item.get("title", ""),
-                        "author": item.get("author", ""),
-                        "artwork_url": item.get("image") or item.get("artwork", ""),
-                        "feed_url": feed_url,
-                        "description": item.get("description", ""),
-                        "episode_count": item.get("episodeCount", 0),
-                        "genre": genre,
-                        "country": "",
-                        "release_date": "",
-                        "directory": "Podcast Index",
-                    })
-                return results
-        except Exception as e:
-            logger.error(f"Podcast Index search failed: {e}")
-        return []
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as exc:
+            logger.error(f"Podcast Index search failed: {exc}")
+            raise PodcastAPIError(f"Could not reach Podcast Index: {exc}") from exc
+        except ValueError as exc:
+            logger.error(f"Podcast Index search returned invalid JSON: {exc}")
+            raise PodcastAPIError(f"Podcast Index returned an unexpected response: {exc}") from exc
+
+        results = []
+        for item in data.get("feeds", []):
+            feed_url = item.get("url", "")
+            if not feed_url:
+                continue
+            categories = item.get("categories")
+            genre = ", ".join(categories.values()) if isinstance(categories, dict) else ""
+            results.append({
+                "id": 0,
+                "title": item.get("title", ""),
+                "author": item.get("author", ""),
+                "artwork_url": item.get("image") or item.get("artwork", ""),
+                "feed_url": feed_url,
+                "description": item.get("description", ""),
+                "episode_count": item.get("episodeCount", 0),
+                "genre": genre,
+                "country": "",
+                "release_date": "",
+                "directory": "Podcast Index",
+            })
+        return results
 
 
 def search_all(term: str, limit: int = 25) -> list[dict[str, Any]]:
     """Fans a search out to every available directory (iTunes always;
-    Podcast Index once configured) and merges the results. Each directory
-    already swallows its own network/parse errors and returns [] rather
-    than raising, so a failure in one never blocks the other."""
-    results = list(PodcastDirectory.search(term, limit=limit))
-    results.extend(PodcastIndexDirectory.search(term, limit=limit))
+    Podcast Index once configured) and merges the results. A directory
+    that fails doesn't sink the whole search -- only raises PodcastAPIError
+    if EVERY directory failed and none returned anything, so a real
+    failure is still visible instead of looking identical to "no results"."""
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for search_fn in (PodcastDirectory.search, PodcastIndexDirectory.search):
+        try:
+            results.extend(search_fn(term, limit=limit))
+        except PodcastAPIError as exc:
+            errors.append(str(exc))
+    if errors and not results:
+        raise PodcastAPIError("; ".join(errors))
     return results

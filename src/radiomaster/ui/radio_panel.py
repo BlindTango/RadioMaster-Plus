@@ -399,11 +399,17 @@ class RadioPanel(scrolled.ScrolledPanel):
         "wav": (".wav", "pcm_s16le"),
     }
 
-    def _recording_ffmpeg_args(self, station: Station, output_path: str) -> list[str]:
-        """Build the ffmpeg command for a manual recording, honoring
-        Settings > Recordings (format/quality/metadata) instead of always
-        stream-copying to a hardcoded .mp3 regardless of what's selected
-        there."""
+    # How often an active recording polls ICY metadata to detect a track
+    # change -- same cadence as NOW_PLAYING_POLL_SECONDS, for the same
+    # bandwidth-vs-responsiveness reasoning.
+    RECORDING_POLL_SECONDS = 8
+
+    def _recording_ffmpeg_args(self, station: Station, output_path: str,
+                                song: Optional[str] = None) -> list[str]:
+        """Build the ffmpeg command for one recording segment, honoring
+        Settings > Recordings (format/quality/metadata). *song* is the
+        ICY "Artist - Title" string for the track this segment actually
+        contains, when known -- tagged instead of just the station name."""
         from radiomaster.utils.config import ConfigManager
         config = ConfigManager.get_instance()
         rec_format = config.get("recordings.recording_format", default="mp3")
@@ -414,10 +420,129 @@ class RadioPanel(scrolled.ScrolledPanel):
         if rec_format in ("mp3", "aac", "ogg"):
             cmd += ["-b:a", "320k" if quality.lower() == "best" else quality]
         if config.get("recordings.add_metadata", default=True):
-            cmd += ["-metadata", f"title={station.name}",
-                    "-metadata", f"artist={station.name}"]
+            artist, title = _parse_icy_song(song) if song else ("", "")
+            cmd += ["-metadata", f"title={title or station.name}",
+                    "-metadata", f"artist={artist or station.name}"]
         cmd.append(output_path)
         return cmd
+
+    def _start_ffmpeg_segment(self, station: Station, output_path: str,
+                               song: Optional[str]) -> subprocess.Popen:
+        """Starts one recording segment. stdin is a pipe (not DEVNULL) so
+        it can be told to quit gracefully -- see _stop_ffmpeg_gracefully;
+        a hard TerminateProcess() (what a plain .terminate() on Windows
+        actually does) can leave the container's header/index unwritten,
+        producing a file that won't seek or, for some formats, won't play
+        back at all. This runs once per track when splitting is on, so an
+        unfinalized file is no longer a rare "recording got interrupted"
+        edge case -- it would be nearly every segment."""
+        cmd = self._recording_ffmpeg_args(station, output_path, song=song)
+        return subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+
+    @staticmethod
+    def _stop_ffmpeg_gracefully(process: subprocess.Popen, timeout: float = 5.0) -> None:
+        """ffmpeg's documented graceful-quit is 'q' on stdin -- it then
+        finalizes and closes the output file itself instead of being cut
+        off mid-write. Falls back to a hard kill only if that doesn't
+        work (process already gone, pipe broken, or it hangs)."""
+        try:
+            if process.stdin:
+                process.stdin.write(b"q")
+                process.stdin.flush()
+                process.stdin.close()
+            process.wait(timeout=timeout)
+        except Exception:
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+            except Exception:
+                process.kill()
+
+    @staticmethod
+    def _unique_path(path: str) -> str:
+        """Appends " (2)", " (3)", ... if *path* already exists -- the
+        same song can legitimately play twice in one recording session."""
+        if not os.path.exists(path):
+            return path
+        base, ext = os.path.splitext(path)
+        n = 2
+        while os.path.exists(f"{base} ({n}){ext}"):
+            n += 1
+        return f"{base} ({n}){ext}"
+
+    def _finalize_segment_path(self, station_dir: str, ext: str,
+                                song: Optional[str], station_name: str) -> str:
+        """The just-finished segment's real filename: "Artist - Title" from
+        ICY metadata when known, falling back to a timestamp (matching the
+        pre-splitting naming) when the station never sent usable metadata
+        for that segment at all."""
+        if song:
+            artist, title = _parse_icy_song(song)
+            base_name = f"{artist} - {title}" if artist and title else (title or station_name)
+        else:
+            base_name = f"{station_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        safe = re.sub(r'[<>:"/\\|?*]', "_", base_name).strip() or "track"
+        return self._unique_path(os.path.join(station_dir, f"{safe}{ext}"))
+
+    def _finalize_current_segment(self, entry: dict[str, Any]) -> None:
+        """Stops entry's current ffmpeg process and renames the temp file
+        it was writing to its real "Artist - Title" (or timestamp) name.
+        Caller holds entry['lock']."""
+        self._stop_ffmpeg_gracefully(entry["process"])
+        temp_path = entry["temp_path"]
+        if os.path.exists(temp_path):
+            final_path = self._finalize_segment_path(
+                entry["station_dir"], entry["ext"], entry.get("last_song"), entry["station_name"],
+            )
+            try:
+                os.replace(temp_path, final_path)
+            except OSError as e:
+                log.error(f"Could not finalize recording segment {temp_path}: {e}")
+
+    def _split_recording_segment(self, key_id: int, entry: dict[str, Any]) -> None:
+        """A track change was detected mid-recording: finalize the segment
+        that just ended under its own name and start the next one."""
+        with entry["lock"]:
+            if self._recordings.get(key_id) is not entry:
+                return  # stopped between the watcher noticing and acquiring the lock
+            self._finalize_current_segment(entry)
+            if self._recordings.get(key_id) is not entry:
+                return  # stopped while finalizing
+            try:
+                entry["process"] = self._start_ffmpeg_segment(
+                    entry["station"], entry["temp_path"], entry.get("last_song")
+                )
+            except Exception as e:
+                log.error(f"Could not start next recording segment: {e}")
+
+    def _record_track_watcher(self, key_id: int) -> None:
+        """Polls ICY metadata for an active recording and splits into a
+        new file each time the station announces a different song --
+        independent of playback/Now Playing polling, since the station
+        being recorded doesn't have to be the one currently playing."""
+        from radiomaster.engine.stream_reader import StreamReader
+        while True:
+            entry = self._recordings.get(key_id)
+            if entry is None:
+                return
+            metadata = StreamReader.get_icy_metadata(entry["station"].url, timeout=8)
+            entry = self._recordings.get(key_id)  # may have stopped during the fetch
+            if entry is None:
+                return
+            song = metadata.get("current_song", "")
+            if song and song != entry.get("last_song"):
+                if entry.get("last_song") is not None:
+                    # A real change -- the segment recorded so far belongs
+                    # to the *previous* song, not this new one.
+                    self._split_recording_segment(key_id, entry)
+                entry["last_song"] = song
+            time.sleep(self.RECORDING_POLL_SECONDS)
 
     def _on_record(self) -> None:
         """Toggle recording of the selected station's stream to a file.
@@ -430,6 +555,11 @@ class RadioPanel(scrolled.ScrolledPanel):
         Scheduler's existing "multiple simultaneous recordings" promise
         in the README, which the old single-recording-at-a-time
         implementation didn't honor for manual recordings).
+
+        When Settings > Recordings > "Split recordings into tracks" is on,
+        each track becomes its own file (named "Artist - Title" from ICY
+        metadata) inside a per-station subfolder, instead of one
+        continuous file for the whole session.
         """
         station = self._selected_station or self.tree.get_selected_station()
         if not station:
@@ -446,25 +576,24 @@ class RadioPanel(scrolled.ScrolledPanel):
             return
 
         from radiomaster.utils.config import ConfigManager
+        from radiomaster.utils.paths import get_recordings_dir
         config = ConfigManager.get_instance()
-        recordings_dir = config.get("recordings.recording_path", default="") or get_paths()["recordings"]
+        recordings_dir = get_recordings_dir()
         rec_format = config.get("recordings.recording_format", default="mp3")
         ext, _ = self._RECORDING_CODECS.get(rec_format, (".mp3", "libmp3lame"))
+        split_tracks = config.get("recordings.split_tracks", default=False)
 
-        safe_name = re.sub(r'[<>:"/\\|?*]', "_", station.name).strip() or "station"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        os.makedirs(recordings_dir, exist_ok=True)
-        output_path = os.path.join(recordings_dir, f"{safe_name}_{timestamp}{ext}")
+        safe_station_name = re.sub(r'[<>:"/\\|?*]', "_", station.name).strip() or "station"
+        station_dir = os.path.join(recordings_dir, safe_station_name)
+        os.makedirs(station_dir, exist_ok=True)
+        # Recorded to a fixed temp name and renamed once its real name is
+        # known (on the next track change, or on Stop) -- there's only
+        # ever one temp file per station since a station can't have two
+        # recordings running at once (the existing_id check above).
+        temp_path = os.path.join(station_dir, f".recording_in_progress{ext}")
 
-        cmd = self._recording_ffmpeg_args(station, output_path)
         try:
-            process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
+            process = self._start_ffmpeg_segment(station, temp_path, song=None)
         except Exception as e:
             log.error(f"Failed to start recording: {e}")
             wx.MessageBox(f"Could not start recording: {e}", "Recording Error",
@@ -491,19 +620,21 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         self._recordings[key_id] = {
             "process": process, "station_name": station.name, "station_key": key,
-            "output_path": output_path,
+            "station": station, "station_dir": station_dir, "ext": ext,
+            "temp_path": temp_path, "last_song": None, "lock": threading.Lock(),
         }
         self.set_status(f"Status: Recording {station.name}")
         if self.on_recording_changed:
             self.on_recording_changed(self.is_station_recording(self._selected_station))
 
+        if split_tracks:
+            threading.Thread(target=self._record_track_watcher, args=(key_id,), daemon=True).start()
+
     def _stop_recording(self, key_id: int) -> None:
         entry = self._recordings.pop(key_id, None)
         if entry is None:
             return
-        process = entry["process"]
         station_name = entry["station_name"]
-        output_path = entry.get("output_path")
         if self._db:
             from radiomaster.database.repository import DownloadRepository
             DownloadRepository(self._db).update_progress(key_id, 100, status="completed")
@@ -511,26 +642,13 @@ class RadioPanel(scrolled.ScrolledPanel):
             self.on_recording_changed(self.is_station_recording(self._selected_station))
 
         def worker():
-            try:
-                process.terminate()
-                process.wait(timeout=5)
-            except Exception:
-                process.kill()
-
-            # "Split recordings into tracks" -- post-process the just-
-            # finished file with the same silence-detection splitter the
-            # Track Splitter dialog uses, rather than trying to split a
-            # live ffmpeg stream mid-recording.
-            from radiomaster.utils.config import ConfigManager
-            config = ConfigManager.get_instance()
-            if output_path and config.get("recordings.split_tracks", default=False) \
-                    and os.path.exists(output_path):
-                try:
-                    from radiomaster.services.track_splitter import TrackSplitter
-                    base = os.path.splitext(output_path)[0]
-                    TrackSplitter.split_by_silence(output_path, base + "_tracks")
-                except Exception as e:
-                    log.error(f"Track splitting failed for {output_path}: {e}")
+            # Still need the lock even though entry is already popped: a
+            # split triggered by the watcher thread right before Stop was
+            # pressed could be mid-flight (old process being finalized,
+            # new one about to start) -- without serializing on the same
+            # lock, this could grab entry["process"] mid-swap.
+            with entry["lock"]:
+                self._finalize_current_segment(entry)
 
         threading.Thread(target=worker, daemon=True).start()
         self.set_status(f"Status: Stopped recording {station_name}")
