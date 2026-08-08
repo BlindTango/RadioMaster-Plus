@@ -707,7 +707,11 @@ class MainWindow(wx.Frame):
     def _show_settings(self) -> None:
         """Show the settings dialog."""
         from radiomaster.ui.settings_dialog import SettingsDialog
-        dlg = SettingsDialog(self, self._config)
+        dlg = SettingsDialog(
+            self, self._config,
+            station_updater=self._station_updater,
+            on_station_update=self._radio_panel.refresh_after_station_update,
+        )
         if dlg.ShowModal() == wx.ID_OK:
             # Settings saved, apply changes
             self._apply_settings_changes()
@@ -812,10 +816,12 @@ class MainWindow(wx.Frame):
         self._config.save()
 
     def _on_station_update_result(self, result) -> None:
-        """Fired by StationUpdateScheduler on its own background thread
-        (both the cron schedule and the Radio tab's Refresh Database
-        button share this scheduler), so UI touches must go through
-        wx.CallAfter."""
+        """Fired by StationUpdateScheduler's cron-driven background
+        updates (see radio.station_update_frequency in Settings > Radio)
+        on its own thread, so UI touches must go through wx.CallAfter.
+        The Settings > Radio "Update Now" button is a separate,
+        self-contained one-off update -- see settings_dialog.RadioPanel
+        -- and doesn't go through this scheduler/callback at all."""
         from radiomaster.utils.wx_safe import call_after_safe
         if result.ok:
             call_after_safe(

@@ -95,7 +95,6 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         # Action buttons
         self.add_custom_btn = wx.Button(self, label="&Add Custom Station")
-        self.refresh_btn = wx.Button(self, label="&Refresh Database")
 
         search_row = wx.BoxSizer(wx.HORIZONTAL)
         search_row.Add(search_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
@@ -104,7 +103,6 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         action_row = wx.BoxSizer(wx.HORIZONTAL)
         action_row.Add(self.add_custom_btn, 0, wx.RIGHT, 6)
-        action_row.Add(self.refresh_btn, 0)
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(search_row, 0, wx.EXPAND | wx.ALL, 6)
@@ -118,7 +116,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.search_btn.Bind(wx.EVT_BUTTON, self._on_search)
         self.search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
         self.add_custom_btn.Bind(wx.EVT_BUTTON, self._on_add_custom)
-        self.refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
         self.tree.on_station_activated = self._on_station_activated
         self.tree.on_selection_changed = self._on_tree_sel_changed
 
@@ -157,8 +154,9 @@ class RadioPanel(scrolled.ScrolledPanel):
         threading.Thread(target=worker, daemon=True).start()
 
     def refresh_after_station_update(self) -> None:
-        """Called after a scheduled (or manual Refresh Database) station DB
-        update completes, so the tree reflects the newly-synced catalog."""
+        """Called after a scheduled (or manual "Update Now" in Settings >
+        Radio) station DB update completes, so the tree reflects the
+        newly-synced catalog."""
         self._apply_sections()
 
     def _apply_sections(self) -> None:
@@ -420,35 +418,6 @@ class RadioPanel(scrolled.ScrolledPanel):
                     wx.MessageBox(f"Custom station '{name}' added.", "Success", wx.OK | wx.ICON_INFORMATION)
                 name_dlg.Destroy()
         dlg.Destroy()
-
-    def _on_refresh(self, event: wx.CommandEvent) -> None:
-        """Manually refresh the station database."""
-        self.refresh_btn.Disable()
-        self.refresh_btn.SetLabel("Downloading...")
-        self.set_status("Status: Updating station database...")
-
-        def progress_cb(bytes_read: int, total) -> None:
-            if total:
-                percent = min(100, int(bytes_read * 100 / total))
-                text = f"Status: Updating station database... {percent}%"
-            else:
-                text = f"Status: Updating station database... ({bytes_read // 1024} KB)"
-            wx.CallAfter(self.set_status, text)
-
-        def worker():
-            result = self.station_updater.update_now(progress_cb=progress_cb)
-            if result.ok:
-                wx.CallAfter(self._apply_sections)
-                wx.CallAfter(wx.MessageBox,
-                    f"Updated {result.changed} stations ({result.unchanged} unchanged).",
-                    "Refresh Complete", wx.OK | wx.ICON_INFORMATION)
-            else:
-                wx.CallAfter(wx.MessageBox, f"Update failed: {result.error}",
-                             "Refresh Error", wx.OK | wx.ICON_ERROR)
-            wx.CallAfter(self.refresh_btn.Enable)
-            wx.CallAfter(self.refresh_btn.SetLabel, "&Refresh Database")
-
-        threading.Thread(target=worker, daemon=True).start()
 
     def _display_custom_stations(self) -> None:
         """Display custom stations in the list."""

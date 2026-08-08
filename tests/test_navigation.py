@@ -71,7 +71,10 @@ class TestTabOrder:
         # the page (an under-broad one did this).
         seen_classes = []
         focus = listbook_entry
-        for _ in range(10):
+        # 9, not 10 -- one fewer stop since the Radio tab's "Refresh
+        # Database" button was removed (its equivalent now lives as
+        # "Update Now" in Settings > Radio instead).
+        for _ in range(9):
             focus = _nav(win, True)
             seen_classes.append(type(focus).__name__)
         assert "_VirtualStationList" in seen_classes, (

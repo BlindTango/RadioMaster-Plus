@@ -201,6 +201,13 @@ class PlaybackPanel(SettingsPanel):
 class RadioPanel(SettingsPanel):
     title = "Radio"
 
+    # Set by SettingsDialog after construction (not through __init__, so
+    # every other category panel's constructor call stays unchanged) --
+    # the actual StationUpdater and a callback to refresh the Radio tab's
+    # tree once a manual update completes.
+    station_updater = None
+    on_station_update: Any = None
+
     def makeSettings(self, sizer: wx.BoxSizer) -> None:
         sizer.Add(wx.StaticText(self, label="Default Country:"), 0, wx.ALL, 5)
         self.country_combo = wx.ComboBox(self, choices=[
@@ -231,6 +238,43 @@ class RadioPanel(SettingsPanel):
             FREQUENCIES.index(current_freq) if current_freq in FREQUENCIES else FREQUENCIES.index("weekly"))
         set_accessible_name(self.update_freq_choice, "Station list update frequency")
         sizer.Add(self.update_freq_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        self.update_now_btn = wx.Button(self, label="Update &Now")
+        set_accessible_name(self.update_now_btn, "Update station list now")
+        self.update_now_btn.Bind(wx.EVT_BUTTON, self._on_update_now)
+        sizer.Add(self.update_now_btn, 0, wx.ALL, 5)
+
+        self.update_now_status = wx.StaticText(self, label="")
+        sizer.Add(self.update_now_status, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+    def _on_update_now(self, event: wx.CommandEvent) -> None:
+        if not self.station_updater:
+            return
+        from radiomaster.utils.wx_safe import call_after_safe
+        self.update_now_btn.Disable()
+        self.update_now_status.SetLabel("Updating station list...")
+
+        def progress_cb(bytes_read: int, total) -> None:
+            if total:
+                percent = min(100, int(bytes_read * 100 / total))
+                text = f"Updating station list... {percent}%"
+            else:
+                text = f"Updating station list... ({bytes_read // 1024} KB)"
+            call_after_safe(self, self.update_now_status.SetLabel, text)
+
+        def worker():
+            result = self.station_updater.update_now(progress_cb=progress_cb)
+            if result.ok:
+                call_after_safe(self, self.update_now_status.SetLabel,
+                                 f"Updated {result.changed} stations ({result.unchanged} unchanged).")
+                if self.on_station_update:
+                    call_after_safe(self, self.on_station_update)
+            else:
+                call_after_safe(self, self.update_now_status.SetLabel, f"Update failed: {result.error}")
+            call_after_safe(self, self.update_now_btn.Enable)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
 
     def onSave(self) -> None:
         from radiomaster.services.station_update_scheduler import FREQUENCIES
@@ -540,8 +584,14 @@ class SettingsDialog(wx.Dialog):
         AdvancedPanel,
     ]
 
-    def __init__(self, parent: wx.Window, config: Config) -> None:
+    def __init__(self, parent: wx.Window, config: Config,
+                 station_updater: Any = None, on_station_update: Any = None) -> None:
         self.config = config
+        # Only RadioPanel uses these (its "Update Now" button) -- passed
+        # in here rather than through every panel class's __init__ so the
+        # other 8 categories' constructors stay untouched; see _get_panel.
+        self.station_updater = station_updater
+        self.on_station_update = on_station_update
         self._panel_map: dict[int, SettingsPanel] = {}
         self._current_panel: SettingsPanel | None = None
 
@@ -606,6 +656,9 @@ class SettingsDialog(wx.Dialog):
         if index not in self._panel_map:
             cls = self.category_classes[index]
             panel = cls(self._container, self.config)
+            if isinstance(panel, RadioPanel):
+                panel.station_updater = self.station_updater
+                panel.on_station_update = self.on_station_update
             panel.Hide()
             self._container_sizer.Add(panel, 1, wx.EXPAND | wx.ALL, 4)
             self._panel_map[index] = panel
