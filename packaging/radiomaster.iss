@@ -1,8 +1,20 @@
 ; RadioMaster+ Inno Setup Installer Script
 ; Requires Inno Setup 7
+;
+; The app itself is portable by default (paths.py write-probes its own
+; folder and only falls back to per-user AppData/Music when that folder
+; isn't writable), so "portable" here just means: skip Start Menu/Desktop
+; shortcuts and file associations, and suggest a relocatable folder instead
+; of Program Files.
+;
+; PrivilegesRequired=lowest avoids Inno's own native "install for all
+; users/me only" chooser dialog -- with PrivilegesRequiredOverridesAllowed
+; still set, admin users get the elevate-if-needed behavior, but everyone
+; sees only the single custom "Choose Installation Type" page below instead
+; of that page AND a redundant native one stacked in front of it.
 
 #define MyAppName "RadioMaster+"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.1"
 #define MyAppPublisher "RadioMaster+ Team"
 #define MyAppURL "https://radiomaster.app"
 #define MyAppExeName "RadioMaster+.exe"
@@ -24,27 +36,14 @@ SetupIconFile=..\resources\icon.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesAssociations=yes
+UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-
-[CustomMessages]
-; Screen titles and descriptions
-InstallModeTitle=Installation Mode
-InstallModeDescription=Choose who should have access to {#MyAppName}
-InstallTypeTitle=Installation Type
-InstallTypeDescription=Choose how {#MyAppName} should be installed
-
-[Types]
-Name: "full"; Description: "Full installation"
-Name: "portable"; Description: "Portable mode (no registry changes)"
-
-[Components]
-Name: "main"; Description: "Main application"; Types: full portable; Flags: fixed
-Name: "assoc"; Description: "Register file associations"; Types: full; Flags: disablenouninstallwarning
 
 [Files]
 ; Main application
@@ -58,111 +57,67 @@ Source: "..\resources\themes\*"; DestDir: "{app}\resources\themes"; Flags: ignor
 Source: "..\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Components: main
-Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"; Components: main
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; Components: main
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Check: not IsPortableMode
+Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"; Check: not IsPortableMode
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; Check: not IsPortableMode
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Components: main
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Check: not IsPortableMode
 
 [Registry]
 ; File associations (only for full install)
-Root: "HKA"; Subkey: "Software\Classes\.mp3\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.mp3"; ValueData: ""; Flags: uninsdeletevalue; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.mp3"; ValueType: string; ValueName: ""; ValueData: "MP3 Audio"; Flags: uninsdeletekey; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.mp3\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.mp3\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\.flac\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.flac"; ValueData: ""; Flags: uninsdeletevalue; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.flac\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.flac\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\.m4b\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.m4b"; ValueData: ""; Flags: uninsdeletevalue; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.m4b\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.m4b\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\.pls\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.pls"; ValueData: ""; Flags: uninsdeletevalue; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.pls\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Components: assoc
-Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.pls\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Components: assoc
+Root: "HKA"; Subkey: "Software\Classes\.mp3\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.mp3"; ValueData: ""; Flags: uninsdeletevalue; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.mp3"; ValueType: string; ValueName: ""; ValueData: "MP3 Audio"; Flags: uninsdeletekey; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.mp3\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.mp3\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\.flac\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.flac"; ValueData: ""; Flags: uninsdeletevalue; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.flac\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.flac\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\.m4b\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.m4b"; ValueData: ""; Flags: uninsdeletevalue; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.m4b\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.m4b\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\.pls\OpenWithProgids"; ValueType: string; ValueName: "RadioMaster+.pls"; ValueData: ""; Flags: uninsdeletevalue; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.pls\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Check: not IsPortableMode
+Root: "HKA"; Subkey: "Software\Classes\RadioMaster+.pls\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Check: not IsPortableMode
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
-[UninstallRun]
-; Portable mode cleanup
-Filename: "{app}\uninsportable.exe"; Flags: runhidden; Check: IsPortableMode
-
 [Code]
 var
   InstallModePage: TInputOptionWizardPage;
-  InstallTypePage: TInputOptionWizardPage;
-  IsPortable: Boolean;
 
 function IsPortableMode: Boolean;
 begin
-  Result := IsPortable;
+  Result := InstallModePage.SelectedValueIndex = 1;
 end;
 
 procedure InitializeWizard;
 begin
-  { Screen 1: Installation Mode (Per User / All Users) }
-  InstallModePage := CreateInputOptionPage(
-    wpWelcome,
-    CustomMessage('InstallModeTitle'),
-    CustomMessage('InstallModeDescription'),
-    'Select who should have access to RadioMaster+:',
-    True, False
-  );
-  InstallModePage.Add('Install for &all users (recommended)');
-  InstallModePage.Add('Install for &current user only');
+  InstallModePage := CreateInputOptionPage(wpWelcome,
+    'Choose Installation Type', 'How would you like to set up ' + '{#MyAppName}' + '?',
+    'Select an option, then click Next.',
+    True, False);
+  InstallModePage.Add('Full installation (Start Menu shortcuts, file associations, uninstaller)');
+  InstallModePage.Add('Portable (copy to any folder you choose, e.g. a USB drive - no shortcuts)');
   InstallModePage.SelectedValueIndex := 0;
-
-  { Screen 2: Installation Type (Installed / Portable) }
-  InstallTypePage := CreateInputOptionPage(
-    InstallModePage.ID,
-    CustomMessage('InstallTypeTitle'),
-    CustomMessage('InstallTypeDescription'),
-    'Select how RadioMaster+ should be installed:',
-    True, False
-  );
-  InstallTypePage.Add('&Standard installation (Start Menu, file associations, uninstaller)');
-  InstallTypePage.Add('&Portable mode (no registry changes, no Start Menu)');
-  InstallTypePage.SelectedValueIndex := 0;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
   if CurPageID = wpSelectDir then
   begin
-    { Screen 3: Adjust default directory based on choices }
-    IsPortable := (InstallTypePage.SelectedValueIndex = 1);
-    if IsPortable then
-    begin
-      WizardForm.DirEdit.Text := ExpandConstant('{sd}\RadioMaster+_Portable');
-    end
-    else if InstallModePage.SelectedValueIndex = 1 then
-    begin
-      WizardForm.DirEdit.Text := ExpandConstant('{localappdata}\RadioMaster+');
-    end
+    if IsPortableMode then
+      WizardForm.DirEdit.Text := ExpandConstant('{sd}\RadioMaster+_Portable')
     else
-    begin
-      WizardForm.DirEdit.Text := ExpandConstant('{autopf}\RadioMaster+');
-    end;
+      WizardForm.DirEdit.Text := ExpandConstant('{autopf}\{#MyAppName}');
   end;
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  // Portable mode's whole point is "everything stays inside the install
-  // folder, nothing touches the registry or the user profile" -- that
-  // requires the app itself to know it's portable at runtime.
-  // get_paths() (utils/paths.py) checks for a "portable.txt" marker file
-  // next to the exe, but nothing was ever creating one, so a portable
-  // install silently used the normal per-user AppData/Music folders anyway.
-  if (CurStep = ssPostInstall) and IsPortable then
-    SaveStringToFile(ExpandConstant('{app}\portable.txt'), '', False);
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   { Skip Start Menu page for portable mode }
-  if (PageID = wpSelectProgramGroup) and IsPortable then
+  if (PageID = wpSelectProgramGroup) and IsPortableMode then
     Result := True
   else
     Result := False;
@@ -173,24 +128,19 @@ var
   S: String;
 begin
   S := '';
-  S := S + 'Installation mode: ';
-  if InstallModePage.SelectedValueIndex = 0 then
-    S := S + 'All users' + NewLine
-  else
-    S := S + 'Current user only' + NewLine;
-
   S := S + 'Installation type: ';
-  if IsPortable then
+  if IsPortableMode then
     S := S + 'Portable' + NewLine
   else
-    S := S + 'Standard' + NewLine;
+    S := S + 'Full installation' + NewLine;
 
   S := S + MemoDirInfo + NewLine;
-  S := S + MemoTypeInfo + NewLine;
-  S := S + MemoComponentsInfo + NewLine;
 
-  if not IsPortable then
+  if not IsPortableMode then
+  begin
     S := S + MemoGroupInfo + NewLine;
+    S := S + MemoComponentsInfo + NewLine;
+  end;
 
   S := S + MemoTasksInfo;
   Result := S;

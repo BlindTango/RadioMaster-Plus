@@ -42,6 +42,8 @@ class MainWindow(wx.Frame):
         self._paths = paths
         self._scheduler_service = scheduler_service
         self._engine = PlaybackEngine()
+        self._is_muted = False
+        self._pre_mute_volume = 0.8
         # Playback-related settings (output device, normalization,
         # ReplayGain, auto-reconnect, radio browsing prefs, accessibility)
         # are all applied together at the end of __init__ via
@@ -459,7 +461,7 @@ class MainWindow(wx.Frame):
         self._now_playing.on_play(lambda: self._on_transport_play_pause())
         self._now_playing.on_stop(lambda: self._radio_panel._on_stop() if self._listbook.GetSelection() == 0 else self._engine.stop())
         self._now_playing.on_record(lambda: self._radio_panel._on_record() if self._listbook.GetSelection() == 0 else None)
-        self._now_playing.on_mute(lambda: self._radio_panel._on_mute() if self._listbook.GetSelection() == 0 else None)
+        self._now_playing.on_mute(lambda: self._on_mute_toggle())
         self._now_playing.on_next(lambda: self._next_track())
         self._now_playing.on_prev(lambda: self._prev_track())
         self._now_playing.on_first(lambda: self._first_track())
@@ -758,6 +760,27 @@ class MainWindow(wx.Frame):
         self._engine.set_pan(pan)
         self._config.set("playback.pan", value=pan)
 
+    def _on_mute_toggle(self) -> None:
+        """Toggle mute, remembering the exact volume to restore -- this
+        used to hard-code the unmute level to 0.8 regardless of what the
+        volume slider was actually set to (e.g. muting at 30% and
+        unmuting jumped to 80%, far louder than before), and never
+        updated the slider position or the button's "Mute On"/"Mute Off"
+        label at all (set_muted() existed but nothing ever called it)."""
+        if self._is_muted:
+            self._is_muted = False
+            self._on_volume_change(self._pre_mute_volume)
+            self._now_playing.set_volume(self._pre_mute_volume)
+            self._now_playing.set_muted(False)
+            self._status_bar.set_status("Unmuted")
+        else:
+            self._is_muted = True
+            self._pre_mute_volume = self._engine._volume
+            self._engine.set_volume(0.0)
+            self._now_playing.set_volume(0.0)
+            self._now_playing.set_muted(True)
+            self._status_bar.set_status("Muted")
+
     def _on_engine_state(self, state: str) -> None:
         """Handle playback engine state changes."""
         self._status_bar.set_status(_(state.capitalize()))
@@ -916,7 +939,7 @@ class MainWindow(wx.Frame):
             "prev_track": lambda: self._prev_track(),
             "volume_up": lambda: self._on_volume_change(min(1.0, self._engine._volume + 0.05)),
             "volume_down": lambda: self._on_volume_change(max(0.0, self._engine._volume - 0.05)),
-            "mute": lambda: self._radio_panel._on_mute(),
+            "mute": lambda: self._on_mute_toggle(),
             "record": lambda: self._radio_panel._on_record(),
             "open_settings": lambda: self._show_settings(),
             "open_scheduler": lambda: self._switch_tab(6),

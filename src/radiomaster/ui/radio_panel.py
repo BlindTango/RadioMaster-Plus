@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
+import subprocess
 import threading
 import time
+from datetime import datetime
 from typing import Callable, Optional
 
 import wx
@@ -16,6 +20,8 @@ from radiomaster.services.station_updater import StationUpdater
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.ui.widgets.station_tree import StationTree
 from radiomaster.ui.widgets.now_playing import NowPlayingPanel
+from radiomaster.utils.paths import get_paths
+from radiomaster.utils.tools import get_ffmpeg
 
 log = logging.getLogger("radiomaster")
 
@@ -35,6 +41,12 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._selected_station: Optional[Station] = None
         self._search_seq = 0
         self._now_playing_generation = 0
+
+        # Manual (Record button / hotkey) recording -- separate from the
+        # timed SchedulerService recordings, this just ffmpeg-copies
+        # whatever's currently selected to a file until toggled off again.
+        self._record_process: Optional[subprocess.Popen] = None
+        self._record_station_name: Optional[str] = None
 
         # Station play history (browser-style back/forward, not a queue):
         # picking a fresh station truncates anything ahead of the current
@@ -282,18 +294,61 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.now_playing.set_now_playing("")
 
     def _on_record(self) -> None:
-        """Toggle recording for the selected station."""
+        """Toggle recording of the selected station's stream to a file.
+
+        Previously this only updated the status text and never actually
+        started ffmpeg -- pressing Record did nothing and no file was ever
+        written.
+        """
+        if self._record_process is not None:
+            self._stop_recording()
+            return
+
         station = self._selected_station or self.tree.get_selected_station()
         if not station:
             wx.MessageBox("Select a station first.", "No Station Selected",
                           wx.OK | wx.ICON_INFORMATION)
             return
-        self.set_status(f"Status: Record toggled for {station.name}")
 
-    def _on_mute(self) -> None:
-        """Toggle mute."""
-        self.engine.set_volume(0.0 if self.engine._volume > 0 else 0.8)
-        self.set_status("Status: Muted" if self.engine._volume == 0 else "Status: Unmuted")
+        safe_name = re.sub(r'[<>:"/\\|?*]', "_", station.name).strip() or "station"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        recordings_dir = get_paths()["recordings"]
+        os.makedirs(recordings_dir, exist_ok=True)
+        output_path = os.path.join(recordings_dir, f"{safe_name}_{timestamp}.mp3")
+
+        cmd = [get_ffmpeg(), "-y", "-i", station.url, "-c", "copy", output_path]
+        try:
+            self._record_process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except Exception as e:
+            log.error(f"Failed to start recording: {e}")
+            wx.MessageBox(f"Could not start recording: {e}", "Recording Error",
+                          wx.OK | wx.ICON_ERROR)
+            return
+
+        self._record_station_name = station.name
+        self.set_status(f"Status: Recording {station.name}")
+
+    def _stop_recording(self) -> None:
+        process = self._record_process
+        self._record_process = None
+        station_name = self._record_station_name
+        self._record_station_name = None
+
+        def worker():
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except Exception:
+                process.kill()
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.set_status(f"Status: Stopped recording {station_name}")
 
     def _on_add_custom(self, event: wx.CommandEvent) -> None:
         dlg = wx.TextEntryDialog(self, "Enter station URL:", "Add Custom Station")

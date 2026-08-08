@@ -47,18 +47,41 @@ def get_resource_path(*parts: str) -> str:
     return os.path.join(_app_dir(), "resources", *parts)
 
 
+def _is_writable(path: str) -> bool:
+    """Whether we can actually write into ``path`` (creating it if needed).
+
+    Used instead of a ``portable.txt`` marker file to decide whether this is
+    a portable install: a marker file requires the installer and the app to
+    agree on a convention (and silently does nothing if the installer forgets
+    to write it, or if the folder is copied by hand without it). A real
+    write-probe is self-sufficient -- if the app's own folder is writable
+    (a portable copy on a USB drive, or "install for current user only" into
+    a user-owned folder), it stays portable automatically; if it isn't
+    (a standard Program Files install), it falls back to the per-user
+    platformdirs paths on its own, with no installer coordination required.
+    """
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".write_test")
+        with open(probe, "w") as f:
+            f.write("x")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
 def get_paths() -> dict[str, str]:
     """Get platform-appropriate paths for config, data, and cache.
 
-    If the ``--portable`` flag was passed on the command line, or if a
-    ``portable.txt`` file exists next to the application, paths are
-    resolved relative to the application directory instead of using
-    platformdirs.
+    Portable mode is detected by actually probing whether the application's
+    own directory is writable -- see ``_is_writable()`` -- rather than by a
+    marker file or command-line flag.
     """
     app_name = __app_name__.replace("+", "Plus")
 
     app_dir = _app_dir()
-    portable = "--portable" in sys.argv or os.path.exists(os.path.join(app_dir, "portable.txt"))
+    portable = "--portable" in sys.argv or _is_writable(app_dir)
 
     if portable:
         base = os.path.join(app_dir, "data")
