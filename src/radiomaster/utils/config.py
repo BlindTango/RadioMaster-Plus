@@ -32,6 +32,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sync_interval_hours": 24,
         "connection_timeout": 10,
         "retry_count": 3,
+        "auto_play_last_station": False,
+        # Set whenever a station starts playing (see RadioPanel._play_station);
+        # empty until then.
+        "last_station": {},
     },
     "downloads": {
         "download_folder": "",

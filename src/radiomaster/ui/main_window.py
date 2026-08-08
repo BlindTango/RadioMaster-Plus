@@ -115,6 +115,13 @@ class MainWindow(wx.Frame):
 
         self._register_global_hotkeys()
 
+        # Deferred via CallAfter so it runs after the window is fully
+        # constructed and shown, the same reason engine.play() itself is
+        # always dispatched off the calling thread -- connecting to a
+        # stream can stall for a couple of seconds and must not block
+        # startup.
+        wx.CallAfter(self._radio_panel.play_last_station_if_enabled)
+
         if self._config.get("updates.check_on_startup", default=True):
             self._check_updates(silent=True)
 

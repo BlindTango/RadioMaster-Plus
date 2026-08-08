@@ -219,10 +219,15 @@ class RadioPanel(SettingsPanel):
         self.auto_reconnect_chk.SetValue(self.config.get("radio.auto_reconnect", default=True))
         sizer.Add(self.auto_reconnect_chk, 0, wx.ALL, 5)
 
+        self.auto_play_last_chk = wx.CheckBox(self, label="Automatically play the last station on launch")
+        self.auto_play_last_chk.SetValue(self.config.get("radio.auto_play_last_station", default=False))
+        sizer.Add(self.auto_play_last_chk, 0, wx.ALL, 5)
+
     def onSave(self) -> None:
         self.config.set("radio.default_country", value=self.country_combo.GetStringSelection().lower())
         self.config.set("radio.show_duplicates", value=self.show_duplicates_chk.IsChecked())
         self.config.set("radio.auto_reconnect", value=self.auto_reconnect_chk.IsChecked())
+        self.config.set("radio.auto_play_last_station", value=self.auto_play_last_chk.IsChecked())
 
 
 class PodcastsPanel(SettingsPanel):

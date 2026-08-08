@@ -180,6 +180,20 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._selected_station = station
         self._play_station(station)
 
+    def play_last_station_if_enabled(self) -> None:
+        """Auto-play whatever station was playing at the end of the last
+        session, if the user opted in via Settings > Radio."""
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        if not config.get("radio.auto_play_last_station", default=False):
+            return
+        last = config.get("radio.last_station", default={})
+        if not last or not last.get("url"):
+            return
+        station = Station.from_dict(last)
+        self._selected_station = station
+        self._play_station(station)
+
     def _play_station(self, station: Station, add_to_history: bool = True) -> None:
         if add_to_history:
             self._push_history(station)
@@ -191,7 +205,10 @@ class RadioPanel(scrolled.ScrolledPanel):
         # seconds (e.g. on first-run AV scanning of the exe), which would
         # freeze the UI if run on this event-handler thread.
         from radiomaster.utils.config import ConfigManager
-        fade_seconds = ConfigManager.get_instance().get("playback.crossfade_duration", default=0)
+        config = ConfigManager.get_instance()
+        config.set("radio.last_station", value=station.to_dict())
+        config.save()
+        fade_seconds = config.get("playback.crossfade_duration", default=0)
         if fade_seconds:
             threading.Thread(target=self.engine.crossfade_to, args=(station.url,),
                               kwargs={"title": station.name, "fade_seconds": fade_seconds},
