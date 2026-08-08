@@ -171,31 +171,42 @@ class SchedulerService:
             active_ranges.append((start, end, title))
 
     def _check_auto_downloads(self) -> None:
-        """Check for podcast episodes to auto-download."""
+        """Check for podcast episodes to auto-download.
+
+        "Episodes to download per podcast" (podcasts.download_limit) is a
+        per-podcast cap -- a single global LIMIT here previously let one
+        prolific podcast's backlog crowd out every other podcast's new
+        episodes entirely, and ignored the configured limit outright.
+        """
         try:
             from radiomaster.utils.config import ConfigManager
             config = ConfigManager.get_instance()
             if not config.get("podcasts.auto_download", default=False):
                 return
+            download_limit = config.get("podcasts.download_limit", default=3)
             from radiomaster.database.connection import DatabaseManager
             from radiomaster.utils.paths import get_paths
             paths = get_paths()
             db = DatabaseManager(paths["data"])
             db.initialize()
-            episodes = db.fetchall(
-                "SELECT e.*, p.title as podcast_title FROM episodes e "
-                "JOIN podcasts p ON e.podcast_id = p.id "
-                "WHERE e.download_status = 'none' AND e.audio_url IS NOT NULL "
-                "ORDER BY e.published_date DESC LIMIT 5"
+            pending_podcast_ids = db.fetchall(
+                "SELECT DISTINCT podcast_id FROM episodes "
+                "WHERE download_status = 'none' AND audio_url IS NOT NULL"
             )
-            for ep in episodes:
-                from radiomaster.database.repository import DownloadRepository
-                repo = DownloadRepository(db)
-                repo.add(ep.get("audio_url", ""), title=ep.get("title", ""), source_type="podcast")
-                db.execute(
-                    "UPDATE episodes SET download_status = 'queued' WHERE id = ?",
-                    (ep["id"],),
+            from radiomaster.database.repository import DownloadRepository
+            repo = DownloadRepository(db)
+            for row in pending_podcast_ids:
+                episodes = db.fetchall(
+                    "SELECT * FROM episodes WHERE podcast_id = ? AND download_status = 'none' "
+                    "AND audio_url IS NOT NULL ORDER BY published_date DESC LIMIT ?",
+                    (row["podcast_id"], download_limit),
                 )
+                for ep in episodes:
+                    repo.add(ep.get("audio_url", ""), title=ep.get("title", ""), source_type="podcast")
+                    db.execute(
+                        "UPDATE episodes SET download_status = 'queued' WHERE id = ?",
+                        (ep["id"],),
+                    )
             db.commit()
             db.close()
         except Exception as e:

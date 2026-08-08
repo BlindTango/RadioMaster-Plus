@@ -65,8 +65,13 @@ class DownloadManager:
 
     def add_download(self, download_id: int, url: str, output_dir: str,
                      title: str = "", format: str = "best",
-                     extract_audio: bool = False) -> None:
-        """Add a download to the queue."""
+                     extract_audio: bool = False, audio_quality: str = "0") -> None:
+        """Add a download to the queue.
+
+        ``audio_quality`` is a yt-dlp ``--audio-quality`` value: "0" (the
+        default) means best VBR; a bitrate like "192K" pins an exact rate.
+        Only meaningful when ``extract_audio`` is set.
+        """
         self._queue.put({
             "id": download_id,
             "url": url,
@@ -74,6 +79,7 @@ class DownloadManager:
             "title": title,
             "format": format,
             "extract_audio": extract_audio,
+            "audio_quality": audio_quality,
         })
 
     def _worker(self) -> None:
@@ -115,7 +121,8 @@ class DownloadManager:
         cmd.extend(get_yt_dlp_proxy_args())
         if extract_audio:
             audio_format = item.get("format") or "mp3"
-            cmd.extend(["-x", "--audio-format", audio_format, "--audio-quality", "0"])
+            audio_quality = item.get("audio_quality") or "0"
+            cmd.extend(["-x", "--audio-format", audio_format, "--audio-quality", audio_quality])
         else:
             quality = item.get("format", "best")
             selector = self._VIDEO_QUALITY_SELECTORS.get(quality, quality)

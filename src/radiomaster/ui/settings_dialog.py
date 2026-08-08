@@ -71,14 +71,20 @@ class GeneralPanel(SettingsPanel):
 
     def makeSettings(self, sizer: wx.BoxSizer) -> None:
         # Language
+        from radiomaster.i18n import LANGUAGES
+        # LANGUAGES is keyed by the ISO code I18nManager actually uses
+        # ("en", "es", ...) -- the combo shows display names but onSave()
+        # below converts back to the code, so this list's order fixes the
+        # code<->name mapping in both directions.
+        self._lang_codes = list(LANGUAGES.keys())
         sizer.Add(wx.StaticText(self, label="Language:"), 0, wx.ALL, 5)
-        self.lang_combo = wx.ComboBox(self, choices=[
-            "English", "Spanish", "French", "German", "Italian",
-            "Portuguese", "Russian", "Japanese", "Chinese",
-        ], style=wx.CB_READONLY)
-        self.lang_combo.SetStringSelection(
-            self.config.get("general.language", default="en").title()
+        self.lang_combo = wx.ComboBox(
+            self, choices=[LANGUAGES[c] for c in self._lang_codes], style=wx.CB_READONLY,
         )
+        current_code = self.config.get("general.language", default="en")
+        if current_code not in LANGUAGES:
+            current_code = "en"
+        self.lang_combo.SetStringSelection(LANGUAGES[current_code])
         sizer.Add(self.lang_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         # Theme
@@ -117,7 +123,10 @@ class GeneralPanel(SettingsPanel):
         sizer.Add(self.show_notifications_chk, 0, wx.ALL, 5)
 
     def onSave(self) -> None:
-        self.config.set("general.language", value=self.lang_combo.GetStringSelection().lower())
+        from radiomaster.i18n import LANGUAGES
+        selected_name = self.lang_combo.GetStringSelection()
+        code = next((c for c in self._lang_codes if LANGUAGES[c] == selected_name), "en")
+        self.config.set("general.language", value=code)
         self.config.set("general.theme", value=self.theme_combo.GetStringSelection().lower())
         self.config.set("general.font_size", value=self.font_size_spin.GetValue())
         self.config.set("general.start_on_boot", value=self.start_on_boot_chk.IsChecked())
@@ -704,5 +713,3 @@ class SettingsDialog(wx.Dialog):
         for panel in self._panel_map.values():
             panel.onDiscard()
         self.EndModal(wx.ID_CANCEL)
-        self.EndModal(wx.ID_CANCEL)
-        self.Destroy()

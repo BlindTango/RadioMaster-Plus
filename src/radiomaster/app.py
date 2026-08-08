@@ -87,12 +87,19 @@ class RadioMasterApp(wx.App):
         # Initialize theme manager
         self._theme_manager = ThemeManager(self._config)
 
+        # Apply the saved UI language before any menu/label is built (they
+        # all go through _() at construction time) -- previously only the
+        # View > Language menu ever touched I18nManager, so General >
+        # Language in Settings saved a value nothing read, even on restart.
+        from radiomaster.i18n import I18nManager
+        I18nManager().set_language(self._config.get("general", "language", default="en"))
+
         # Initialize services
         max_concurrent = self._config.get("downloads", "max_concurrent", default=3)
         self._download_manager = DownloadManager(max_concurrent)
         self._download_manager.start()
 
-        rec_dir = self._config.get("recordings", "output_folder", default=self._paths["recordings"])
+        rec_dir = self._config.get("recordings", "recording_path", default="") or self._paths["recordings"]
         self._scheduler_service = SchedulerService(rec_dir)
         from radiomaster.database.repository import ScheduleRepository
         self._scheduler_service.load_schedules(ScheduleRepository(self._db).get_all())
@@ -131,6 +138,13 @@ class RadioMasterApp(wx.App):
             # blocking here delays process exit exactly when an installer
             # (see AppMutex) may be waiting on it to actually be gone.
             self._main_window.engine.stop(wait=False)
+            # Same backstop reasoning for the tray icon: a leftover icon
+            # only disappears once the user mouses over it if this doesn't
+            # run (e.g. exit via OS session end while hidden to the tray).
+            if self._main_window._tray_icon:
+                self._main_window._tray_icon.RemoveIcon()
+                self._main_window._tray_icon.Destroy()
+                self._main_window._tray_icon = None
         if self._config:
             # Same backstop reasoning as engine.stop() above: MainWindow's
             # _on_close (EVT_CLOSE) is what normally persists

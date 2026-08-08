@@ -75,8 +75,16 @@ class YouTubePanel(wx.Panel):
         set_accessible_name(self._quality_choice, "Download Quality")
         qual_sizer.Add(self._quality_choice, 0, wx.LEFT, 4)
         qual_sizer.Add(wx.StaticText(self, label="Audio Format:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
-        self._audio_format_choice = wx.Choice(self, choices=["mp3", "opus", "flac", "m4a"])
-        self._audio_format_choice.SetSelection(0)
+        audio_format_choices = ["mp3", "opus", "flac", "m4a"]
+        self._audio_format_choice = wx.Choice(self, choices=audio_format_choices)
+        # Settings > Downloads > Audio Format previously only seeded the
+        # download's DB row label -- the panel's own dropdown (what
+        # actually drives yt-dlp) always started back at "mp3" regardless.
+        from radiomaster.utils.config import ConfigManager
+        default_format = ConfigManager.get_instance().get("downloads.audio_format", default="mp3")
+        self._audio_format_choice.SetSelection(
+            audio_format_choices.index(default_format) if default_format in audio_format_choices else 0
+        )
         set_accessible_name(self._audio_format_choice, "Audio Format")
         qual_sizer.Add(self._audio_format_choice, 0, wx.LEFT, 4)
         main_sizer.Add(qual_sizer, 0, wx.ALL, 4)
@@ -256,7 +264,13 @@ class YouTubePanel(wx.Panel):
 
         # Record audio‑only download request with selected audio format via DownloadManager
         audio_fmt = self._audio_format_choice.GetStringSelection()
-        download_id = repo.add(video_url, title=video.get('title', 'YouTube Audio'), format=audio_fmt, quality="best")
+        # Settings > Downloads > Audio Quality was saved but never reached
+        # yt-dlp -- every audio download hardcoded "--audio-quality 0"
+        # (best VBR) regardless. yt-dlp's --audio-quality accepts "0" for
+        # best VBR or an explicit bitrate like "192K".
+        quality_setting = config.get("downloads.audio_quality", default="192k")
+        audio_quality = "0" if quality_setting.lower() == "best" else quality_setting.upper()
+        download_id = repo.add(video_url, title=video.get('title', 'YouTube Audio'), format=audio_fmt, quality=quality_setting)
         app = wx.GetApp()
         if hasattr(app, 'download_manager') and hasattr(app.download_manager, 'add_download'):
             from radiomaster.utils.paths import get_paths
@@ -264,6 +278,6 @@ class YouTubePanel(wx.Panel):
             app.download_manager.add_download(
                 download_id, video_url, output_dir=output_dir,
                 title=video.get('title', 'YouTube Audio'),
-                format=audio_fmt, extract_audio=True,
+                format=audio_fmt, extract_audio=True, audio_quality=audio_quality,
             )
         wx.MessageBox(f"Audio download added to queue: {video.get('title', '')} ({audio_fmt})", "Download Added", wx.OK | wx.ICON_INFORMATION)

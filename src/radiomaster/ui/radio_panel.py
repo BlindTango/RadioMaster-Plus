@@ -388,6 +388,37 @@ class RadioPanel(scrolled.ScrolledPanel):
             return False
         return any(e["station_key"] == key for e in self._recordings.values())
 
+    # Maps Settings > Recordings > "Recording Format" to an output
+    # extension and the ffmpeg audio codec that produces it. FLAC/WAV are
+    # lossless so "Recording Quality" (a bitrate) doesn't apply to them.
+    _RECORDING_CODECS: dict[str, tuple[str, str]] = {
+        "mp3": (".mp3", "libmp3lame"),
+        "aac": (".aac", "aac"),
+        "ogg": (".ogg", "libvorbis"),
+        "flac": (".flac", "flac"),
+        "wav": (".wav", "pcm_s16le"),
+    }
+
+    def _recording_ffmpeg_args(self, station: Station, output_path: str) -> list[str]:
+        """Build the ffmpeg command for a manual recording, honoring
+        Settings > Recordings (format/quality/metadata) instead of always
+        stream-copying to a hardcoded .mp3 regardless of what's selected
+        there."""
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        rec_format = config.get("recordings.recording_format", default="mp3")
+        _, codec = self._RECORDING_CODECS.get(rec_format, (".mp3", "libmp3lame"))
+        quality = config.get("recordings.recording_quality", default="320k")
+
+        cmd = [get_ffmpeg(), "-y", "-i", station.url, "-c:a", codec]
+        if rec_format in ("mp3", "aac", "ogg"):
+            cmd += ["-b:a", "320k" if quality.lower() == "best" else quality]
+        if config.get("recordings.add_metadata", default=True):
+            cmd += ["-metadata", f"title={station.name}",
+                    "-metadata", f"artist={station.name}"]
+        cmd.append(output_path)
+        return cmd
+
     def _on_record(self) -> None:
         """Toggle recording of the selected station's stream to a file.
 
@@ -414,13 +445,18 @@ class RadioPanel(scrolled.ScrolledPanel):
             self._stop_recording(existing_id)
             return
 
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        recordings_dir = config.get("recordings.recording_path", default="") or get_paths()["recordings"]
+        rec_format = config.get("recordings.recording_format", default="mp3")
+        ext, _ = self._RECORDING_CODECS.get(rec_format, (".mp3", "libmp3lame"))
+
         safe_name = re.sub(r'[<>:"/\\|?*]', "_", station.name).strip() or "station"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        recordings_dir = get_paths()["recordings"]
         os.makedirs(recordings_dir, exist_ok=True)
-        output_path = os.path.join(recordings_dir, f"{safe_name}_{timestamp}.mp3")
+        output_path = os.path.join(recordings_dir, f"{safe_name}_{timestamp}{ext}")
 
-        cmd = [get_ffmpeg(), "-y", "-i", station.url, "-c", "copy", output_path]
+        cmd = self._recording_ffmpeg_args(station, output_path)
         try:
             process = subprocess.Popen(
                 cmd,
@@ -445,7 +481,7 @@ class RadioPanel(scrolled.ScrolledPanel):
             repo = DownloadRepository(self._db)
             download_id = repo.add(
                 url=station.url, title=f"Recording: {station.name}",
-                source_type="radio_recording", format="mp3",
+                source_type="radio_recording", format=rec_format,
             )
             repo.update_progress(download_id, 0, status="downloading")
         # Falls back to the process's own id() when there's no db (keeps
@@ -455,6 +491,7 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         self._recordings[key_id] = {
             "process": process, "station_name": station.name, "station_key": key,
+            "output_path": output_path,
         }
         self.set_status(f"Status: Recording {station.name}")
         if self.on_recording_changed:
@@ -466,6 +503,7 @@ class RadioPanel(scrolled.ScrolledPanel):
             return
         process = entry["process"]
         station_name = entry["station_name"]
+        output_path = entry.get("output_path")
         if self._db:
             from radiomaster.database.repository import DownloadRepository
             DownloadRepository(self._db).update_progress(key_id, 100, status="completed")
@@ -478,6 +516,21 @@ class RadioPanel(scrolled.ScrolledPanel):
                 process.wait(timeout=5)
             except Exception:
                 process.kill()
+
+            # "Split recordings into tracks" -- post-process the just-
+            # finished file with the same silence-detection splitter the
+            # Track Splitter dialog uses, rather than trying to split a
+            # live ffmpeg stream mid-recording.
+            from radiomaster.utils.config import ConfigManager
+            config = ConfigManager.get_instance()
+            if output_path and config.get("recordings.split_tracks", default=False) \
+                    and os.path.exists(output_path):
+                try:
+                    from radiomaster.services.track_splitter import TrackSplitter
+                    base = os.path.splitext(output_path)[0]
+                    TrackSplitter.split_by_silence(output_path, base + "_tracks")
+                except Exception as e:
+                    log.error(f"Track splitting failed for {output_path}: {e}")
 
         threading.Thread(target=worker, daemon=True).start()
         self.set_status(f"Status: Stopped recording {station_name}")

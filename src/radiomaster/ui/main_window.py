@@ -19,6 +19,7 @@ from radiomaster.ui.scheduler_panel import SchedulerPanel
 from radiomaster.ui.search_bar import SearchBar
 from radiomaster.ui.video_frame import VideoFrame
 from radiomaster.ui.equalizer_dialog import EqualizerDialog
+from radiomaster.ui.tray_icon import TrayIcon
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.utils.config import ConfigManager
 from radiomaster.database.connection import DatabaseManager
@@ -49,6 +50,14 @@ class MainWindow(wx.Frame):
         self._engine.restore_effects_state(self._config.get("effects", default={}))
         self._is_muted = False
         self._pre_mute_volume = 0.8
+        # System tray (Settings > General > Minimize/Close to tray) --
+        # created lazily on first actual hide, not here, so nothing changes
+        # for users who leave both settings off. request_exit() is the only
+        # path that's allowed to actually close the window instead of
+        # hiding it to the tray; _on_close checks it.
+        self._tray_icon: TrayIcon | None = None
+        self._exiting = False
+        self._tray_notice_shown = False
         # engine.position counts seconds since play() was called -- correct
         # as a "seconds into this song" clock for local files/podcasts/etc
         # (play() IS the song starting), but for radio play() only ever
@@ -645,15 +654,68 @@ class MainWindow(wx.Frame):
         leaving files locked exactly when the installer tried to
         overwrite them mid-update ("DeleteFile failed; Access is denied").
         """
+        # Settings > General > "Close to system tray": hide instead of
+        # actually exiting, unless the user picked Exit explicitly (File >
+        # Exit, the tray menu's Exit, or Alt+F4 while this is off) --
+        # request_exit() is the only thing allowed to set _exiting.
+        if self._config.get("general.close_to_tray", default=False) and not self._exiting:
+            event.Veto()
+            self._hide_to_tray()
+            return
+
         self._engine.stop(wait=False)
         self._station_update_scheduler.shutdown()
         self._config.save()
         self._global_hotkey_manager.unregister_all()
+        if self._tray_icon:
+            self._tray_icon.RemoveIcon()
+            self._tray_icon.Destroy()
+            self._tray_icon = None
         event.Skip()
+
+    def _on_iconize(self, event: wx.IconizeEvent) -> None:
+        """Settings > General > "Minimize to system tray"."""
+        if event.IsIconized() and self._config.get("general.minimize_to_tray", default=True):
+            # wx.CallAfter: hiding a frame from inside its own iconize
+            # handler while the OS is mid-animation of the minimize can be
+            # ignored on some window managers if done synchronously.
+            wx.CallAfter(self._hide_to_tray)
+            return
+        event.Skip()
+
+    def _hide_to_tray(self) -> None:
+        if not self._tray_icon:
+            self._tray_icon = TrayIcon(self)
+        self.Hide()
+        if self._config.get("general.show_notifications", default=True) and not self._tray_notice_shown:
+            self._tray_notice_shown = True
+            self._tray_icon.ShowBalloon(
+                "RadioMaster+ is still running",
+                "Playback continues in the background. Use the tray icon to reopen or exit.",
+            )
+
+    def restore_from_tray(self) -> None:
+        """Bring the window back from the tray (tray double-click / Show)."""
+        self.Show()
+        if self.IsIconized():
+            self.Iconize(False)
+        self.Raise()
+        if self._tray_icon:
+            self._tray_icon.RemoveIcon()
+            self._tray_icon.Destroy()
+            self._tray_icon = None
+
+    def request_exit(self) -> None:
+        """The only path allowed to actually close the window instead of
+        hiding it to the tray -- File > Exit, the tray menu's Exit, and
+        Alt+F4's accelerator all route here."""
+        self._exiting = True
+        self.Close()
 
     def _bind_events(self) -> None:
         """Bind menu and other events."""
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        self.Bind(wx.EVT_ICONIZE, self._on_iconize)
 
         # File menu
         self.Bind(wx.EVT_MENU, lambda e: self._on_open_file(), id=wx.ID_OPEN)
@@ -661,7 +723,7 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._on_open_folder(), id=self._menu_ids["open_folder"])
         self.Bind(wx.EVT_MENU, lambda e: self._on_import_opml(), id=self._menu_ids["import_opml"])
         self.Bind(wx.EVT_MENU, lambda e: self._on_export_opml(), id=self._menu_ids["export_opml"])
-        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
+        self.Bind(wx.EVT_MENU, lambda e: self.request_exit(), id=wx.ID_EXIT)
 
         # View menu
         self.Bind(wx.EVT_MENU, lambda e: self._show_equalizer(), id=self._menu_ids["toggle_equalizer"])
@@ -735,6 +797,13 @@ class MainWindow(wx.Frame):
         # also startup -- unconditionally.
         high_contrast = self._config.get('accessibility.high_contrast', default=False)
         dyslexia_font = self._config.get('accessibility.dyslexia_font', default=False)
+
+        # General > Language previously saved a value nothing ever read
+        # (see app.py's startup init and settings_dialog.GeneralPanel for
+        # the matching fixes) -- apply it live here too, same as the View
+        # menu's language items already do.
+        from radiomaster.i18n import I18nManager
+        I18nManager().set_language(self._config.get('general.language', default='en'))
         
         if high_contrast:
             # Pure black/white across every control, not just the frame/
@@ -784,6 +853,13 @@ class MainWindow(wx.Frame):
         self._station_update_scheduler.set_frequency(
             self._config.get('radio.station_update_frequency', default='weekly')
         )
+
+        # Reconcile the Windows Run-key entry with the checkbox -- runs on
+        # every launch too (this whole method is called once from
+        # __init__), so a stale entry left by an install at a different
+        # path gets corrected, not just changes made via Settings > OK.
+        from radiomaster.utils.startup_registry import set_run_on_startup
+        set_run_on_startup(self._config.get('general.start_on_boot', default=False))
 
         # Refresh UI
         self.Refresh()
