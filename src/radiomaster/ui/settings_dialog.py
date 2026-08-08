@@ -326,12 +326,30 @@ class PodcastsPanel(SettingsPanel):
         )
         sizer.Add(self.gpodder_user_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
+        sizer.Add(wx.StaticText(self, label="Podcast Index API Key (for a second search directory):"), 0, wx.ALL, 5)
+        self.podcastindex_key_txt = wx.TextCtrl(
+            self, value=self.config.get("podcasts.podcastindex_api_key", default=""),
+        )
+        set_accessible_name(self.podcastindex_key_txt, "Podcast Index API Key")
+        sizer.Add(self.podcastindex_key_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        sizer.Add(wx.StaticText(self, label="Podcast Index API Secret:"), 0, wx.ALL, 5)
+        self.podcastindex_secret_txt = wx.TextCtrl(
+            self, value=self.config.get("podcasts.podcastindex_api_secret", default=""),
+        )
+        set_accessible_name(self.podcastindex_secret_txt, "Podcast Index API Secret")
+        sizer.Add(self.podcastindex_secret_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+        podcastindex_link = wx.StaticText(self, label="Get a free key at api.podcastindex.org")
+        sizer.Add(podcastindex_link, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
     def onSave(self) -> None:
         self.config.set("podcasts.auto_download", value=self.auto_download_chk.IsChecked())
         self.config.set("podcasts.download_limit", value=self.download_limit_spin.GetValue())
         self.config.set("podcasts.keep_episodes", value=self.keep_episodes_spin.GetValue())
         self.config.set("podcasts.sync_gpodder", value=self.sync_gpodder_chk.IsChecked())
         self.config.set("podcasts.gpodder_username", value=self.gpodder_user_txt.GetValue().strip())
+        self.config.set("podcasts.podcastindex_api_key", value=self.podcastindex_key_txt.GetValue().strip())
+        self.config.set("podcasts.podcastindex_api_secret", value=self.podcastindex_secret_txt.GetValue().strip())
 
 
 class DownloadsPanel(SettingsPanel):

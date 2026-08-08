@@ -1,16 +1,27 @@
 """Podcast tab panel with subscription management and episode list.
 
-Uses three linked listboxes:
+Laid out the same way as the Radio tab (RadioPanel): a search row (label +
+textbox + button) at the top -- always visible, not buried in a column or
+gated behind picking a category first -- followed by a categorized browser
+below it. Uses three linked listboxes:
     1. Categories (All, Custom, Directory)
-    2. Podcasts (feeds in the selected category)
+    2. Podcasts (feeds in the selected category, or live search results
+       when the Directory category is showing what was just searched)
     3. Episodes (episodes of the selected podcast)
+
+Searching queries every configured podcast directory (see
+services/podcast_directory.py's search_all()) and shows the results in the
+Podcasts list; picking one there is just browsing until Subscribe (button,
+context menu, or double-click/Enter) actually adds it -- mirroring
+Radio's search-then-activate-to-play, except a podcast has to be
+subscribed before its episodes can be browsed/played at all.
 """
 
 import wx
 from typing import Any
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
-from radiomaster.utils.accessibility import set_accessible_name, set_search_ctrl_accessible_name
+from radiomaster.utils.accessibility import set_accessible_name
 
 
 class PodcastPanel(wx.Panel):
@@ -22,6 +33,12 @@ class PodcastPanel(wx.Panel):
         self._engine = engine
         self._current_episode_id: int | None = None
         self._resume_position: float = 0.0
+        # True while the Podcasts list (column 2) is showing live directory
+        # search results rather than subscribed podcasts from the local DB
+        # -- selecting a row in that state needs Subscribe, not a direct
+        # episode load (search results have no local podcast id yet).
+        self._viewing_search_results = False
+        self._search_seq = 0
         self._setup_ui()
 
         # Periodically persist play progress for the currently-playing
@@ -47,7 +64,23 @@ class PodcastPanel(wx.Panel):
             )
 
     def _setup_ui(self) -> None:
-        """Create the podcast panel layout with three listboxes."""
+        """Create the podcast panel layout: a Radio-tab-style search row on
+        top, then three linked listboxes below it."""
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        # --- Search row (matches RadioPanel's search_row exactly: label +
+        # textbox + button, always visible) ---
+        search_label = wx.StaticText(self, label="&Search:")
+        self.search_ctrl = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
+        self.search_ctrl.SetHint("Search by podcast name or topic")
+        self.search_btn = wx.Button(self, label="&Search")
+
+        search_row = wx.BoxSizer(wx.HORIZONTAL)
+        search_row.Add(search_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        search_row.Add(self.search_ctrl, 1, wx.EXPAND | wx.RIGHT, 4)
+        search_row.Add(self.search_btn, 0)
+        outer.Add(search_row, 0, wx.EXPAND | wx.ALL, 6)
+
         main_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
         # --- Column 1: Category listbox ---
@@ -69,6 +102,9 @@ class PodcastPanel(wx.Panel):
         self._podcast_list = wx.ListBox(col2, style=wx.LB_SINGLE)
         set_accessible_name(self._podcast_list, "Podcasts")
         col2_sizer.Add(self._podcast_list, 1, wx.EXPAND | wx.ALL, 4)
+        self._btn_subscribe = wx.Button(col2, label="Su&bscribe")
+        set_accessible_name(self._btn_subscribe, "Subscribe to selected podcast")
+        col2_sizer.Add(self._btn_subscribe, 0, wx.EXPAND | wx.ALL, 4)
         col2.SetSizer(col2_sizer)
         main_sizer.Add(col2, 1, wx.EXPAND | wx.RIGHT, 4)
 
@@ -108,23 +144,19 @@ class PodcastPanel(wx.Panel):
         opml_sizer.Add(self._btn_export_opml, 1, wx.LEFT, 2)
         col3_sizer.Add(opml_sizer, 0, wx.EXPAND | wx.ALL, 4)
 
-        # Directory search bar (hidden by default, shown when Directory is selected)
-        dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        dir_sizer.Add(wx.StaticText(col3, label="Search Directory:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._dir_search = wx.SearchCtrl(col3, style=wx.TE_PROCESS_ENTER)
-        set_search_ctrl_accessible_name(self._dir_search, "Search Podcast Directory")
-        self._dir_search.ShowSearchButton(True)
-        dir_sizer.Add(self._dir_search, 1, wx.EXPAND)
-        col3_sizer.Add(dir_sizer, 0, wx.EXPAND | wx.ALL, 4)
-
         col3.SetSizer(col3_sizer)
         main_sizer.Add(col3, 2, wx.EXPAND)
 
-        self.SetSizer(main_sizer)
+        outer.Add(main_sizer, 1, wx.EXPAND)
+        self.SetSizer(outer)
 
         # Bind events
+        self.search_btn.Bind(wx.EVT_BUTTON, self._on_directory_search)
+        self.search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_directory_search)
         self._category_list.Bind(wx.EVT_LISTBOX, self._on_category_select)
         self._podcast_list.Bind(wx.EVT_LISTBOX, self._on_podcast_select)
+        self._podcast_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_podcast_activated)
+        self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
         self._episode_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_play)
         self._btn_play.Bind(wx.EVT_BUTTON, self._on_play)
         self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
@@ -132,8 +164,6 @@ class PodcastPanel(wx.Panel):
         self._btn_sync_gpodder.Bind(wx.EVT_BUTTON, self._on_sync_gpodder)
         self._btn_import_opml.Bind(wx.EVT_BUTTON, self._on_import_opml)
         self._btn_export_opml.Bind(wx.EVT_BUTTON, self._on_export_opml)
-        self._dir_search.Bind(wx.EVT_SEARCHCTRL_SEARCH_BTN, self._on_directory_search)
-        self._dir_search.Bind(wx.EVT_TEXT_ENTER, self._on_directory_search)
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -145,6 +175,7 @@ class PodcastPanel(wx.Panel):
         self._podcast_list.Clear()
         self._episode_list.Clear()
         self._podcast_data: list[dict[str, Any]] = []
+        self._viewing_search_results = False
 
         cat = self._category_list.GetStringSelection()
         if cat == "All Podcasts":
@@ -159,21 +190,146 @@ class PodcastPanel(wx.Panel):
         elif cat == "Directory":
             self._podcast_list.Clear()
             self._podcast_data = []
-            self._podcast_list.Append("(Search iTunes/Apple Podcasts directory)")
+            self._podcast_list.Append("(Use Search above to find podcasts to subscribe to)")
+
+    def _set_status(self, text: str) -> None:
+        top = wx.GetTopLevelParent(self)
+        if hasattr(top, "_status_bar"):
+            top._status_bar.set_status(text)
 
     def _on_directory_search(self, event: wx.Event) -> None:
-        """Search the iTunes/Apple Podcasts directory."""
-        query = self._dir_search.GetValue().strip()
+        """Search every configured podcast directory (see
+        services/podcast_directory.search_all() -- iTunes always, Podcast
+        Index once an API key is set in Settings > Podcasts) and show the
+        merged results in the Podcasts list, same shape as RadioPanel's
+        _on_search: local-first-then-live pattern isn't applicable here
+        (there's no single local catalog to search), so this always goes
+        straight to the live directories, off the UI thread."""
+        query = self.search_ctrl.GetValue().strip()
         if not query:
             return
-        from radiomaster.services.podcast_directory import PodcastDirectory
-        results = PodcastDirectory.search(query)
+        self._set_status(f"Status: Searching podcast directories for '{query}'...")
+        self._search_seq += 1
+        seq = self._search_seq
+
+        def worker():
+            from radiomaster.services.podcast_directory import search_all
+            results = search_all(query)
+            if seq != self._search_seq:
+                return  # a newer search superseded this one; discard stale results
+            wx.CallAfter(self._apply_search_results, results, query)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_search_results(self, results: list[dict[str, Any]], query: str) -> None:
+        # Switching category to "Directory" doesn't fire EVT_LISTBOX (wx
+        # doesn't raise it for programmatic SetSelection), so the results
+        # are populated directly here rather than relying on
+        # _on_category_select to do it.
+        idx = self._category_list.FindString("Directory")
+        if idx != wx.NOT_FOUND:
+            self._category_list.SetSelection(idx)
+        self._episode_list.Clear()
+        self._podcast_list.Clear()
+        self._podcast_data = results
+        self._viewing_search_results = True
+        if not results:
+            self._podcast_list.Append("(No results -- try a different search term)")
+        for r in results:
+            display = f"{r.get('title', 'Unknown')}  [{r.get('author', '')}]  -- {r.get('directory', '')}"
+            self._podcast_list.Append(display)
+        self._set_status(f"Status: {len(results)} result(s) for '{query}'")
+
+    def _on_podcast_activated(self, event: wx.CommandEvent) -> None:
+        """Double-click in the Podcasts list: subscribes when browsing live
+        search results (mirrors RadioPanel activating a station to play it
+        -- one action commits to using what's selected); a no-op for
+        already-subscribed podcasts, which single-click already loads."""
+        if self._viewing_search_results:
+            self._on_subscribe(event)
+
+    def _on_subscribe(self, event: wx.Event) -> None:
+        """Subscribes to the selected directory search result: adds it to
+        the local podcast DB (idempotent -- feed_url is UNIQUE, so
+        re-subscribing to something already subscribed just updates its
+        metadata) and fetches its episode list, then switches to All
+        Podcasts and selects it so the episodes are immediately browsable."""
+        if not self._viewing_search_results:
+            wx.MessageBox(
+                "Search for a podcast above, select a result, then Subscribe.",
+                "Nothing To Subscribe", wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        idx = self._podcast_list.GetSelection()
+        if idx == wx.NOT_FOUND or idx >= len(self._podcast_data):
+            wx.MessageBox("Select a podcast from the search results first.", "No Selection",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        result = self._podcast_data[idx]
+        feed_url = result.get("feed_url", "")
+        if not feed_url:
+            wx.MessageBox("This search result has no feed URL.", "Cannot Subscribe",
+                          wx.OK | wx.ICON_WARNING)
+            return
+
+        self._set_status(f"Status: Subscribing to '{result.get('title', feed_url)}'...")
+        self._btn_subscribe.Disable()
+
+        def worker():
+            from radiomaster.database.repository import PodcastRepository
+            from radiomaster.services.podcast_manager import PodcastManager
+            repo = PodcastRepository(self._db)
+            podcast_id = repo.add(
+                feed_url, title=result.get("title", ""), description=result.get("description", ""),
+                author=result.get("author", ""), artwork_url=result.get("artwork_url", ""),
+                is_custom=False,
+            )
+            episode_count = 0
+            try:
+                feed_data = PodcastManager.parse_feed(feed_url)
+                episodes = feed_data.get("episodes", []) if feed_data else []
+                for ep in episodes:
+                    self._db.execute(
+                        """INSERT OR IGNORE INTO episodes
+                        (podcast_id, guid, title, description, duration, published_date, audio_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (podcast_id, ep.get("guid", ""), ep.get("title", ""),
+                         ep.get("description", ""), ep.get("duration", 0),
+                         ep.get("published_date", ""), ep.get("audio_url", "")),
+                    )
+                self._db.commit()
+                episode_count = len(episodes)
+            except Exception as e:
+                wx.CallAfter(self._set_status, f"Status: Subscribed, but episodes could not be loaded ({e})")
+            wx.CallAfter(self._finish_subscribe, result.get("title", feed_url), episode_count)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_subscribe(self, title: str, episode_count: int) -> None:
+        self._btn_subscribe.Enable()
+        # "All Podcasts" -- switching category re-populates column 2 from
+        # the DB, which now includes the podcast just subscribed to.
+        idx = self._category_list.FindString("All Podcasts")
+        if idx != wx.NOT_FOUND:
+            self._category_list.SetSelection(idx)
+        self._viewing_search_results = False
+        from radiomaster.database.repository import PodcastRepository
+        repo = PodcastRepository(self._db)
         self._podcast_list.Clear()
         self._podcast_data = []
-        for r in results:
-            display = f"{r.get('title', 'Unknown')}  [{r.get('author', '')}]"
-            self._podcast_list.Append(display)
-            self._podcast_data.append(r)
+        for p in repo.get_all():
+            self._podcast_list.Append(p.get("title", "Unknown"))
+            self._podcast_data.append(p)
+        # Select the podcast just subscribed to and load its episodes,
+        # same as clicking it manually would.
+        for i, p in enumerate(self._podcast_data):
+            if p.get("title") == title:
+                self._podcast_list.SetSelection(i)
+                self._load_episodes_for_index(i)
+                break
+        self._set_status(f"Status: Subscribed to '{title}' ({episode_count} episode(s))")
 
     def _on_sync_gpodder(self, event: wx.CommandEvent) -> None:
         """Sync subscriptions with gpodder.net."""
@@ -229,8 +385,6 @@ class PodcastPanel(wx.Panel):
 
     def _on_podcast_select(self, event: wx.CommandEvent) -> None:
         """Populate the episode list when a podcast is selected."""
-        from radiomaster.database.repository import PodcastRepository
-        repo = PodcastRepository(self._db)
         self._episode_list.Clear()
         self._episode_data: list[dict[str, Any]] = []
 
@@ -238,6 +392,22 @@ class PodcastPanel(wx.Panel):
         if idx < 0 or not hasattr(self, '_podcast_data') or idx >= len(self._podcast_data):
             return
 
+        if self._viewing_search_results:
+            # Not subscribed yet -- there's no local episode list for a
+            # bare directory search result (its "id", if any, is the
+            # directory's own id -- e.g. an iTunes collectionId -- not a
+            # local podcasts.id, so looking up episodes by it would silently
+            # return the wrong thing or nothing rather than being a no-op).
+            self._set_status("Status: Select Subscribe to add this podcast and load its episodes.")
+            return
+
+        self._load_episodes_for_index(idx)
+
+    def _load_episodes_for_index(self, idx: int) -> None:
+        from radiomaster.database.repository import PodcastRepository
+        repo = PodcastRepository(self._db)
+        self._episode_list.Clear()
+        self._episode_data = []
         podcast = self._podcast_data[idx]
         podcast_id = podcast.get("id")
         if podcast_id:
