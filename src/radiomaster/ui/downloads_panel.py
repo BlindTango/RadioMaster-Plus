@@ -1,7 +1,7 @@
 """Downloads tab panel showing active downloads and history."""
 
 import wx
-from typing import Any
+from typing import Any, Callable, Optional
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.utils.accessibility import set_accessible_name
 
@@ -12,6 +12,14 @@ class DownloadsPanel(wx.Panel):
     def __init__(self, parent: wx.Window, db: DatabaseManager) -> None:
         super().__init__(parent)
         self._db = db
+        # Row dicts parallel to _active_list's items (same order), so
+        # selecting a row can look up its real "downloads" table id and
+        # source_type without needing a second DB round-trip.
+        self._active_rows: list[dict[str, Any]] = []
+        # Set by MainWindow to RadioPanel.stop_recording_by_download_id --
+        # only source_type="radio_recording" rows can be stopped from
+        # here (a real youtube/podcast download has no such handle).
+        self.on_stop_recording: Optional[Callable[[int], bool]] = None
         self._setup_ui()
         self._load_data()
 
@@ -28,6 +36,11 @@ class DownloadsPanel(wx.Panel):
         self._active_list.AppendColumn("Progress", width=100)
         self._active_list.AppendColumn("Status", width=100)
         main_sizer.Add(self._active_list, 1, wx.EXPAND | wx.ALL, 4)
+
+        self._btn_stop_recording = wx.Button(self, label="Stop &Recording")
+        set_accessible_name(self._btn_stop_recording, "Stop Selected Recording")
+        self._btn_stop_recording.Bind(wx.EVT_BUTTON, self._on_stop_recording)
+        main_sizer.Add(self._btn_stop_recording, 0, wx.ALIGN_CENTER | wx.ALL, 4)
 
         # History
         main_sizer.Add(wx.StaticText(self, label="Download History"), 0, wx.ALL, 4)
@@ -54,7 +67,8 @@ class DownloadsPanel(wx.Panel):
 
         # Active/queued downloads
         self._active_list.DeleteAllItems()
-        for d in repo.get_queued():
+        self._active_rows = repo.get_queued()
+        for d in self._active_rows:
             idx = self._active_list.InsertItem(self._active_list.GetItemCount(), d.get("title", "Unknown"))
             self._active_list.SetItem(idx, 1, f"{d.get('progress', 0):.0f}%")
             self._active_list.SetItem(idx, 2, d.get("status", "queued"))
@@ -68,3 +82,21 @@ class DownloadsPanel(wx.Panel):
             idx = self._history_list.InsertItem(self._history_list.GetItemCount(), d.get("title", "Unknown"))
             self._history_list.SetItem(idx, 1, d.get("created_at", ""))
             self._history_list.SetItem(idx, 2, d.get("status", ""))
+
+    def _on_stop_recording(self, event: wx.CommandEvent) -> None:
+        idx = self._active_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
+            wx.MessageBox("Select an active recording first.", "No Selection",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        row = self._active_rows[idx]
+        if row.get("source_type") != "radio_recording":
+            wx.MessageBox("Only manual radio recordings (not other downloads) can be "
+                          "stopped from here.", "Not a Recording", wx.OK | wx.ICON_INFORMATION)
+            return
+        if self.on_stop_recording and self.on_stop_recording(row["id"]):
+            self._load_data()
+        else:
+            wx.MessageBox("That recording is no longer active.", "Already Stopped",
+                          wx.OK | wx.ICON_INFORMATION)
+            self._load_data()

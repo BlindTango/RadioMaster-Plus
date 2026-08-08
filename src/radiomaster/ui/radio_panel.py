@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import wx
 import wx.lib.scrolledpanel as scrolled
@@ -45,22 +45,37 @@ class RadioPanel(scrolled.ScrolledPanel):
 
     def __init__(self, parent, station_api: StationAPI, station_db: StationDB,
                  station_updater: StationUpdater, engine: PlaybackEngine,
-                 set_status: Callable[[str], None]):
+                 set_status: Callable[[str], None], db=None):
         super().__init__(parent)
         self.station_api = station_api
         self.station_db = station_db
         self.station_updater = station_updater
         self.engine = engine
         self.set_status = set_status
+        self._db = db
         self._selected_station: Optional[Station] = None
         self._search_seq = 0
         self._now_playing_generation = 0
 
-        # Manual (Record button / hotkey) recording -- separate from the
+        # Manual (Record button / hotkey) recordings -- separate from the
         # timed SchedulerService recordings, this just ffmpeg-copies
         # whatever's currently selected to a file until toggled off again.
-        self._record_process: Optional[subprocess.Popen] = None
-        self._record_station_name: Optional[str] = None
+        # Keyed by the "downloads" table row id (source_type=
+        # "radio_recording", see _on_record) so multiple different
+        # stations can each be recording at once, independently -- keying
+        # by a single value used to mean starting a second recording
+        # silently had no way to track the first one at all.
+        self._recordings: dict[int, dict[str, Any]] = {}
+        # The transport bar's Record button (NowPlayingBar, owned by
+        # MainWindow -- a different class from this panel's own
+        # NowPlayingPanel) lives outside this panel, so starting/stopping
+        # a recording notifies MainWindow through this callback to flip
+        # its label/accessible name ("Record Off" <-> "Recording On") to
+        # reflect whether the *currently selected* station specifically
+        # is being recorded. Without it, ffmpeg genuinely recorded in the
+        # background but the button never changed state -- indistinguishable
+        # from "does nothing" for a screen reader user with no other feedback.
+        self.on_recording_changed: Optional[Callable[[bool], None]] = None
 
         # Station play history (browser-style back/forward, not a queue):
         # picking a fresh station truncates anything ahead of the current
@@ -198,7 +213,14 @@ class RadioPanel(scrolled.ScrolledPanel):
         try:
             self._selected_station = self.tree.get_selected_station()
         except RuntimeError:
-            pass
+            return
+        # With multiple stations potentially recording at once, the
+        # Record button reflects whichever station is now selected --
+        # without this, selecting a station that's already recording
+        # (started while a different one was selected) still showed
+        # "Record Off", the opposite of what's actually happening.
+        if self.on_recording_changed:
+            self.on_recording_changed(self.is_station_recording(self._selected_station))
 
     def _on_station_activated(self, station: Station) -> None:
         self._selected_station = station
@@ -347,22 +369,49 @@ class RadioPanel(scrolled.ScrolledPanel):
         threading.Thread(target=self.engine.stop, daemon=True).start()
         self.now_playing.set_station("")
         self.now_playing.set_now_playing("")
+        # Deliberately does NOT touch an active recording -- Stop only
+        # stops playback. A recording is a separate ffmpeg connection to
+        # the stream and is only ever stopped by toggling Record off
+        # again (_on_record), by design.
+
+    def _station_key(self, station: Optional[Station]) -> Optional[str]:
+        """Identity for matching a Station to an entry in self._recordings
+        -- uuid for a catalog station, url as a fallback for a custom
+        station (no uuid)."""
+        if station is None:
+            return None
+        return station.uuid or station.url
+
+    def is_station_recording(self, station: Optional[Station]) -> bool:
+        key = self._station_key(station)
+        if key is None:
+            return False
+        return any(e["station_key"] == key for e in self._recordings.values())
 
     def _on_record(self) -> None:
         """Toggle recording of the selected station's stream to a file.
 
-        Previously this only updated the status text and never actually
-        started ffmpeg -- pressing Record did nothing and no file was ever
-        written.
+        Multiple different stations can each be recording at once --
+        pressing Record again for a station that ISN'T already recording
+        starts a new, independent recording alongside any others; only
+        pressing Record while the *selected* station's own recording is
+        active stops that one specifically (matching the Recording
+        Scheduler's existing "multiple simultaneous recordings" promise
+        in the README, which the old single-recording-at-a-time
+        implementation didn't honor for manual recordings).
         """
-        if self._record_process is not None:
-            self._stop_recording()
-            return
-
         station = self._selected_station or self.tree.get_selected_station()
         if not station:
             wx.MessageBox("Select a station first.", "No Station Selected",
                           wx.OK | wx.ICON_INFORMATION)
+            return
+
+        key = self._station_key(station)
+        existing_id = next(
+            (did for did, e in self._recordings.items() if e["station_key"] == key), None
+        )
+        if existing_id is not None:
+            self._stop_recording(existing_id)
             return
 
         safe_name = re.sub(r'[<>:"/\\|?*]', "_", station.name).strip() or "station"
@@ -373,7 +422,7 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         cmd = [get_ffmpeg(), "-y", "-i", station.url, "-c", "copy", output_path]
         try:
-            self._record_process = subprocess.Popen(
+            process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -386,14 +435,42 @@ class RadioPanel(scrolled.ScrolledPanel):
                           wx.OK | wx.ICON_ERROR)
             return
 
-        self._record_station_name = station.name
-        self.set_status(f"Status: Recording {station.name}")
+        download_id: Optional[int] = None
+        if self._db:
+            # source_type="radio_recording" is what the Downloads tab's
+            # Active Downloads list picks up -- without this row, a
+            # manual recording never showed there at all, even while it
+            # was genuinely running.
+            from radiomaster.database.repository import DownloadRepository
+            repo = DownloadRepository(self._db)
+            download_id = repo.add(
+                url=station.url, title=f"Recording: {station.name}",
+                source_type="radio_recording", format="mp3",
+            )
+            repo.update_progress(download_id, 0, status="downloading")
+        # Falls back to the process's own id() when there's no db (keeps
+        # this panel usable standalone, e.g. in tests) -- guaranteed
+        # unique among currently-alive Popen objects either way.
+        key_id = download_id if download_id is not None else id(process)
 
-    def _stop_recording(self) -> None:
-        process = self._record_process
-        self._record_process = None
-        station_name = self._record_station_name
-        self._record_station_name = None
+        self._recordings[key_id] = {
+            "process": process, "station_name": station.name, "station_key": key,
+        }
+        self.set_status(f"Status: Recording {station.name}")
+        if self.on_recording_changed:
+            self.on_recording_changed(self.is_station_recording(self._selected_station))
+
+    def _stop_recording(self, key_id: int) -> None:
+        entry = self._recordings.pop(key_id, None)
+        if entry is None:
+            return
+        process = entry["process"]
+        station_name = entry["station_name"]
+        if self._db:
+            from radiomaster.database.repository import DownloadRepository
+            DownloadRepository(self._db).update_progress(key_id, 100, status="completed")
+        if self.on_recording_changed:
+            self.on_recording_changed(self.is_station_recording(self._selected_station))
 
         def worker():
             try:
@@ -404,6 +481,17 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         threading.Thread(target=worker, daemon=True).start()
         self.set_status(f"Status: Stopped recording {station_name}")
+
+    def stop_recording_by_download_id(self, download_id: int) -> bool:
+        """Public entry point for the Downloads tab's "Stop Recording"
+        button -- lets a specific active recording be stopped from there
+        directly, without needing to first re-select that exact station
+        back in the Radio tab's tree. Returns False if download_id isn't
+        (or is no longer) an active recording."""
+        if download_id not in self._recordings:
+            return False
+        self._stop_recording(download_id)
+        return True
 
     def _on_add_custom(self, event: wx.CommandEvent) -> None:
         dlg = wx.TextEntryDialog(self, "Enter station URL:", "Add Custom Station")

@@ -191,12 +191,160 @@ def build_effects_filters(rate: float, effects: dict[str, dict[str, Any]]) -> li
     return filters
 
 
+def _rate_and_pitch_filters(rate: float, effects: dict[str, dict[str, Any]]) -> list[str]:
+    """The rate/pitch_tempo subset of build_effects_filters() -- the only
+    two effects LiveAudioEngine's own filter graph still handles (see
+    dsp.py's module docstring for why the other 9 moved to a numpy DSP
+    chain applied directly in _audio_callback instead). Kept as a
+    separate function rather than filtering build_effects_filters()'s
+    output down: this list feeds directly into a real libavfilter graph
+    here, while build_effects_filters() itself is still used as-is by
+    PlaybackEngine for the video (ffplay) path, which has no DSP-chain
+    option and still needs every effect's filter string.
+    """
+    filters: list[str] = []
+    if rate != 1.0:
+        filters.append(f"atempo={rate}")
+    if effects["pitch_tempo"]["enabled"]:
+        params = effects["pitch_tempo"]["params"]
+        cents = params.get("cents", 0)
+        tempo = params.get("tempo", 1.0)
+        ratio = 2 ** (cents / 1200)
+        filters.append(f"asetrate={SAMPLE_RATE}*{ratio}")
+        filters.append(f"aresample={SAMPLE_RATE}")
+        filters.append(f"atempo={tempo / ratio}")
+    return filters
+
+
 def _parse_filter_spec(spec: str) -> tuple[str, str]:
     """Split "name=args" (ffmpeg -af syntax) into (name, args) for
     Graph.add(). A filter with no "=" (rare, e.g. a bare flag) gets an
     empty args string."""
     name, _, args = spec.partition("=")
     return name, args
+
+
+# ---------------------------------------------------------------------------
+# DSP-chain effect adapters -- convert this app's own effects_data.py
+# parameter names/ranges into whatever each dsp.py processor's update()
+# expects. One make_processor()/apply_params() pair per effect_id; two
+# effects intentionally share one processor type (dsp.Compressor for both
+# "compressor" and "dynamic_range", dsp.ModulatedDelay for both "chorus"
+# and "flanger", dsp.MultiTapDelay for both "echo" and "reverb"), matching
+# the reference project's own EffectSpec design.
+# ---------------------------------------------------------------------------
+from radiomaster.engine import dsp  # noqa: E402
+
+
+def _apply_equalizer(proc: "dsp.Equalizer", p: dict[str, Any]) -> None:
+    proc.update(p)
+
+
+def _apply_dynamic_range(proc: "dsp.Compressor", p: dict[str, Any]) -> None:
+    # effects_data.py's dynamic_range threshold is in dB (-60..0);
+    # dsp.Compressor takes linear amplitude (0.001..1) like "compressor"
+    # already uses natively.
+    threshold_db = float(p.get("threshold", -20))
+    proc.update({
+        "threshold": 10 ** (threshold_db / 20),
+        "ratio": float(p.get("ratio", 4)),
+        "attack": float(p.get("attack", 5)),
+        "release": float(p.get("release", 50)),
+        "knee": float(p.get("knee", 10)),
+        "makeup": 1.0,
+        "mix": 1.0,
+    })
+
+
+def _apply_compressor(proc: "dsp.Compressor", p: dict[str, Any]) -> None:
+    proc.update({
+        "threshold": float(p.get("threshold", 0.1)),
+        "ratio": float(p.get("ratio", 4)),
+        "attack": float(p.get("attack", 20)),
+        "release": float(p.get("release", 250)),
+        "makeup": float(p.get("makeup", 1)),
+    })
+
+
+def _apply_distortion(proc: "dsp.BitCrusher", p: dict[str, Any]) -> None:
+    proc.update(p)
+
+
+def _apply_echo(proc: "dsp.MultiTapDelay", p: dict[str, Any]) -> None:
+    delay_ms = max(1.0, float(p.get("delay", 500)))
+    decay = max(0.001, float(p.get("decay", 0.4)))
+    proc.set_taps(
+        in_gain=float(p.get("in_gain", 0.8)), out_gain=float(p.get("out_gain", 0.88)),
+        taps_ms_decay=[(delay_ms, decay)],
+    )
+
+
+def _apply_reverb(proc: "dsp.MultiTapDelay", p: dict[str, Any]) -> None:
+    room_size = float(p.get("room_size", 0.4))
+    decay = float(p.get("decay", 0.4))
+    mix = float(p.get("mix", 0.3))
+    max_delay = 30 + room_size * 220  # ms, roughly 50-250ms
+    delays = [max_delay * f for f in (0.15, 0.35, 0.6, 1.0)]
+    decays = [max(0.001, decay * f * mix) for f in (0.9, 0.7, 0.5, 0.3)]
+    proc.set_taps(in_gain=1.0, out_gain=1.0, taps_ms_decay=list(zip(delays, decays)))
+
+
+def _apply_chorus(proc: "dsp.ModulatedDelay", p: dict[str, Any]) -> None:
+    proc.update({
+        "base_delay_ms": float(p.get("delay", 50)),
+        "depth_ms": float(p.get("depth", 2.0)),
+        "speed_hz": float(p.get("speed", 2.0)),
+        "feedback": 0.0,  # a mixed delayed voice, not regenerative -- matches the old chorus filter
+        "mix": max(0.0, min(1.0, float(p.get("decay", 0.4)))),
+        "phase_deg": 90.0,  # fixed stereo spread between L/R modulation for width
+        "in_gain": 1.0, "out_gain": 1.0,
+    })
+
+
+def _apply_flanger(proc: "dsp.ModulatedDelay", p: dict[str, Any]) -> None:
+    proc.update({
+        "base_delay_ms": float(p.get("delay", 10)),
+        "depth_ms": float(p.get("depth", 2)),
+        "speed_hz": float(p.get("speed", 0.5)),
+        "feedback": 0.25,  # flangers are characteristically regenerative, unlike chorus
+        "mix": 0.5,
+        "phase_deg": 0.0,
+        "in_gain": 1.0, "out_gain": 1.0,
+    })
+
+
+def _apply_gargle(proc: "dsp.Tremolo", p: dict[str, Any]) -> None:
+    proc.update({"frequency_hz": float(p.get("rate", 20)), "depth": float(p.get("depth", 0.7))})
+
+
+def _apply_normalization(proc: "dsp.LoudnessNormalizer", p: dict[str, Any]) -> None:
+    target_db = float(p.get("target", -16))
+    proc.update({"target_rms": 10 ** (target_db / 20), "max_gain": 15.0})
+
+
+# effect_id -> (make_processor, apply_params). Anything NOT in this dict
+# (currently only "pitch_tempo") stays on the filter-graph path.
+DSP_EFFECT_ADAPTERS: dict[str, tuple[Callable[[], Any], Callable[[Any, dict], None]]] = {
+    "equalizer": (dsp.Equalizer, _apply_equalizer),
+    "dynamic_range": (dsp.Compressor, _apply_dynamic_range),
+    "compressor": (dsp.Compressor, _apply_compressor),
+    "distortion": (dsp.BitCrusher, _apply_distortion),
+    "chorus": (dsp.ModulatedDelay, _apply_chorus),
+    "flanger": (dsp.ModulatedDelay, _apply_flanger),
+    "gargle": (dsp.Tremolo, _apply_gargle),
+    "echo": (dsp.MultiTapDelay, _apply_echo),
+    "reverb": (dsp.MultiTapDelay, _apply_reverb),
+    "normalization": (dsp.LoudnessNormalizer, _apply_normalization),
+}
+
+# Order matters for how effects sound when chained: EQ/dynamics first, then
+# distortion/colour effects, then modulation, with time-based echo/reverb,
+# and loudness normalization LAST so it corrects the final output level
+# regardless of what every effect before it did to the signal.
+DSP_CHAIN_ORDER = [
+    "equalizer", "dynamic_range", "compressor", "distortion",
+    "chorus", "flanger", "gargle", "echo", "reverb", "normalization",
+]
 
 
 class LiveAudioEngine:
@@ -259,6 +407,13 @@ class LiveAudioEngine:
         self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
         self._leftover_was_padded = False
         self._callback_lock = threading.Lock()
+
+        # Every effect except pitch_tempo (which still needs a real
+        # asetrate/atempo filter chain -- true pitch-shifting, not just a
+        # gain/delay/filter op) runs through this instead of the filter
+        # graph -- see dsp.py's module docstring for why. Applied in
+        # _audio_callback right where volume/pan already are.
+        self._effect_chain = dsp.EffectChain(DSP_CHAIN_ORDER)
 
         self._on_state_change: Optional[Callable[[str], None]] = None
         self._on_position_update: Optional[Callable[[float, float], None]] = None
@@ -463,37 +618,58 @@ class LiveAudioEngine:
         if self._output_stream is not None and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
             self._rebuild_output_stream()
 
+    def _sync_dsp_stage(self, effect_id: str) -> None:
+        """Push effect_id's current enabled/params into the DSP chain --
+        instant, sample-accurate, no queue/graph involvement at all
+        (unlike _drain_queue_for_immediate_effect's rate/pitch_tempo
+        path, which still needs the graph rebuilt and a queue cushion
+        since it's baked into the audio at decode time)."""
+        make, apply_params = DSP_EFFECT_ADAPTERS[effect_id]
+        state = self._effects[effect_id]
+        self._effect_chain.set_stage(effect_id, state["enabled"], state["params"], make, apply_params)
+
     def toggle_effect(self, effect_id: str, enabled: bool) -> None:
-        if effect_id in self._effects:
-            self._effects[effect_id]["enabled"] = enabled
+        if effect_id not in self._effects:
+            return
+        self._effects[effect_id]["enabled"] = enabled
+        if effect_id in DSP_EFFECT_ADAPTERS:
+            self._sync_dsp_stage(effect_id)
+        else:
             self._drain_queue_for_immediate_effect()
 
     def apply_preset(self, effect_id: str, preset_name: str, preset_params: dict[str, Any]) -> None:
-        if effect_id in self._effects:
-            self._effects[effect_id]["preset"] = preset_name
-            self._effects[effect_id]["params"] = preset_params
-            self._effects[effect_id]["enabled"] = True
+        if effect_id not in self._effects:
+            return
+        self._effects[effect_id]["preset"] = preset_name
+        self._effects[effect_id]["params"] = preset_params
+        self._effects[effect_id]["enabled"] = True
+        if effect_id in DSP_EFFECT_ADAPTERS:
+            self._sync_dsp_stage(effect_id)
+        else:
             self._drain_queue_for_immediate_effect()
 
     def get_effect_params(self, effect_id: str) -> dict[str, Any]:
         return self._effects.get(effect_id, {}).get("params", {})
 
     def apply_effect_params(self, effect_id: str, params: dict[str, Any]) -> None:
-        if effect_id in self._effects:
-            self._effects[effect_id]["params"] = params
-            self._effects[effect_id]["enabled"] = True
+        if effect_id not in self._effects:
+            return
+        self._effects[effect_id]["params"] = params
+        self._effects[effect_id]["enabled"] = True
+        if effect_id in DSP_EFFECT_ADAPTERS:
+            self._sync_dsp_stage(effect_id)
+        else:
             self._drain_queue_for_immediate_effect()
 
     # ------------------------------------------------------------------
-    # Filter graph management
+    # Filter graph management -- rate and pitch_tempo only; every other
+    # effect is applied by self._effect_chain directly in _audio_callback.
     # ------------------------------------------------------------------
     def _current_filter_spec(self) -> tuple[float, tuple[str, ...]]:
-        filters = build_effects_filters(self._rate, self._effects)
-        # A tuple, not a joined string: some filters' own args contain a
-        # raw comma (firequalizer's gain_entry=entry(freq,gain) pairs),
-        # which a later naive re-split on "," would have torn apart mid
-        # filter -- keeping each filter spec as its own list element
-        # avoids ever needing to split a joined string back apart.
+        filters = _rate_and_pitch_filters(self._rate, self._effects)
+        # A tuple, not a joined string: keeps each filter spec as its own
+        # list element so nothing downstream ever needs to re-split a
+        # joined string apart.
         return (self._rate, tuple(filters))
 
     def _build_graph(self, filter_specs: tuple[str, ...]):
@@ -620,7 +796,7 @@ class LiveAudioEngine:
     def _decode_loop(self, url: str) -> None:
         from radiomaster.utils.logging_setup import log_io
         log_io(logger, "av.open %s", url)
-        container = av.open(url, timeout=10)
+        container = av.open(url, timeout=10, metadata_errors="replace")
         try:
             stream = next((s for s in container.streams if s.type == "audio"), None)
             if stream is None:
@@ -805,6 +981,12 @@ class LiveAudioEngine:
             self._leftover_was_padded = bool(leftover_pad[0]) if leftover_pad.shape[0] else False
 
             block = self._fade_underrun_edges(block, block_pad)
+
+            # DSP effect chain, applied to normalized [-1, 1] samples
+            # before volume/pan/mute -- matches where the old ffmpeg -af
+            # chain used to sit in the pipeline (upstream of this gain
+            # stage), but live and stateful instead of baked into decode.
+            block = self._effect_chain.process(block)
 
             gain = self._volume * (10 ** (self._replaygain_db / 20) if self._replaygain_db else 1.0)
             block = block * gain

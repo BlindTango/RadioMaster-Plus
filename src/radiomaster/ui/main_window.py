@@ -366,6 +366,7 @@ class MainWindow(wx.Frame):
             station_updater=self._station_updater,
             engine=self._engine,
             set_status=self._status_bar.set_status,
+            db=self._db,
         )
         self._radio_panel.on_history_changed = self._update_transport_button_states
         self._radio_panel.on_now_playing_changed = self._on_radio_now_playing_changed
@@ -374,6 +375,7 @@ class MainWindow(wx.Frame):
         self._media_panel = MediaPlayerPanel(self._listbook, self._db, self._engine)
         self._youtube_panel = YouTubePanel(self._listbook, self._db, self._engine)
         self._downloads_panel = DownloadsPanel(self._listbook, self._db)
+        self._downloads_panel.on_stop_recording = self._radio_panel.stop_recording_by_download_id
         self._scheduler_panel = SchedulerPanel(self._listbook, self._db, self._scheduler_service)
 
         self._listbook.AddPage(self._radio_panel, "Radio")
@@ -402,6 +404,7 @@ class MainWindow(wx.Frame):
         # are the first thing reachable via Tab after content navigation
         self._now_playing = NowPlayingBar(self._content_panel)
         main_sizer.Add(self._now_playing, 0, wx.EXPAND)
+        self._radio_panel.on_recording_changed = self._on_radio_recording_changed
 
         # Lyrics/Show Notes panel
         self._lyrics_panel = LyricsPanel(self._content_panel)
@@ -954,6 +957,15 @@ class MainWindow(wx.Frame):
         # data -- see _on_lyrics_timer, which subtracts it back out.
         self._lyrics_song_start_position = self._engine.position
         self._fetch_lyrics_for_current()
+
+    def _on_radio_recording_changed(self, is_recording: bool) -> None:
+        """Update the transport bar's Record button, and refresh the
+        Downloads tab so an active manual recording (source_type=
+        "radio_recording" in the downloads table -- see RadioPanel.
+        _on_record) actually shows up there instead of only becoming
+        visible after the next unrelated Refresh click."""
+        self._now_playing.set_recording(is_recording)
+        self._downloads_panel._load_data()
 
     def _fetch_lyrics_for_current(self) -> None:
         """Fetch lyrics for the currently playing track, off the UI thread.

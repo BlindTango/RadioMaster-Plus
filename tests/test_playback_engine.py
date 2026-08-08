@@ -280,6 +280,75 @@ class TestLiveAudioEngine:
         not_faded = engine._fade_underrun_edges(block.copy(), pad)
         assert not_faded[-1, 0] == pytest.approx(1.0)  # queue has more -- no fade needed
 
+    def test_dsp_effects_produce_bounded_finite_output(self) -> None:
+        """Every effect except pitch_tempo now runs through a numpy DSP
+        chain instead of an ffmpeg filter graph (see dsp.py) -- verifies
+        each one's real built-in preset actually processes a real signal
+        without NaN/Inf/exploding output, using the real audio callback
+        (not a mock), for every effect in one pass."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine, DSP_EFFECT_ADAPTERS, CHANNELS
+        from radiomaster.ui.effects_data import BUILTIN_PRESETS
+
+        sr = 48000
+        n = 1024
+        t = np.arange(n, dtype=np.float32) / sr
+        tone = (0.3 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
+        chunk = np.column_stack([tone, tone])
+
+        for effect_id in DSP_EFFECT_ADAPTERS:
+            engine = LiveAudioEngine()
+            engine.toggle_effect(effect_id, True)
+            presets = BUILTIN_PRESETS.get(effect_id, {})
+            if presets:
+                name, params = next(iter(presets.items()))
+                engine.apply_preset(effect_id, name, params)
+            else:
+                engine.apply_preset(effect_id, "Test", {"target": -16})
+
+            outdata = np.zeros((n, CHANNELS), dtype=np.float32)
+            for _ in range(10):
+                engine._pcm_queue.put(chunk.copy())
+            for _ in range(10):
+                engine._audio_callback(outdata, n, None, None)
+                assert not np.isnan(outdata).any(), effect_id
+                assert not np.isinf(outdata).any(), effect_id
+            assert np.abs(outdata).max() <= 1.0, effect_id
+
+    def test_dsp_effects_never_touch_the_queue(self) -> None:
+        """The whole point of moving effects off the filter graph: turning
+        one on/applying a preset must not disturb a single already-queued
+        sample -- unlike pitch_tempo (still filter-graph-based), which
+        does still trim to a small cushion (see DRAIN_KEEP_CHUNKS).
+        Regression test for the "artifacts"/glitchy-on-engage complaint
+        that motivated this rewrite."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine, DSP_EFFECT_ADAPTERS, CHANNELS
+
+        engine = LiveAudioEngine()
+        for _ in range(150):
+            engine._pcm_queue.put(np.ones((1024, CHANNELS), dtype=np.float32) * 0.5)
+        full_size = engine._pcm_queue.qsize()
+
+        for effect_id in DSP_EFFECT_ADAPTERS:
+            engine.toggle_effect(effect_id, True)
+            assert engine._pcm_queue.qsize() == full_size, effect_id
+            engine.apply_effect_params(effect_id, {})
+            assert engine._pcm_queue.qsize() == full_size, effect_id
+
+    def test_pitch_tempo_still_uses_the_filter_graph_and_cushion(self) -> None:
+        """pitch_tempo is the one effect that stays on the ffmpeg filter
+        graph (true pitch-shifting, not a gain/delay/filter op a numpy
+        chain can easily do) -- confirms it still gets the queue-cushion
+        treatment the other 9 effects no longer need at all."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine, CHANNELS
+
+        engine = LiveAudioEngine()
+        for _ in range(150):
+            engine._pcm_queue.put(np.ones((1024, CHANNELS), dtype=np.float32) * 0.5)
+
+        engine.toggle_effect("pitch_tempo", True)
+        engine.apply_preset("pitch_tempo", "Chipmunk", {"cents": 400, "tempo": 1.0})
+        assert engine._pcm_queue.qsize() == engine.DRAIN_KEEP_CHUNKS
+
     def test_reconnect_closes_previous_output_stream(self) -> None:
         """A dropped-and-retried connection calls _start_output_stream()
         again on the same engine instance without going through stop()

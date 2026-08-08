@@ -358,3 +358,164 @@ class TestLyricsFetch:
             win._fetch_lyrics_for_current()
             wx.Yield()
         mock_fetch.assert_not_called()
+
+
+class TestRecording:
+    """The Record button's ffmpeg process genuinely started, but nothing
+    ever told NowPlayingBar's "Record Off"/"Recording On" button -- with
+    no other feedback, that was indistinguishable from the button doing
+    nothing at all, especially for a screen-reader user relying on the
+    button's own accessible name to know whether it worked."""
+
+    def test_record_toggles_transport_bar_button_state(self, app_and_window) -> None:
+        app, win = app_and_window
+        panel = win._radio_panel
+        panel._selected_station = Station(uuid="a", name="A", url="http://a")
+
+        assert win._now_playing._btn_record.GetLabelText() == "● Record Off"
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock()
+            panel._on_record()
+        assert win._now_playing._btn_record.GetLabelText() == "● Recording On"
+
+        panel._on_record()  # toggle off
+        assert win._now_playing._btn_record.GetLabelText() == "● Record Off"
+
+    def test_stop_does_not_halt_an_active_recording(self, app_and_window) -> None:
+        """Stop only stops playback -- a recording is a separate ffmpeg
+        connection to the stream, and by design is only ever stopped by
+        toggling Record off again, not by Stop."""
+        app, win = app_and_window
+        panel = win._radio_panel
+        panel._selected_station = Station(uuid="a", name="A", url="http://a")
+        panel.engine.stop = MagicMock()
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock()
+            panel._on_record()
+        assert len(panel._recordings) == 1
+
+        panel._on_stop()
+        assert len(panel._recordings) == 1
+        assert win._now_playing._btn_record.GetLabelText() == "● Recording On"
+
+        panel._on_record()  # toggle off explicitly
+        assert len(panel._recordings) == 0
+
+    def test_active_recording_shows_in_downloads_panel(self, app_and_window) -> None:
+        """A manual recording's ffmpeg process genuinely started, but the
+        Downloads tab is where the user actually looks to confirm it's
+        running -- without a "downloads" row, it never showed up there
+        at all even while genuinely recording.
+
+        Uses a distinctive station name and checks for that specific row
+        rather than assuming the list is otherwise empty -- app_and_window
+        uses the app's real (not test-isolated) SQLite database, which
+        can carry rows over between runs.
+        """
+        app, win = app_and_window
+        marker = f"DownloadsPanelTest-{id(self)}"
+        panel = win._radio_panel
+        panel._selected_station = Station(uuid="a", name=marker, url="http://a")
+
+        def _row(list_ctrl, title):
+            for i in range(list_ctrl.GetItemCount()):
+                if list_ctrl.GetItemText(i, 0) == title:
+                    return list_ctrl.GetItemText(i, 2)
+            return None
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock()
+            panel._on_record()
+
+        expected_title = f"Recording: {marker}"
+        assert _row(win._downloads_panel._active_list, expected_title) == "downloading"
+
+        panel._on_record()  # stop
+        assert _row(win._downloads_panel._active_list, expected_title) is None
+        assert _row(win._downloads_panel._history_list, expected_title) == "completed"
+
+    def test_multiple_stations_can_record_independently(self, app_and_window) -> None:
+        """The README (and the existing Recording Scheduler) promise
+        multiple simultaneous recordings -- the original single-value
+        self._record_process couldn't represent more than one at a time,
+        so starting a second recording silently had no way to track the
+        first one at all."""
+        app, win = app_and_window
+        panel = win._radio_panel
+        station_a = Station(uuid="rec-a", name="Rec A", url="http://a")
+        station_b = Station(uuid="rec-b", name="Rec B", url="http://b")
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = lambda *a, **k: MagicMock()
+
+            panel._selected_station = station_a
+            panel._on_record()
+            assert panel.is_station_recording(station_a) is True
+            assert panel.is_station_recording(station_b) is False
+
+            panel._selected_station = station_b
+            panel._on_record()
+            assert panel.is_station_recording(station_a) is True, (
+                "starting B's recording must not stop A's"
+            )
+            assert panel.is_station_recording(station_b) is True
+            assert len(panel._recordings) == 2
+
+            # Stopping B (currently selected) must leave A running.
+            panel._on_record()
+            assert panel.is_station_recording(station_a) is True
+            assert panel.is_station_recording(station_b) is False
+            assert len(panel._recordings) == 1
+
+    def test_record_button_reflects_the_currently_selected_station(self, app_and_window) -> None:
+        """With multiple stations potentially recording at once, the
+        button's state must track whichever station is now selected, not
+        just whatever the last Record click happened to affect."""
+        app, win = app_and_window
+        panel = win._radio_panel
+        station_a = Station(uuid="rec-a", name="Rec A", url="http://a")
+        station_b = Station(uuid="rec-b", name="Rec B", url="http://b")
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = lambda *a, **k: MagicMock()
+            panel._selected_station = station_a
+            panel._on_record()  # A is now recording
+
+        panel.tree.get_selected_station = lambda: station_b
+        panel._on_tree_sel_changed()
+        assert win._now_playing._btn_record.GetLabelText() == "● Record Off"
+
+        panel.tree.get_selected_station = lambda: station_a
+        panel._on_tree_sel_changed()
+        assert win._now_playing._btn_record.GetLabelText() == "● Recording On"
+
+    def test_downloads_panel_stops_a_specific_recording(self, app_and_window) -> None:
+        """The Downloads tab's "Stop Recording" button lets any active
+        recording be stopped directly from there, without needing to
+        first re-select that exact station back in the Radio tab."""
+        app, win = app_and_window
+        panel = win._radio_panel
+        downloads = win._downloads_panel
+        station_a = Station(uuid="rec-a", name="Rec A", url="http://a")
+        station_b = Station(uuid="rec-b", name="Rec B", url="http://b")
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = lambda *a, **k: MagicMock()
+            panel._selected_station = station_a
+            panel._on_record()
+            panel._selected_station = station_b
+            panel._on_record()
+
+        assert len(panel._recordings) == 2
+        download_id = next(iter(panel._recordings))
+
+        assert panel.stop_recording_by_download_id(download_id) is True
+        assert len(panel._recordings) == 1
+        assert download_id not in panel._recordings
+
+        # A download_id that isn't (or is no longer) active reports False
+        # instead of raising -- e.g. the Downloads panel's own guard
+        # against a stale/already-stopped selection.
+        assert panel.stop_recording_by_download_id(download_id) is False

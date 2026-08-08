@@ -86,3 +86,8 @@ def setup_logging(level: str = "info", log_dir: str | None = None) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    # comtypes logs COM (un)initialization at DEBUG from object __del__ /
+    # atexit teardown (see session_volume.py's WASAPI usage), which can fire
+    # after our own handlers' streams are already closed during interpreter
+    # shutdown -- silence it below DEBUG so it never attempts to emit.
+    logging.getLogger("comtypes").setLevel(logging.WARNING)
