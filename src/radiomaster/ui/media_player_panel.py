@@ -71,7 +71,8 @@ class MediaPlayerPanel(wx.Panel):
         if idx >= 0 and idx < len(self._paths):
             self._current_index = idx
             title = self._playlist.GetItemText(idx)
-            self._engine.play(self._paths[idx], title=title)
+            artist = self._playlist.GetItemText(idx, 1)
+            self._engine.play(self._paths[idx], title=title, artist=artist)
 
     def try_auto_advance(self) -> bool:
         """Called when the engine reports a track finished naturally. If
@@ -94,12 +95,13 @@ class MediaPlayerPanel(wx.Panel):
             return False
         self._current_index = next_index
         title = self._playlist.GetItemText(next_index)
+        artist = self._playlist.GetItemText(next_index, 1)
         from radiomaster.utils.config import ConfigManager
         fade_seconds = ConfigManager.get_instance().get("playback.crossfade_duration", default=0)
         if fade_seconds:
-            self._engine.crossfade_to(self._paths[next_index], title=title, fade_seconds=fade_seconds)
+            self._engine.crossfade_to(self._paths[next_index], title=title, artist=artist, fade_seconds=fade_seconds)
         else:
-            self._engine.play(self._paths[next_index], title=title)
+            self._engine.play(self._paths[next_index], title=title, artist=artist)
         return True
 
     def _on_add(self, event: wx.CommandEvent) -> None:
@@ -108,10 +110,31 @@ class MediaPlayerPanel(wx.Panel):
         if path:
             import os
             name = os.path.basename(path)
-            idx = self._playlist.InsertItem(self._playlist.GetItemCount(), name)
-            self._playlist.SetItem(idx, 1, "")
+            title, artist = self._read_tags(path)
+            idx = self._playlist.InsertItem(self._playlist.GetItemCount(), title or name)
+            self._playlist.SetItem(idx, 1, artist)
             self._playlist.SetItem(idx, 2, "")
             self._paths.insert(idx, path)
+
+    @staticmethod
+    def _read_tags(path: str) -> tuple[str, str]:
+        """Read Title/Artist tags via mutagen, if the file has any.
+
+        Previously the playlist's Artist column was always left blank and
+        engine.play() was never given an artist at all -- harmless for
+        playback itself, but it meant lyrics lookups for local files had
+        no artist to search with and could never match anything.
+        """
+        try:
+            import mutagen
+            audio = mutagen.File(path, easy=True)
+            if audio is None:
+                return "", ""
+            title = (audio.get("title") or [""])[0]
+            artist = (audio.get("artist") or [""])[0]
+            return title.strip(), artist.strip()
+        except Exception:
+            return "", ""
 
     def _on_clear(self, event: wx.CommandEvent) -> None:
         """Clear the playlist."""

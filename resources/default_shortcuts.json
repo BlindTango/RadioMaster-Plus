@@ -14,7 +14,6 @@
     "open_url": {"primary": "Ctrl+U", "secondary": "", "description": "Open URL"},
     "settings": {"primary": "Ctrl+,", "secondary": "", "description": "Open settings"},
     "fullscreen": {"primary": "F11", "secondary": "", "description": "Toggle fullscreen"},
-    "toggle_sidebar": {"primary": "Ctrl+B", "secondary": "", "description": "Toggle sidebar"},
     "toggle_lyrics": {"primary": "Ctrl+L", "secondary": "", "description": "Toggle lyrics panel"},
     "download_manager": {"primary": "Ctrl+D", "secondary": "", "description": "Open download manager"},
     "scheduler": {"primary": "Ctrl+R", "secondary": "", "description": "Open scheduler"},

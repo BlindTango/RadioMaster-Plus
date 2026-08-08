@@ -26,6 +26,20 @@ from radiomaster.utils.tools import get_ffmpeg
 log = logging.getLogger("radiomaster")
 
 
+def _parse_icy_song(song: str) -> tuple[str, str]:
+    """Split an ICY StreamTitle value into (artist, title).
+
+    "Artist - Title" is the overwhelming convention stations use (it's
+    literally what most broadcast software defaults to), but it's not a
+    guaranteed format -- if there's no " - " separator, treat the whole
+    string as the title with an empty artist rather than guessing wrong.
+    """
+    if " - " in song:
+        artist, _, title = song.partition(" - ")
+        return artist.strip(), title.strip()
+    return "", song.strip()
+
+
 class RadioPanel(scrolled.ScrolledPanel):
     """Radio browsing and playback panel."""
 
@@ -58,6 +72,13 @@ class RadioPanel(scrolled.ScrolledPanel):
         # Previous/Next/First/Last moved the index) so MainWindow can
         # re-enable/grey out the transport bar's history buttons.
         self.on_history_changed: Optional[Callable[[], None]] = None
+        # Called whenever ICY metadata gives us the actual song now playing
+        # (artist, title) -- as opposed to just the station name, which is
+        # all engine._current_title ever had before. MainWindow uses this
+        # to fetch lyrics for the real song; without it, lyrics lookups
+        # only ever saw the station's name as "title" and an empty artist,
+        # which no lyrics provider can match against anything.
+        self.on_now_playing_changed: Optional[Callable[[str, str], None]] = None
 
         # Search row
         search_label = wx.StaticText(self, label="&Search:")
@@ -232,6 +253,17 @@ class RadioPanel(scrolled.ScrolledPanel):
         generation = self._now_playing_generation
         threading.Thread(target=self._poll_now_playing, args=(station.url, generation), daemon=True).start()
 
+    # Each poll opens a fresh connection to the stream and reads real
+    # audio bytes up to the station's icy-metaint boundary just to reach
+    # the metadata block (see StreamReader.get_icy_metadata) -- not free,
+    # so this can't be tightened arbitrarily without meaningfully adding
+    # to a station's bandwidth bill. 8s (rather than the previous 25s)
+    # caps how long a radio song-change can go undetected -- and with it,
+    # how far the LRC sync offset in MainWindow._lyrics_song_start_position
+    # can lag behind the song's real start -- while staying a reasonable
+    # request rate for a single listening session.
+    NOW_PLAYING_POLL_SECONDS = 8
+
     def _poll_now_playing(self, url: str, generation: int) -> None:
         from radiomaster.engine.stream_reader import StreamReader
         last_song = None
@@ -243,7 +275,10 @@ class RadioPanel(scrolled.ScrolledPanel):
             if song and song != last_song:
                 last_song = song
                 wx.CallAfter(self.now_playing.set_now_playing, song)
-            time.sleep(25)
+                artist, title = _parse_icy_song(song)
+                if title and self.on_now_playing_changed:
+                    wx.CallAfter(self.on_now_playing_changed, artist, title)
+            time.sleep(self.NOW_PLAYING_POLL_SECONDS)
 
     # ------------------------------------------------------------------
     # Station history (Previous/Next/First/Last on the transport bar)

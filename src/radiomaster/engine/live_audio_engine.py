@@ -43,6 +43,11 @@ SAMPLE_RATE = 48000
 CHANNELS = 2
 BLOCKSIZE = 1024
 QUEUE_MAXSIZE = 200  # ~4s of audio at 1024-sample blocks/48kHz
+FADE_SAMPLES = 64  # ~1.3ms at 48kHz -- inaudible as a level change, but
+# long enough that a fade through it (instead of a raw sample-value jump)
+# eliminates the audible "click" a buffer-underrun boundary produces,
+# whether from real network jitter or a rate/effects change flushing the
+# queue for an immediate-feeling change (see _drain_queue_for_immediate_effect).
 
 
 def build_effects_filters(rate: float, effects: dict[str, dict[str, Any]]) -> list[str]:
@@ -252,6 +257,7 @@ class LiveAudioEngine:
         self._applied_filter_spec: tuple[float, tuple[str, ...]] | None = None
 
         self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
+        self._leftover_was_padded = False
         self._callback_lock = threading.Lock()
 
         self._on_state_change: Optional[Callable[[str], None]] = None
@@ -299,6 +305,7 @@ class LiveAudioEngine:
         self._position = 0.0
         self._reconnect_attempts = 0
         self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
+        self._leftover_was_padded = False
 
         self._state = self.STATE_BUFFERING
         self._notify_state()
@@ -347,6 +354,7 @@ class LiveAudioEngine:
         self._pcm_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
         with self._callback_lock:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
+            self._leftover_was_padded = False
         if self._decode_thread is not None:
             self._decode_thread.join(timeout=3)
             self._decode_thread = None
@@ -402,6 +410,7 @@ class LiveAudioEngine:
         """
         with self._callback_lock:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
+            self._leftover_was_padded = False
         while True:
             try:
                 self._pcm_queue.get_nowait()
@@ -617,6 +626,7 @@ class LiveAudioEngine:
                         # jumping -- clear it so the jump is immediate.
                         with self._callback_lock:
                             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
+                            self._leftover_was_padded = False
                         while True:
                             try:
                                 self._pcm_queue.get_nowait()
@@ -671,6 +681,7 @@ class LiveAudioEngine:
             channels=CHANNELS,
             dtype="float32",
             blocksize=BLOCKSIZE,
+            latency="high",
             device=self._output_device_index,
             callback=self._audio_callback,
         )
@@ -690,6 +701,7 @@ class LiveAudioEngine:
                 channels=CHANNELS,
                 dtype="float32",
                 blocksize=BLOCKSIZE,
+                latency="high",
                 device=self._output_device_index,
                 callback=self._audio_callback,
             )
@@ -701,6 +713,38 @@ class LiveAudioEngine:
         except Exception as e:
             self._notify_error(f"Failed to switch output device: {e}")
 
+    def _fade_underrun_edges(self, block: np.ndarray, pad: np.ndarray) -> np.ndarray:
+        """Ramp through every real-audio/synthesized-silence boundary in
+        *block* instead of leaving the raw sample-value jump a hard cut
+        produces -- that jump is what's audible as a "click"/"artifact",
+        not merely the underrun itself. A brief, otherwise-unnoticed gap
+        reads as a soft dropout instead of a pop this way."""
+        n = block.shape[0]
+        if n == 0:
+            return block
+        transitions = np.flatnonzero(pad[1:] != pad[:-1]) + 1
+        for idx in transitions:
+            if pad[idx]:  # real audio ending, silence starting -- fade OUT
+                start = max(0, idx - FADE_SAMPLES)
+                ramp = np.linspace(1.0, 0.0, idx - start, dtype=np.float32).reshape(-1, 1)
+                block[start:idx] *= ramp
+            else:  # silence ending, real audio resuming -- fade IN
+                end = min(n, idx + FADE_SAMPLES)
+                ramp = np.linspace(0.0, 1.0, end - idx, dtype=np.float32).reshape(-1, 1)
+                block[idx:end] *= ramp
+        # If this block's tail is real audio but the queue is now empty,
+        # taper toward zero pre-emptively in case the *next* callback
+        # comes up dry too -- there's no way to fix a hard cut after the
+        # fact once it's already been handed to the output device, so this
+        # has to happen before that cut can occur. Harmless (inaudible)
+        # even on the common case where the decode thread actually does
+        # refill in time and this fade turns out not to have been needed.
+        if not pad[-1] and self._pcm_queue.empty():
+            start = max(0, n - FADE_SAMPLES)
+            ramp = np.linspace(1.0, 0.0, n - start, dtype=np.float32).reshape(-1, 1)
+            block[start:] *= ramp
+        return block
+
     def _audio_callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
         with self._callback_lock:
             if self._pause_flag.is_set():
@@ -708,17 +752,28 @@ class LiveAudioEngine:
                 return
             need = frames
             chunks = [self._leftover]
+            pad_flags = [self._leftover_was_padded]
             have = self._leftover.shape[0]
             while have < need:
                 try:
                     chunk = self._pcm_queue.get_nowait()
+                    pad_flags.append(False)
                 except queue.Empty:
                     chunk = np.zeros((need - have, CHANNELS), dtype=np.float32)
+                    pad_flags.append(True)
                 chunks.append(chunk)
                 have += chunk.shape[0]
             combined = np.concatenate(chunks, axis=0)
+            pad_mask = np.concatenate([
+                np.full(c.shape[0], p, dtype=bool) for c, p in zip(chunks, pad_flags)
+            ])
             block = combined[:need]
+            block_pad = pad_mask[:need]
             self._leftover = combined[need:]
+            leftover_pad = pad_mask[need:]
+            self._leftover_was_padded = bool(leftover_pad[0]) if leftover_pad.shape[0] else False
+
+            block = self._fade_underrun_edges(block, block_pad)
 
             gain = self._volume * (10 ** (self._replaygain_db / 20) if self._replaygain_db else 1.0)
             block = block * gain

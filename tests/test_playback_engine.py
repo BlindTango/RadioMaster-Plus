@@ -3,6 +3,7 @@
 import sys
 import time
 
+import numpy as np
 import pytest
 from unittest.mock import patch, MagicMock
 from radiomaster.engine.playback_engine import PlaybackEngine
@@ -44,6 +45,40 @@ class TestPlaybackEngine:
         assert engine.pan == -1.0
         engine.set_pan(2.0)  # Above max
         assert engine.pan == 1.0
+
+    def test_rate_change_debounces_live_audio_calls(self) -> None:
+        """Dragging the rate slider fires set_rate() on every EVT_SLIDER
+        tick -- each one used to immediately flush LiveAudioEngine's ~4s
+        buffered queue, causing an audible dropout on every single tick
+        (reported live as "when increasing or decreasing the rate, it is
+        noticeable"). A burst of rapid ticks should collapse into exactly
+        one call to the live engine, after the burst settles."""
+        engine = PlaybackEngine()
+        engine._live = MagicMock()
+        engine._is_video_active = False
+
+        for i in range(20):
+            engine.set_rate(1.0 + i * 0.01)
+            time.sleep(0.01)  # faster than RATE_DEBOUNCE_SECONDS
+
+        assert engine._live.set_rate.call_count == 0, "should still be debounced mid-drag"
+        time.sleep(PlaybackEngine.RATE_DEBOUNCE_SECONDS + 0.15)
+        assert engine._live.set_rate.call_count == 1
+        engine._live.set_rate.assert_called_once_with(pytest.approx(1.19))
+
+    def test_stop_cancels_pending_rate_timer(self) -> None:
+        """Same reasoning as test_stop_cancels_pending_auto_reconnect: a
+        rate change scheduled just before Stop must not fire afterward
+        against a since-replaced/stopped LiveAudioEngine."""
+        engine = PlaybackEngine()
+        engine._live = MagicMock()
+        engine._is_video_active = False
+        engine.set_rate(2.0)
+        assert engine._rate_timer is not None
+        engine.stop()
+        assert engine._rate_timer is None
+        time.sleep(PlaybackEngine.RATE_DEBOUNCE_SECONDS + 0.15)
+        engine._live.set_rate.assert_not_called()
 
     def test_toggle_effect(self) -> None:
         engine = PlaybackEngine()
@@ -181,6 +216,69 @@ class TestLiveAudioEngine:
         assert engine.volume == 0.3
         assert engine.pan == -0.5
         assert engine.rate == 1.5
+
+    def test_fade_underrun_edges_no_hard_jumps(self) -> None:
+        """A buffer underrun (network jitter, or a rate/effects change
+        flushing the queue) used to hand the output device a literal
+        1.0 -> 0.0 sample-value jump, audible as a click/pop -- reported
+        as "occasional artifacts in the stream". _fade_underrun_edges()
+        should ramp through every real-audio/silence boundary instead."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine, CHANNELS
+
+        engine = LiveAudioEngine.__new__(LiveAudioEngine)
+        engine._pcm_queue = MagicMock(empty=MagicMock(return_value=True))
+
+        n = 1024
+        block = np.ones((n, CHANNELS), dtype=np.float32)
+        pad = np.zeros(n, dtype=bool)
+        pad[500:] = True
+        block[500:] = 0.0  # real code always synthesizes literal zeros for pad chunks
+
+        faded = engine._fade_underrun_edges(block.copy(), pad)
+
+        max_jump = np.abs(np.diff(faded[:, 0])).max()
+        assert max_jump < 0.02, f"adjacent-sample jump too large: {max_jump}"
+        assert faded[400, 0] == pytest.approx(1.0)  # untouched, well before the fade zone
+        assert faded[600, 0] == pytest.approx(0.0)  # fully silent past the fade zone
+
+    def test_fade_underrun_edges_fade_in_on_resume(self) -> None:
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine, CHANNELS
+
+        engine = LiveAudioEngine.__new__(LiveAudioEngine)
+        engine._pcm_queue = MagicMock(empty=MagicMock(return_value=True))
+
+        n = 1024
+        block = np.zeros((n, CHANNELS), dtype=np.float32)
+        pad = np.ones(n, dtype=bool)
+        pad[700:] = False
+        block[700:] = 1.0
+
+        faded = engine._fade_underrun_edges(block.copy(), pad)
+
+        assert faded[699, 0] == pytest.approx(0.0)
+        assert faded[800, 0] == pytest.approx(1.0)  # fully resumed well after the fade zone
+        max_jump = np.abs(np.diff(faded[:, 0])).max()
+        assert max_jump < 0.02
+
+    def test_fade_underrun_edges_preemptive_tail_fade_when_queue_empty(self) -> None:
+        """No hard cut can be fixed after the fact once handed to the
+        output device -- if this block is about to run the queue dry,
+        taper its tail pre-emptively in case the *next* callback underruns."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine, CHANNELS
+
+        engine = LiveAudioEngine.__new__(LiveAudioEngine)
+        n = 1024
+        block = np.ones((n, CHANNELS), dtype=np.float32)
+        pad = np.zeros(n, dtype=bool)  # entirely real audio
+
+        engine._pcm_queue = MagicMock(empty=MagicMock(return_value=True))
+        faded = engine._fade_underrun_edges(block.copy(), pad)
+        assert faded[-1, 0] == pytest.approx(0.0)
+        assert faded[900, 0] == pytest.approx(1.0)  # well before the tail, untouched
+
+        engine._pcm_queue = MagicMock(empty=MagicMock(return_value=False))
+        not_faded = engine._fade_underrun_edges(block.copy(), pad)
+        assert not_faded[-1, 0] == pytest.approx(1.0)  # queue has more -- no fade needed
 
     def test_reconnect_closes_previous_output_stream(self) -> None:
         """A dropped-and-retried connection calls _start_output_stream()

@@ -13,9 +13,10 @@ same wx.Window.Navigate() calls wx's own keyboard handling makes for a
 real Tab press, without needing a running MainLoop or OS-level input.
 """
 
+import time
 import wx
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from radiomaster.app import RadioMasterApp
 from radiomaster.services.station_api import Station
 
@@ -262,3 +263,95 @@ def _is_descendant_of(window: wx.Window, ancestor: wx.Window) -> bool:
             return True
         w = w.GetParent()
     return False
+
+
+class TestLyricsFetch:
+    """engine._current_title/_current_artist previously only ever held
+    the station's own name and an empty artist (set once at play() time),
+    which no lyrics provider could match against anything -- lyrics never
+    showed up for radio. _on_radio_now_playing_changed (wired to
+    RadioPanel.on_now_playing_changed, fired from parsed ICY metadata) is
+    what actually gives the engine the real song."""
+
+    def test_now_playing_change_updates_engine_track_info(self, app_and_window) -> None:
+        app, win = app_and_window
+        win._engine._current_title = "My Station Name"
+        win._engine._current_artist = ""
+
+        with patch("radiomaster.services.lyrics_service.LyricsService.fetch_lyrics", return_value=None):
+            win._on_radio_now_playing_changed("Real Artist", "Real Song")
+
+        assert win._engine._current_artist == "Real Artist"
+        assert win._engine._current_title == "Real Song"
+
+    def test_now_playing_change_captures_song_start_offset(self, app_and_window) -> None:
+        """A radio station's play() only ever runs once, when it's tuned
+        in -- engine.position keeps counting from then, not from when a
+        song heard partway through the stream actually started. Without
+        capturing an offset at the moment the song is detected, LRC
+        highlighting would compare against "seconds since tuned in"
+        instead of "seconds into this song" and jump straight to the
+        last line."""
+        app, win = app_and_window
+        win._engine._live._position = 1200.0  # 20 minutes into the station
+        win._lyrics_song_start_position = 0.0
+
+        with patch("radiomaster.services.lyrics_service.LyricsService.fetch_lyrics", return_value=None):
+            win._on_radio_now_playing_changed("Real Artist", "Real Song")
+
+        assert win._lyrics_song_start_position == 1200.0
+
+    def test_lyrics_timer_highlights_relative_to_song_start(self, app_and_window) -> None:
+        app, win = app_and_window
+        win._engine._live._state = "playing"
+        win._lyrics_song_start_position = 1200.0
+        win._lyrics_panel._lrc_lines = [(0.0, "line zero"), (5.0, "line five"), (10.0, "line ten")]
+        win._lyrics_panel.highlight_sentence = MagicMock()
+
+        # 3s into the song -> raw engine position is 1203, well past every
+        # LRC timestamp; only the offset-adjusted value (3.0) picks line 0.
+        win._engine._live._position = 1203.0
+        win._on_lyrics_timer(None)
+        win._lyrics_panel.highlight_sentence.assert_called_with(0)
+
+        win._engine._live._position = 1207.0
+        win._on_lyrics_timer(None)
+        win._lyrics_panel.highlight_sentence.assert_called_with(1)
+
+    def test_new_track_resets_song_start_offset_to_zero(self, app_and_window) -> None:
+        """Local files/podcasts/etc: play() itself is the song starting,
+        so engine.position is already correct with no offset -- a leftover
+        nonzero offset from a previous radio session must not leak in."""
+        app, win = app_and_window
+        win._lyrics_song_start_position = 1200.0
+        win._engine._current_title = "Some Local Track"
+        with patch("radiomaster.services.lyrics_service.LyricsService.fetch_lyrics", return_value=None):
+            win._on_engine_state("playing")
+        assert win._lyrics_song_start_position == 0.0
+
+    def test_fetch_lyrics_uses_lrc_key_not_the_old_wrong_keys(self, app_and_window) -> None:
+        """Regression test for the exact bug that silently broke synced
+        lyrics: LyricsService.fetch_lyrics() returns synced lyrics under
+        the "lrc" key, but the caller used to read "lyrics_synced"/
+        "lrc_data" instead, which never existed in the actual result."""
+        app, win = app_and_window
+        win._engine._current_artist = "Real Artist"
+        win._engine._current_title = "Real Song"
+
+        fake_result = {"lyrics": "line one\nline two", "lrc": "[00:01.00]line one\n[00:05.00]line two"}
+        with patch("radiomaster.services.lyrics_service.LyricsService.fetch_lyrics", return_value=fake_result):
+            win._fetch_lyrics_for_current()
+            deadline = time.time() + 3
+            while time.time() < deadline and not getattr(win._lyrics_panel, "_lrc_lines", None):
+                wx.Yield()
+                time.sleep(0.05)
+
+        assert win._lyrics_panel._lrc_lines == [(1.0, "line one"), (5.0, "line two")]
+
+    def test_fetch_lyrics_skipped_when_no_title(self, app_and_window) -> None:
+        app, win = app_and_window
+        win._engine._current_title = ""
+        with patch("radiomaster.services.lyrics_service.LyricsService.fetch_lyrics") as mock_fetch:
+            win._fetch_lyrics_for_current()
+            wx.Yield()
+        mock_fetch.assert_not_called()

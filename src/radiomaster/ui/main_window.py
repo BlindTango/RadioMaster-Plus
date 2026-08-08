@@ -49,6 +49,16 @@ class MainWindow(wx.Frame):
         self._engine.restore_effects_state(self._config.get("effects", default={}))
         self._is_muted = False
         self._pre_mute_volume = 0.8
+        # engine.position counts seconds since play() was called -- correct
+        # as a "seconds into this song" clock for local files/podcasts/etc
+        # (play() IS the song starting), but for radio play() only ever
+        # happens once, when the station is tuned in; a new song starting
+        # mid-stream doesn't reset it. This offset is engine.position at
+        # the moment a new song was *detected* (see
+        # _on_radio_now_playing_changed), subtracted back out in
+        # _on_lyrics_timer so LRC highlighting compares against seconds
+        # into the current SONG, not seconds since the station was tuned in.
+        self._lyrics_song_start_position = 0.0
         # Playback-related settings (output device, normalization,
         # ReplayGain, auto-reconnect, radio browsing prefs, accessibility)
         # are all applied together at the end of __init__ via
@@ -93,6 +103,7 @@ class MainWindow(wx.Frame):
 
         self._setup_menu_bar()
         self._setup_ui()
+        self._sync_view_menu_checks()
         self._setup_engine_callbacks()
         self._setup_accelerators()
         self._bind_events()
@@ -228,17 +239,22 @@ class MainWindow(wx.Frame):
         file_menu.Append(wx.ID_EXIT, "E&xit\tAlt+F4")
         menubar.Append(file_menu, "&File")
 
-        # View menu
+        # View menu -- toggle_equalizer/toggle_lyrics/fullscreen are real
+        # checkable items synced to actual state via _sync_view_menu_checks()
+        # (called once after _setup_ui(), since e.g. _lyrics_panel doesn't
+        # exist yet at this point in __init__) and after each toggle action.
+        self._view_toggle_items: dict[str, wx.MenuItem] = {}
         view_menu = wx.Menu()
-        self._menu_ids["toggle_sidebar"] = wx.NewIdRef()
-        view_menu.Append(self._menu_ids["toggle_sidebar"], "Toggle &Sidebar\tCtrl+B")
         self._menu_ids["toggle_equalizer"] = wx.NewIdRef()
-        view_menu.Append(self._menu_ids["toggle_equalizer"], "Toggle &Equalizer\tCtrl+Shift+E")
+        self._view_toggle_items["toggle_equalizer"] = view_menu.AppendCheckItem(
+            self._menu_ids["toggle_equalizer"], "Toggle &Equalizer\tCtrl+Shift+E")
         self._menu_ids["toggle_lyrics"] = wx.NewIdRef()
-        view_menu.Append(self._menu_ids["toggle_lyrics"], "Toggle &Lyrics Panel\tCtrl+L")
+        self._view_toggle_items["toggle_lyrics"] = view_menu.AppendCheckItem(
+            self._menu_ids["toggle_lyrics"], "Toggle &Lyrics Panel\tCtrl+L")
         view_menu.AppendSeparator()
         self._menu_ids["fullscreen"] = wx.NewIdRef()
-        view_menu.Append(self._menu_ids["fullscreen"], "&Fullscreen\tF11")
+        self._view_toggle_items["fullscreen"] = view_menu.AppendCheckItem(
+            self._menu_ids["fullscreen"], "&Fullscreen\tF11")
 
         # Theme submenu
         theme_menu = wx.Menu()
@@ -352,6 +368,7 @@ class MainWindow(wx.Frame):
             set_status=self._status_bar.set_status,
         )
         self._radio_panel.on_history_changed = self._update_transport_button_states
+        self._radio_panel.on_now_playing_changed = self._on_radio_now_playing_changed
         self._podcast_panel = PodcastPanel(self._listbook, self._db, self._engine)
         self._audiobook_panel = AudiobookPanel(self._listbook, self._db, self._engine)
         self._media_panel = MediaPlayerPanel(self._listbook, self._db, self._engine)
@@ -415,7 +432,15 @@ class MainWindow(wx.Frame):
         """Update LRC line highlighting based on current playback position."""
         if self._engine.state != "playing":
             return
-        pos = self._engine.position
+        # For local files/podcasts/etc, _lyrics_song_start_position is 0
+        # (play() itself is the song starting, so engine.position is
+        # already "seconds into this song"). For radio, it's the position
+        # recorded when the current song was detected via ICY metadata --
+        # subtracting it converts "seconds since the station was tuned
+        # in" into "seconds into the current song", which is what the LRC
+        # timestamps are actually relative to. Clamped at 0 in case a
+        # song-change notification races slightly ahead of position itself.
+        pos = max(0.0, self._engine.position - self._lyrics_song_start_position)
         # Find the current LRC line
         if hasattr(self._lyrics_panel, '_lrc_lines') and self._lyrics_panel._lrc_lines:
             current_idx = -1
@@ -535,7 +560,6 @@ class MainWindow(wx.Frame):
             (wx.ACCEL_CTRL, ord('R'), self._menu_ids["scheduler"]),
             (wx.ACCEL_CTRL, ord('I'), self._menu_ids["track_identifier"]),
             (wx.ACCEL_CTRL, ord('K'), self._menu_ids["shortcut_editor"]),
-            (wx.ACCEL_CTRL, ord('B'), self._menu_ids["toggle_sidebar"]),
             (wx.ACCEL_CTRL, ord('U'), self._menu_ids["open_url"]),
             (*resolve('search', wx.ACCEL_CTRL, ord('F')), search_id),
             (*resolve('toggle_sleep_timer', wx.ACCEL_CTRL, ord('T')), self._menu_ids["sleep_timer"]),
@@ -626,7 +650,6 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=wx.ID_EXIT)
 
         # View menu
-        self.Bind(wx.EVT_MENU, lambda e: self._toggle_sidebar(), id=self._menu_ids["toggle_sidebar"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_equalizer(), id=self._menu_ids["toggle_equalizer"])
         self.Bind(wx.EVT_MENU, lambda e: self._toggle_lyrics(), id=self._menu_ids["toggle_lyrics"])
         self.Bind(wx.EVT_MENU, lambda e: self._toggle_fullscreen(), id=self._menu_ids["fullscreen"])
@@ -848,8 +871,13 @@ class MainWindow(wx.Frame):
         if state == "playing" and self._engine._current_url:
             self._restore_play_progress()
 
-        # Fetch lyrics when a new track starts playing
+        # Fetch lyrics when a new track starts playing. play() just reset
+        # engine.position to 0, so for a genuinely new track (as opposed
+        # to a radio station's song changing mid-stream, which doesn't
+        # call play() again -- see _on_radio_now_playing_changed) that's
+        # also correctly "seconds into this song" with no offset needed.
         if state == "playing" and self._engine._current_title:
+            self._lyrics_song_start_position = 0.0
             self._fetch_lyrics_for_current()
 
     def _save_play_progress(self) -> None:
@@ -893,24 +921,59 @@ class MainWindow(wx.Frame):
         except Exception:
             pass
 
+    def _on_radio_now_playing_changed(self, artist: str, title: str) -> None:
+        """ICY metadata gave us the actual song now playing, not just the
+        station name -- engine._current_title/_current_artist otherwise
+        only ever held the station's own name (set once at play() time)
+        and an empty artist, which no lyrics provider can match against
+        anything. This is what actually makes lyrics work for radio."""
+        self._engine._current_artist = artist
+        self._engine._current_title = title
+        # A radio station's play() only ever runs once, when it's tuned
+        # in -- engine.position keeps counting from then, not from when
+        # this new song actually started. Recording position *now* (the
+        # moment the song change was detected) as the offset is the best
+        # approximation available without server-side exact song-start
+        # data -- see _on_lyrics_timer, which subtracts it back out.
+        self._lyrics_song_start_position = self._engine.position
+        self._fetch_lyrics_for_current()
+
     def _fetch_lyrics_for_current(self) -> None:
-        """Fetch lyrics for the currently playing track."""
+        """Fetch lyrics for the currently playing track, off the UI thread.
+
+        LyricsService.fetch_lyrics() does blocking network I/O across up
+        to 4 providers, each with its own timeout -- running it
+        synchronously here (this is called from engine state-change and
+        now-playing callbacks, both already marshalled onto the UI thread
+        via wx.CallAfter) would freeze the whole app for several seconds
+        every time a track or song changes.
+        """
+        import threading
         from radiomaster.services.lyrics_service import LyricsService
         artist = self._engine._current_artist or ""
         title = self._engine._current_title or ""
         if not title:
             return
-        result = LyricsService.fetch_lyrics(artist, title)
-        if result:
-            text = result.get("lyrics", "") or result.get("lyrics_text", "")
-            synced = result.get("lyrics_synced") or result.get("lrc_data", "")
+        self._lyrics_panel.clear()
+
+        def worker() -> None:
+            result = LyricsService.fetch_lyrics(artist, title)
+            if not result:
+                return
+            text = result.get("lyrics", "")
+            synced = result.get("lrc", "")
             if synced:
                 lines = LyricsService.parse_lrc(synced)
                 if lines:
-                    self._lyrics_panel.set_lrc_lines([(l["time"], l["text"]) for l in lines])
+                    wx.CallAfter(
+                        self._lyrics_panel.set_lrc_lines,
+                        [(l["time"], l["text"]) for l in lines],
+                    )
                     return
             if text:
-                self._lyrics_panel.set_content(text)
+                wx.CallAfter(self._lyrics_panel.set_content, text)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_engine_position(self, position: float, duration: float) -> None:
         """Handle playback position updates."""
@@ -953,11 +1016,23 @@ class MainWindow(wx.Frame):
         """Show the equalizer dialog."""
         dlg = EqualizerDialog(self)
         dlg.on_bands_changed(lambda bands: self._engine.apply_effect_params("equalizer", bands))
-        if dlg.ShowModal() == wx.ID_OK and dlg.is_enabled():
-            self._engine.toggle_effect("equalizer", True)
-            bands = dlg.get_band_values()
-            self._engine.apply_effect_params("equalizer", bands)
+        if dlg.ShowModal() == wx.ID_OK:
+            # Previously only ever turned the equalizer ON (never off) --
+            # unchecking "enabled" and clicking OK silently left it exactly
+            # as active as before, which would also have made the View
+            # menu's new checkmark lie about the actual state.
+            self._engine.toggle_effect("equalizer", dlg.is_enabled())
+            if dlg.is_enabled():
+                bands = dlg.get_band_values()
+                self._engine.apply_effect_params("equalizer", bands)
+            # Keep the Effects > Equalizer submenu's own On/Off checkbox in
+            # sync too -- that's a separate mechanism (EffectsMenu.set_enabled)
+            # this dialog doesn't otherwise go through.
+            self._effects_menu.set_enabled("equalizer", dlg.is_enabled())
         dlg.Destroy()
+        self._view_toggle_items["toggle_equalizer"].Check(
+            self._engine._effects.get("equalizer", {}).get("enabled", False)
+        )
 
     def _show_shortcut_editor(self) -> None:
         """Show the keyboard shortcut editor."""
@@ -1059,9 +1134,19 @@ class MainWindow(wx.Frame):
                 f.write(opml)
         dlg.Destroy()
 
-    def _toggle_sidebar(self) -> None:
-        """Toggle the sidebar visibility."""
-        self._status_bar.set_status("Sidebar toggled")
+    def _sync_view_menu_checks(self) -> None:
+        """Sync the View menu's checkable items to actual state -- called
+        once at startup (after _setup_ui(), since e.g. _lyrics_panel
+        doesn't exist yet when the menu itself is built) and again after
+        each toggle action, since a wx checkable menu item auto-flips its
+        own check mark on click before the handler runs, which doesn't
+        necessarily match what the action actually did (e.g. the Equalizer
+        dialog can be cancelled without changing anything)."""
+        self._view_toggle_items["toggle_equalizer"].Check(
+            self._engine._effects.get("equalizer", {}).get("enabled", False)
+        )
+        self._view_toggle_items["toggle_lyrics"].Check(self._lyrics_panel.IsShown())
+        self._view_toggle_items["fullscreen"].Check(self.IsFullScreen())
 
     def _toggle_lyrics(self) -> None:
         """Toggle the lyrics panel visibility."""
@@ -1071,6 +1156,7 @@ class MainWindow(wx.Frame):
         # laying out the Frame doesn't re-flow content_panel's *own*
         # sizer (the one that actually holds lyrics_panel) on its own.
         self._content_panel.Layout()
+        self._view_toggle_items["toggle_lyrics"].Check(self._lyrics_panel.IsShown())
 
     def _toggle_fullscreen(self) -> None:
         """Toggle fullscreen mode."""
@@ -1078,6 +1164,7 @@ class MainWindow(wx.Frame):
             self.ShowFullScreen(False)
         else:
             self.ShowFullScreen(True)
+        self._view_toggle_items["fullscreen"].Check(self.IsFullScreen())
 
     def _apply_theme(self, theme_key: str) -> None:
         """Apply a theme."""

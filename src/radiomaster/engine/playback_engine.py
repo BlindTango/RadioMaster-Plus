@@ -57,6 +57,8 @@ class PlaybackEngine:
         self._reconnect_timer: threading.Timer | None = None
         self._volume_timer: threading.Timer | None = None
         self._volume_lock = threading.Lock()
+        self._rate_timer: threading.Timer | None = None
+        self._rate_lock = threading.Lock()
         self._crossfade_generation = 0
 
         # --- Shared state (both backends) ---
@@ -253,6 +255,10 @@ class PlaybackEngine:
             if self._volume_timer is not None:
                 self._volume_timer.cancel()
                 self._volume_timer = None
+        with self._rate_lock:
+            if self._rate_timer is not None:
+                self._rate_timer.cancel()
+                self._rate_timer = None
         if self._process:
             try:
                 self._process.terminate()
@@ -362,11 +368,29 @@ class PlaybackEngine:
                 return
             time.sleep(delay)
 
+    # Unlike volume/pan (a pure numpy gain multiply, free to apply on every
+    # tick), a rate change rebuilds LiveAudioEngine's filter graph AND
+    # discards its ~4s buffered queue so the new rate is audible right
+    # away (see LiveAudioEngine._drain_queue_for_immediate_effect) --
+    # cheap once, but dragging the rate slider fires this many times a
+    # second, and each call was flushing the buffer and forcing an
+    # audible dropout while the decode thread caught back up over the
+    # network. Debouncing collapses a drag to a single flush after the
+    # user settles, matching the VOLUME_DEBOUNCE_SECONDS pattern above.
+    RATE_DEBOUNCE_SECONDS = 0.25
+
     def set_rate(self, rate: float) -> None:
         """Set playback rate (0.5 to 3.0), applied live for audio."""
         self._rate = max(0.5, min(3.0, rate))
         if not self._is_video_active:
-            self._live.set_rate(self._rate)
+            with self._rate_lock:
+                if self._rate_timer is not None:
+                    self._rate_timer.cancel()
+                self._rate_timer = threading.Timer(
+                    self.RATE_DEBOUNCE_SECONDS, self._live.set_rate, args=(self._rate,)
+                )
+                self._rate_timer.daemon = True
+                self._rate_timer.start()
             return
         if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
             self._schedule_restart()

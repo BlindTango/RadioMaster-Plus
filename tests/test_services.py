@@ -50,6 +50,31 @@ class TestLyricsService:
         assert LyricsService.parse_lrc("") == []
 
 
+class TestParseIcySong:
+    """Radio's ICY StreamTitle metadata is the only source of a real song
+    artist/title for lyrics lookups -- engine._current_title otherwise
+    only ever held the station's own name, and no caller anywhere in the
+    app ever passed a real artist, which is why lyrics never showed up."""
+
+    def test_splits_artist_and_title(self) -> None:
+        from radiomaster.ui.radio_panel import _parse_icy_song
+        assert _parse_icy_song("Groove Armada - Superstylin") == ("Groove Armada", "Superstylin")
+
+    def test_no_separator_falls_back_to_title_only(self) -> None:
+        from radiomaster.ui.radio_panel import _parse_icy_song
+        assert _parse_icy_song("Just A Title") == ("", "Just A Title")
+
+    def test_splits_only_on_first_separator(self) -> None:
+        from radiomaster.ui.radio_panel import _parse_icy_song
+        artist, title = _parse_icy_song("DJ Shadow - Building Steam - Extended Mix")
+        assert artist == "DJ Shadow"
+        assert title == "Building Steam - Extended Mix"
+
+    def test_empty_string(self) -> None:
+        from radiomaster.ui.radio_panel import _parse_icy_song
+        assert _parse_icy_song("") == ("", "")
+
+
 class TestRadioBrowser:
     """Test radio browser client."""
 
@@ -107,3 +132,25 @@ class TestUpdateChecker:
             with pytest.raises(UpdateCheckError) as exc_info:
                 checker.check("1.0.0")
         assert "limit has been reached" not in str(exc_info.value).lower()
+
+
+class TestMediaPlayerReadTags:
+    """The playlist's Artist column was always left blank and engine.play()
+    never got an artist for local files -- harmless for playback, but it
+    meant lyrics lookups for local files had no artist to search with."""
+
+    def test_reads_title_and_artist(self) -> None:
+        from radiomaster.ui.media_player_panel import MediaPlayerPanel
+        fake_audio = {"title": ["Test Song"], "artist": ["Test Artist"]}
+        with patch("mutagen.File", return_value=fake_audio):
+            assert MediaPlayerPanel._read_tags("fake.mp3") == ("Test Song", "Test Artist")
+
+    def test_no_tags_returns_empty(self) -> None:
+        from radiomaster.ui.media_player_panel import MediaPlayerPanel
+        with patch("mutagen.File", return_value=None):
+            assert MediaPlayerPanel._read_tags("fake.mp3") == ("", "")
+
+    def test_unreadable_file_does_not_raise(self) -> None:
+        from radiomaster.ui.media_player_panel import MediaPlayerPanel
+        with patch("mutagen.File", side_effect=Exception("boom")):
+            assert MediaPlayerPanel._read_tags("fake.mp3") == ("", "")
