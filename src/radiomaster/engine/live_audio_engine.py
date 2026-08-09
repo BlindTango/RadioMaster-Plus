@@ -419,6 +419,7 @@ class LiveAudioEngine:
         self._on_position_update: Optional[Callable[[float, float], None]] = None
         self._on_error: Optional[Callable[[str], None]] = None
         self._on_track_finished: Optional[Callable[[], None]] = None
+        self._on_buffering: Optional[Callable[[int], None]] = None
 
     # ------------------------------------------------------------------
     # Callback setters (mirrors PlaybackEngine's API)
@@ -439,6 +440,13 @@ class LiveAudioEngine:
         callers can auto-advance a playlist without also triggering on a
         manual Stop press."""
         self._on_track_finished = cb
+
+    def on_buffering(self, cb: Callable[[int], None]) -> None:
+        """Reports how full the decode-ahead PCM queue is (0-100), the
+        same cadence as on_position_update -- was defined on
+        PlaybackEngine as a pass-through but never actually fed a value
+        from anywhere, so nothing calling it ever saw a real number."""
+        self._on_buffering = cb
 
     def _notify_state(self) -> None:
         if self._on_state_change:
@@ -481,6 +489,9 @@ class LiveAudioEngine:
         while not self._stop_flag.is_set():
             if self._on_position_update:
                 self._on_position_update(self._position, self._duration)
+            if self._on_buffering:
+                percent = min(100, int(self._pcm_queue.qsize() * 100 / QUEUE_MAXSIZE))
+                self._on_buffering(percent)
             time.sleep(0.5)
 
     def stop(self, wait: bool = True) -> None:

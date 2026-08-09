@@ -113,6 +113,7 @@ class PlaybackEngine:
         )
         live.on_error(lambda m: self._notify_error(m))
         live.on_track_finished(lambda: self._on_track_finished() if self._on_track_finished else None)
+        live.on_buffering(lambda p: self._on_buffering(p) if self._on_buffering else None)
 
     # ---------------------------------------------------------------------
     # Public accessors

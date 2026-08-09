@@ -513,6 +513,7 @@ class MainWindow(wx.Frame):
         self._engine.on_state_change(lambda state: wx.CallAfter(self._on_engine_state, state))
         self._engine.on_position_update(lambda pos, dur: wx.CallAfter(self._on_engine_position, pos, dur))
         self._engine.on_error(lambda message: wx.CallAfter(self._on_engine_error, message))
+        self._engine.on_buffering(lambda percent: wx.CallAfter(self._status_bar.set_buffering, percent))
         # on_track_finished is a single shared signal (not per-tab), so
         # each candidate gets a turn to claim it via its own "was this
         # actually my track" guard -- MediaPlayerPanel first (existing
@@ -968,6 +969,12 @@ class MainWindow(wx.Frame):
     def _on_engine_state(self, state: str) -> None:
         """Handle playback engine state changes."""
         self._status_bar.set_status(_(state.capitalize()))
+        self._status_bar.set_source(self._engine._current_title if state != "stopped" else "")
+        if state == "stopped":
+            # Nothing playing -- clear the now-stale time/buffer readouts
+            # instead of leaving the last track's numbers stuck on screen.
+            self._status_bar.set_time_info(0.0, 0.0)
+            self._status_bar.set_buffering(100)
         self._now_playing.set_playing(state == "playing")
         self._update_transport_button_states()
         if state == "playing" and self._engine.is_video and not self._video_frame:
@@ -1099,9 +1106,14 @@ class MainWindow(wx.Frame):
         self._now_playing.set_time(position, duration)
         if self._video_frame:
             self._video_frame.set_time(position, duration)
+        # duration > 0 (a finite podcast episode) shows elapsed/total/
+        # remaining; duration == 0 (an unbounded radio stream) shows just
+        # elapsed -- how long the current connection has been playing.
+        self._status_bar.set_time_info(position, duration)
 
     def _on_engine_error(self, message: str) -> None:
         """Handle playback errors."""
+        self._status_bar.set_status(f"Error: {message}")
         wx.MessageBox(message, "Playback Error", wx.OK | wx.ICON_ERROR)
 
     def _on_global_search(self, query: str, scope: str) -> None:
