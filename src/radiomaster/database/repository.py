@@ -254,6 +254,25 @@ class DownloadRepository:
         self._db.commit()
         return cursor.lastrowid
 
+    def add_completed(self, url: str, title: str, source_type: str = "", file_path: str = "") -> int:
+        """Inserts a download row that's already finished -- e.g. one
+        track of a split radio recording, finalized independently of
+        the recording session's own still-active row (see RadioPanel.
+        _finalize_current_segment). Shows up in Download History
+        immediately instead of waiting for something else to mark it
+        complete."""
+        cursor = self._db.execute(
+            """INSERT INTO downloads (url, title, source_type, status, progress, file_path)
+            VALUES (?, ?, ?, 'completed', 100, ?)""",
+            (url, title, source_type, file_path),
+        )
+        self._db.commit()
+        return cursor.lastrowid
+
+    def delete(self, download_id: int) -> None:
+        self._db.execute("DELETE FROM downloads WHERE id = ?", (download_id,))
+        self._db.commit()
+
     def get_queued(self) -> list[dict[str, Any]]:
         return self._db.fetchall(
             "SELECT * FROM downloads WHERE status IN ('queued', 'downloading') ORDER BY id"

@@ -102,6 +102,23 @@ class RadioMasterApp(wx.App):
         # Initialize services
         max_concurrent = self._config.get("downloads", "max_concurrent", default=3)
         self._download_manager = DownloadManager(max_concurrent)
+        # Without this wiring, DownloadManager ran real yt-dlp/podcast
+        # downloads to completion but never told the "downloads" table --
+        # every row it created stayed at its insert-time status forever
+        # (queued/downloading), so the Downloads tab's Active list showed
+        # a download that had actually already finished (or failed) with
+        # no way to tell, and it never moved to History.
+        from radiomaster.database.repository import DownloadRepository
+        download_repo = DownloadRepository(self._db)
+        self._download_manager.on_progress(
+            lambda did, pct: download_repo.update_progress(did, pct, status="downloading")
+        )
+        self._download_manager.on_complete(
+            lambda did: download_repo.update_progress(did, 100.0, status="completed")
+        )
+        self._download_manager.on_error(
+            lambda did, msg: download_repo.update_progress(did, 0.0, status="failed")
+        )
         self._download_manager.start()
 
         from radiomaster.utils.paths import get_recordings_dir

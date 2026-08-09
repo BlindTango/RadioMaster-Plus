@@ -595,9 +595,28 @@ class MainWindow(wx.Frame):
             id_ref = wx.NewIdRef()
             entries.append((wx.ACCEL_CTRL, ord(str(tab_idx + 1)), id_ref))
             self.Bind(wx.EVT_MENU, lambda e, i=tab_idx: self._switch_tab(i), id=id_ref)
-        # Ctrl+Tab / Ctrl+Shift+Tab is handled by _on_char_hook (same as settings dialog)
         # Rebuild the accelerator table with tab shortcuts included
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
+
+        # Ctrl+Tab / Ctrl+Shift+Tab -- same pattern as SettingsDialog's own
+        # _on_char_hook. An AcceleratorTable entry can't express this: Tab
+        # has no ord() and wx reserves plain/Ctrl+Tab for its own focus
+        # navigation before an accelerator ever sees it, so it has to be
+        # caught earlier via EVT_CHAR_HOOK on the frame instead.
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+
+    def _on_char_hook(self, evt: wx.KeyEvent) -> None:
+        if evt.ControlDown() and evt.GetKeyCode() == wx.WXK_TAB:
+            count = self._listbook.GetPageCount()
+            if count:
+                idx = self._listbook.GetSelection()
+                if idx == wx.NOT_FOUND:
+                    idx = 0
+                new_idx = (idx - 1) if evt.ShiftDown() else (idx + 1)
+                new_idx %= count
+                self._switch_tab(new_idx)
+        else:
+            evt.Skip()
 
     def _on_stop_accel(self) -> None:
         """Handle the global Stop accelerator (default Ctrl+Shift+S)."""

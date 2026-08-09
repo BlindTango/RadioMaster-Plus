@@ -23,6 +23,20 @@ class DownloadsPanel(wx.Panel):
         self._setup_ui()
         self._load_data()
 
+        # Progress/status only ever changed on disk (DownloadManager
+        # callbacks writing to the DB) -- without polling, this panel
+        # showed whatever status a download had at the moment it was
+        # first viewed, forever, until Refresh was clicked by hand.
+        self._refresh_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, lambda e: self._load_data(), self._refresh_timer)
+        self._refresh_timer.Start(3000)
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
+
+    def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
+        if event.GetEventObject() is self:
+            self._refresh_timer.Stop()
+        event.Skip()
+
     def _setup_ui(self) -> None:
         """Create the downloads panel layout."""
         main_sizer = wx.BoxSizer(wx.VERTICAL)

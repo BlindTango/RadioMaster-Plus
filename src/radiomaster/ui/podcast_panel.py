@@ -4,7 +4,7 @@ Laid out the same way as the Radio tab (RadioPanel): a search row (label +
 textbox + button) at the top -- always visible, not buried in a column or
 gated behind picking a category first -- followed by a categorized browser
 below it. Uses three linked lists:
-    1. Categories (All, Custom, Directory)
+    1. Categories (Subscriptions, Custom, Directory)
     2. Podcasts (feeds in the selected category, or live search results
        when the Directory category is showing what was just searched)
     3. Episodes (episodes of the selected podcast)
@@ -106,7 +106,7 @@ class PodcastPanel(wx.Panel):
         self._category_list = wx.ListCtrl(col1, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         self._category_list.InsertColumn(0, "Category", width=180)
         set_accessible_name(self._category_list, "Podcast Category")
-        for cat in ["All Podcasts", "Custom Feeds", "Directory"]:
+        for cat in ["Subscriptions", "Custom Feeds", "Directory"]:
             self._category_list.InsertItem(self._category_list.GetItemCount(), cat)
         col1_sizer.Add(self._category_list, 1, wx.EXPAND | wx.ALL, 4)
         col1.SetSizer(col1_sizer)
@@ -222,7 +222,7 @@ class PodcastPanel(wx.Panel):
         self._viewing_search_results = False
 
         cat = self._selected_category()
-        if cat == "All Podcasts":
+        if cat == "Subscriptions":
             for p in repo.get_all():
                 self._append_row(self._podcast_list, p.get("title", "Unknown"), p.get("author", ""))
                 self._podcast_data.append(p)
@@ -310,7 +310,7 @@ class PodcastPanel(wx.Panel):
                 self._podcast_list, r.get("title", "Unknown"), r.get("author", ""), r.get("directory", ""),
             )
         if self._podcast_list.GetItemCount():
-            # A previous, longer list (e.g. "All Podcasts" after scrolling
+            # A previous, longer list (e.g. "Subscriptions" after scrolling
             # down) can leave the native control's scroll position not
             # reset by DeleteAllItems() -- the new items genuinely exist
             # (GetItemCount() is correct) but can render scrolled out of
@@ -389,9 +389,9 @@ class PodcastPanel(wx.Panel):
 
     def _finish_subscribe(self, title: str, episode_count: int) -> None:
         self._btn_subscribe.Enable()
-        # "All Podcasts" -- switching category re-populates column 2 from
+        # "Subscriptions" -- switching category re-populates column 2 from
         # the DB, which now includes the podcast just subscribed to.
-        idx = self._find_row(self._category_list, "All Podcasts")
+        idx = self._find_row(self._category_list, "Subscriptions")
         if idx != wx.NOT_FOUND:
             self._category_list.Select(idx)
         self._viewing_search_results = False
@@ -497,9 +497,25 @@ class PodcastPanel(wx.Panel):
             wx.MessageBox("This episode has no audio URL.", "Cannot Download", wx.OK | wx.ICON_WARNING)
             return
         from radiomaster.database.repository import DownloadRepository
+        title = ep.get("title", "Podcast Episode")
         repo = DownloadRepository(self._db)
-        repo.add(url, title=ep.get("title", "Podcast Episode"), source_type="podcast")
-        wx.MessageBox(f"Download added to queue: {ep.get('title', '')}", "Download Added",
+        download_id = repo.add(url, title=title, source_type="podcast")
+        # Inserting the DB row alone was the whole bug: nothing ever
+        # actually told DownloadManager to fetch the file, so the row sat
+        # at its insert-time "queued" status forever and never moved to
+        # History no matter how long you waited -- same wiring YouTube
+        # downloads already use.
+        app = wx.GetApp()
+        if hasattr(app, "download_manager") and hasattr(app.download_manager, "add_download"):
+            from radiomaster.utils.config import ConfigManager
+            from radiomaster.utils.paths import get_paths
+            config = ConfigManager.get_instance()
+            output_dir = config.get("downloads.download_path", default=str(get_paths()["downloads"]))
+            app.download_manager.add_download(
+                download_id, url, output_dir=output_dir, title=title,
+                extract_audio=True, format="mp3",
+            )
+        wx.MessageBox(f"Download added to queue: {title}", "Download Added",
                      wx.OK | wx.ICON_INFORMATION)
 
     def _on_podcast_select(self, event: wx.CommandEvent) -> None:

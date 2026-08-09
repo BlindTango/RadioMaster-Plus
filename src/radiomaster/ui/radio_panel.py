@@ -504,6 +504,23 @@ class RadioPanel(scrolled.ScrolledPanel):
                 os.replace(temp_path, final_path)
             except OSError as e:
                 log.error(f"Could not finalize recording segment {temp_path}: {e}")
+                return
+            if entry.get("split_tracks") and self._db:
+                # A split-off track is a finished file the moment it's
+                # renamed here -- with splitting on, this fires once per
+                # track *during* the still-running recording session, not
+                # just when the whole session is eventually stopped. Each
+                # one gets its own completed row so it shows up in
+                # Download History right away instead of only the single
+                # generic "Recording: <station>" row the session itself
+                # gets at Stop (see _stop_recording).
+                from radiomaster.database.repository import DownloadRepository
+                DownloadRepository(self._db).add_completed(
+                    url=entry["station"].url,
+                    title=os.path.splitext(os.path.basename(final_path))[0],
+                    source_type="radio_recording",
+                    file_path=final_path,
+                )
 
     def _split_recording_segment(self, key_id: int, entry: dict[str, Any]) -> None:
         """A track change was detected mid-recording: finalize the segment
@@ -622,6 +639,7 @@ class RadioPanel(scrolled.ScrolledPanel):
             "process": process, "station_name": station.name, "station_key": key,
             "station": station, "station_dir": station_dir, "ext": ext,
             "temp_path": temp_path, "last_song": None, "lock": threading.Lock(),
+            "split_tracks": split_tracks,
         }
         self.set_status(f"Status: Recording {station.name}")
         if self.on_recording_changed:
@@ -637,7 +655,19 @@ class RadioPanel(scrolled.ScrolledPanel):
         station_name = entry["station_name"]
         if self._db:
             from radiomaster.database.repository import DownloadRepository
-            DownloadRepository(self._db).update_progress(key_id, 100, status="completed")
+            repo = DownloadRepository(self._db)
+            if entry.get("split_tracks"):
+                # This session's placeholder row never corresponded to a
+                # real file when splitting was on -- each actual track
+                # already got its own completed row as it was split off
+                # (see _finalize_current_segment), including the final
+                # in-progress one, which is about to be finalized by the
+                # worker below. Marking this row "completed" too would
+                # just leave a bogus extra "Recording: <station>" entry
+                # in History alongside the real per-track ones.
+                repo.delete(key_id)
+            else:
+                repo.update_progress(key_id, 100, status="completed")
         if self.on_recording_changed:
             self.on_recording_changed(self.is_station_recording(self._selected_station))
 
