@@ -539,6 +539,52 @@ class PodcastPanel(wx.Panel):
                 )
                 self._episode_data.append(ep)
 
+    def refresh_episode_order(self) -> None:
+        """Re-applies Settings > Podcasts > Episode order to whatever
+        episode list is currently on screen, immediately -- called from
+        MainWindow._apply_settings_changes() (Settings > OK/Apply), so
+        changing the order takes effect right away instead of only the
+        next time a podcast happens to get (re)selected.
+
+        Directory search results aren't episodes, so there's nothing to
+        reorder if that's what's showing; and if no podcast is selected
+        at all, there's no episode list on screen to refresh either.
+        """
+        if self._viewing_search_results:
+            return
+        idx = self._podcast_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or not hasattr(self, "_podcast_data") or idx >= len(self._podcast_data):
+            return
+
+        # The episode list is about to be torn down and rebuilt in the new
+        # order -- row *indices* are meaningless across that, so remember
+        # which episode (by database id, not position) was playing/
+        # selected and re-find it afterward. Without this, a reorder
+        # mid-playback would leave _current_playing_index pointing at the
+        # wrong row, and try_auto_advance() would move to the wrong "next"
+        # episode.
+        playing_id = None
+        if self._current_playing_index is not None and self._current_playing_index < len(self._episode_data):
+            playing_id = self._episode_data[self._current_playing_index].get("id")
+        selected_row = self._episode_list.GetFirstSelected()
+        selected_id = None
+        if selected_row != wx.NOT_FOUND and selected_row < len(self._episode_data):
+            selected_id = self._episode_data[selected_row].get("id")
+
+        self._load_episodes_for_index(idx)
+
+        if playing_id is not None:
+            for i, ep in enumerate(self._episode_data):
+                if ep.get("id") == playing_id:
+                    self._current_playing_index = i
+                    break
+        if selected_id is not None:
+            for i, ep in enumerate(self._episode_data):
+                if ep.get("id") == selected_id:
+                    self._episode_list.Select(i)
+                    self._episode_list.EnsureVisible(i)
+                    break
+
     def _on_play(self, event: wx.Event) -> None:
         """Play the selected episode, resuming from saved position if any."""
         idx = self._episode_list.GetFirstSelected()

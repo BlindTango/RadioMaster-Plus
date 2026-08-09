@@ -853,6 +853,11 @@ class MainWindow(wx.Frame):
         # Re-apply radio browsing preferences (default country, duplicate filtering)
         self._radio_panel._apply_sections()
 
+        # If a podcast's episodes are currently on screen, re-sort them to
+        # match Settings > Podcasts > Episode order right away instead of
+        # only the next time that podcast happens to get (re)selected.
+        self._podcast_panel.refresh_episode_order()
+
         # Re-apply the station-list update schedule -- takes effect
         # immediately rather than only on the next launch.
         self._station_update_scheduler.set_frequency(

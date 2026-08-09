@@ -14,7 +14,7 @@
 ; of that page AND a redundant native one stacked in front of it.
 
 #define MyAppName "RadioMaster+"
-#define MyAppVersion "1.1.19"
+#define MyAppVersion "1.1.20"
 #define MyAppPublisher "RadioMaster+ Team"
 #define MyAppURL "https://radiomaster.app"
 #define MyAppExeName "RadioMaster+.exe"
