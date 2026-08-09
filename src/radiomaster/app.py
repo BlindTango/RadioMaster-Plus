@@ -114,7 +114,7 @@ class RadioMasterApp(wx.App):
             lambda did, pct: download_repo.update_progress(did, pct, status="downloading")
         )
         self._download_manager.on_complete(
-            lambda did: download_repo.update_progress(did, 100.0, status="completed")
+            lambda did, path: download_repo.mark_completed(did, path)
         )
         self._download_manager.on_error(
             lambda did, msg: download_repo.update_progress(did, 0.0, status="failed")

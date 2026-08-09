@@ -25,7 +25,7 @@ subscribed before its episodes can be browsed/played at all.
 """
 
 import wx
-from typing import Any
+from typing import Any, Optional
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.utils.wx_safe import call_after_safe
@@ -683,6 +683,61 @@ class PodcastPanel(wx.Panel):
         self._episode_list.EnsureVisible(next_index)
         self._play_episode_at(next_index, offer_resume=False)
         return True
+
+    # ------------------------------------------------------------------
+    # Transport bar Previous/Next/First/Last -- MainWindow routes these
+    # here when the Podcasts tab is active (see _next_track/_prev_track/
+    # _first_track/_last_track), same pattern as RadioPanel's history_*.
+    # Navigation is relative to whichever episode is actually PLAYING
+    # (falling back to whatever's merely selected if nothing's playing
+    # yet), and always in the episode list's current on-screen order --
+    # which already reflects Settings > Podcasts > Episode order.
+    # ------------------------------------------------------------------
+    def _episode_data_safe(self) -> list[dict[str, Any]]:
+        # _episode_data doesn't exist at all until a podcast has been
+        # selected at least once (see _on_podcast_select/_on_unsubscribe)
+        # -- matches the getattr guard the rest of this file already uses.
+        return getattr(self, "_episode_data", [])
+
+    def _episode_nav_base(self) -> Optional[int]:
+        if self._current_playing_index is not None:
+            return self._current_playing_index
+        idx = self._episode_list.GetFirstSelected()
+        return idx if idx != wx.NOT_FOUND else None
+
+    def _go_to_episode(self, idx: int) -> None:
+        self._episode_list.Select(idx)
+        self._episode_list.EnsureVisible(idx)
+        self._play_episode_at(idx, offer_resume=False)
+
+    def episode_has_previous(self) -> bool:
+        base = self._episode_nav_base()
+        return bool(self._episode_data_safe()) and base is not None and base > 0
+
+    def episode_has_next(self) -> bool:
+        base = self._episode_nav_base()
+        episodes = self._episode_data_safe()
+        return bool(episodes) and base is not None and base < len(episodes) - 1
+
+    def episode_previous(self) -> None:
+        base = self._episode_nav_base()
+        if base is not None and base > 0:
+            self._go_to_episode(base - 1)
+
+    def episode_next(self) -> None:
+        base = self._episode_nav_base()
+        episodes = self._episode_data_safe()
+        if base is not None and episodes and base < len(episodes) - 1:
+            self._go_to_episode(base + 1)
+
+    def episode_first(self) -> None:
+        if self._episode_data_safe():
+            self._go_to_episode(0)
+
+    def episode_last(self) -> None:
+        episodes = self._episode_data_safe()
+        if episodes:
+            self._go_to_episode(len(episodes) - 1)
 
     def _on_add_feed(self, event: wx.CommandEvent) -> None:
         """Add a podcast RSS feed and parse it immediately."""

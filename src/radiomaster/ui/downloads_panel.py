@@ -1,21 +1,30 @@
 """Downloads tab panel showing active downloads and history."""
 
+import os
 import wx
 from typing import Any, Callable, Optional
 from radiomaster.database.connection import DatabaseManager
+from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.utils.accessibility import set_accessible_name
 
 
 class DownloadsPanel(wx.Panel):
     """Panel for managing downloads."""
 
-    def __init__(self, parent: wx.Window, db: DatabaseManager) -> None:
+    def __init__(self, parent: wx.Window, db: DatabaseManager, engine: PlaybackEngine) -> None:
         super().__init__(parent)
         self._db = db
+        self._engine = engine
         # Row dicts parallel to _active_list's items (same order), so
         # selecting a row can look up its real "downloads" table id and
         # source_type without needing a second DB round-trip.
         self._active_rows: list[dict[str, Any]] = []
+        self._history_rows: list[dict[str, Any]] = []
+        # Which History row is actually PLAYING (by database id, not row
+        # position -- a row's position shifts as new downloads complete
+        # and get prepended, see _load_data), for Previous/Next/First/
+        # Last on the transport bar (see history_previous() etc.).
+        self._playing_history_id: Optional[int] = None
         # Set by MainWindow to RadioPanel.stop_recording_by_download_id --
         # only source_type="radio_recording" rows can be stopped from
         # here (a real youtube/podcast download has no such handle).
@@ -44,7 +53,14 @@ class DownloadsPanel(wx.Panel):
         # Active downloads
         main_sizer.Add(wx.StaticText(self, label="Active Downloads"), 0, wx.ALL, 4)
 
-        self._active_list = wx.ListCtrl(self, style=wx.LC_REPORT)
+        # LC_SINGLE_SEL -- without it, GetFirstSelected() (used everywhere
+        # in this panel: Stop Recording, Remove, Play, Previous/Next/
+        # First/Last) can return a stale earlier selection left behind by
+        # Select() calls that only ever ADD to a multi-selection instead
+        # of replacing it, rather than whatever row was actually most
+        # recently acted on. Matches PodcastPanel's lists, which already
+        # use LC_SINGLE_SEL for the same reason.
+        self._active_list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         set_accessible_name(self._active_list, "Active Downloads")
         self._active_list.AppendColumn("Title", width=250)
         self._active_list.AppendColumn("Progress", width=100)
@@ -69,12 +85,18 @@ class DownloadsPanel(wx.Panel):
         # History
         main_sizer.Add(wx.StaticText(self, label="Download History"), 0, wx.ALL, 4)
 
-        self._history_list = wx.ListCtrl(self, style=wx.LC_REPORT)
+        self._history_list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         set_accessible_name(self._history_list, "Download History")
         self._history_list.AppendColumn("Title", width=250)
         self._history_list.AppendColumn("Date", width=150)
         self._history_list.AppendColumn("Status", width=100)
+        self._history_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_history_activated)
         main_sizer.Add(self._history_list, 1, wx.EXPAND | wx.ALL, 4)
+
+        self._btn_play_history = wx.Button(self, label="&Play")
+        set_accessible_name(self._btn_play_history, "Play Selected Download")
+        self._btn_play_history.Bind(wx.EVT_BUTTON, lambda e: self._play_selected_history())
+        main_sizer.Add(self._btn_play_history, 0, wx.ALIGN_CENTER | wx.ALL, 4)
 
         # Refresh button
         self._btn_refresh = wx.Button(self, label="Refresh")
@@ -152,6 +174,7 @@ class DownloadsPanel(wx.Panel):
                 for i, d in enumerate(new_history)
             )
         )
+        self._history_rows = new_history
         if not history_same:
             self._history_list.DeleteAllItems()
             for i, d in enumerate(new_history):
@@ -200,3 +223,93 @@ class DownloadsPanel(wx.Panel):
         from radiomaster.database.repository import DownloadRepository
         DownloadRepository(self._db).delete(row["id"])
         self._load_data()
+
+    # ------------------------------------------------------------------
+    # Playback -- a completed download's file (podcast episode, YouTube
+    # download, or a finished radio recording) can be played directly
+    # from here, with Previous/Next/First/Last on the transport bar
+    # walking through History in its current on-screen order, the same
+    # pattern PodcastPanel uses for episodes and RadioPanel for station
+    # history. Tracked by database id (not row position), since History
+    # is newest-first -- a new completed download shifts every existing
+    # row's position down by one.
+    # ------------------------------------------------------------------
+    def _play_history_row(self, idx: int) -> bool:
+        if idx < 0 or idx >= len(self._history_rows):
+            return False
+        row = self._history_rows[idx]
+        path = row.get("file_path") or ""
+        if not path or not os.path.isfile(path):
+            wx.MessageBox(
+                "This download's file could not be found on disk -- it may have been "
+                "moved, deleted, or (for an older download) never had its file path "
+                "recorded at all.",
+                "File Not Found", wx.OK | wx.ICON_WARNING,
+            )
+            return False
+        self._playing_history_id = row["id"]
+        self._history_list.Select(idx)
+        self._history_list.EnsureVisible(idx)
+        self._engine.play(path, title=row.get("title", ""))
+        return True
+
+    def _on_history_activated(self, event: wx.ListEvent) -> None:
+        self._play_history_row(event.GetIndex())
+
+    def _play_selected_history(self) -> None:
+        idx = self._history_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND:
+            wx.MessageBox("Select a download from History first.", "No Selection",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        self._play_history_row(idx)
+
+    def play_selected(self) -> bool:
+        """Called by MainWindow's transport Play button when the engine is
+        stopped and the Downloads tab is active -- plays whatever's
+        selected in History instead of the button silently doing nothing
+        (or resuming something unrelated from before). Returns False
+        (without complaining) when nothing's selected, so the caller can
+        fall back to its own default stopped-state behavior."""
+        idx = self._history_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND:
+            return False
+        return self._play_history_row(idx)
+
+    def _history_nav_base(self) -> Optional[int]:
+        """Navigation reference point for Previous/Next: whichever row is
+        actually playing, falling back to whatever's merely selected if
+        nothing's playing yet -- same pattern as PodcastPanel's episode
+        navigation."""
+        if self._playing_history_id is not None:
+            for i, row in enumerate(self._history_rows):
+                if row["id"] == self._playing_history_id:
+                    return i
+        idx = self._history_list.GetFirstSelected()
+        return idx if idx != wx.NOT_FOUND else None
+
+    def history_has_previous(self) -> bool:
+        base = self._history_nav_base()
+        return bool(self._history_rows) and base is not None and base > 0
+
+    def history_has_next(self) -> bool:
+        base = self._history_nav_base()
+        return bool(self._history_rows) and base is not None and base < len(self._history_rows) - 1
+
+    def history_previous(self) -> None:
+        base = self._history_nav_base()
+        if base is not None and base > 0:
+            self._play_history_row(base - 1)
+
+    def history_next(self) -> None:
+        base = self._history_nav_base()
+        if base is not None and self._history_rows and base < len(self._history_rows) - 1:
+            self._play_history_row(base + 1)
+
+    def history_first(self) -> None:
+        if self._history_rows:
+            self._play_history_row(0)
+
+    def history_last(self) -> None:
+        if self._history_rows:
+            self._play_history_row(len(self._history_rows) - 1)

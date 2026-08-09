@@ -383,7 +383,7 @@ class MainWindow(wx.Frame):
         self._audiobook_panel = AudiobookPanel(self._listbook, self._db, self._engine)
         self._media_panel = MediaPlayerPanel(self._listbook, self._db, self._engine)
         self._youtube_panel = YouTubePanel(self._listbook, self._db, self._engine)
-        self._downloads_panel = DownloadsPanel(self._listbook, self._db)
+        self._downloads_panel = DownloadsPanel(self._listbook, self._db, self._engine)
         self._downloads_panel.on_stop_recording = self._radio_panel.stop_recording_by_download_id
         self._scheduler_panel = SchedulerPanel(self._listbook, self._db, self._scheduler_service)
 
@@ -642,6 +642,15 @@ class MainWindow(wx.Frame):
         elif self._engine.state in ("playing", "buffering"):
             self._engine.pause()
         elif self._engine.state == "stopped":
+            # On the Downloads tab, a selected History row takes priority
+            # over resuming whatever was last played from elsewhere --
+            # selecting something there and pressing Play is exactly what
+            # "get the currently selected history download played by the
+            # transport bar" means. play_selected() itself does nothing
+            # (returns False) when nothing's selected, so this falls
+            # through to the normal resume-current_url behavior below.
+            if self._listbook.GetSelection() == self._TAB_DOWNLOADS and self._downloads_panel.play_selected():
+                return
             # Pressing Stop clears state back to "stopped" but deliberately
             # leaves current_url/title/duration alone (see
             # PlaybackEngine.stop()) -- exactly so Play here can restart
@@ -1516,45 +1525,92 @@ class MainWindow(wx.Frame):
         dlg.ShowModal()
         dlg.Destroy()
 
+    # Listbook page indices for the tabs with their own Previous/Next/
+    # First/Last behavior (see AddPage order in _setup_ui) -- everything
+    # else (Audiobooks/Media Player/YouTube/Scheduler) has no per-tab
+    # playlist/history yet, so the transport bar falls back to seeking.
+    _TAB_RADIO = 0
+    _TAB_PODCASTS = 1
+    _TAB_DOWNLOADS = 5
+
     def _next_track(self) -> None:
-        """On the Radio tab: move forward in station history. Elsewhere:
-        seek forward as a fallback (no per-tab playlist/history exists
-        yet for podcasts/audiobooks/media/YouTube)."""
-        if self._listbook.GetSelection() == 0:
+        """Radio: move forward in station history. Podcasts: next
+        episode. Downloads: next item in History. Elsewhere: seek
+        forward as a fallback."""
+        sel = self._listbook.GetSelection()
+        if sel == self._TAB_RADIO:
             self._status_bar.set_status("Next station")
             self._radio_panel.history_next()
+            return
+        if sel == self._TAB_PODCASTS:
+            self._status_bar.set_status("Next episode")
+            self._podcast_panel.episode_next()
+            return
+        if sel == self._TAB_DOWNLOADS:
+            self._status_bar.set_status("Next download")
+            self._downloads_panel.history_next()
             return
         self._status_bar.set_status("Next track")
         current_pos = self._engine.position
         self._engine.seek(current_pos + 10)
 
     def _prev_track(self) -> None:
-        """On the Radio tab: move back in station history. Elsewhere: seek
+        """Radio: move back in station history. Podcasts: previous
+        episode. Downloads: previous item in History. Elsewhere: seek
         backward as a fallback."""
-        if self._listbook.GetSelection() == 0:
+        sel = self._listbook.GetSelection()
+        if sel == self._TAB_RADIO:
             self._status_bar.set_status("Previous station")
             self._radio_panel.history_previous()
+            return
+        if sel == self._TAB_PODCASTS:
+            self._status_bar.set_status("Previous episode")
+            self._podcast_panel.episode_previous()
+            return
+        if sel == self._TAB_DOWNLOADS:
+            self._status_bar.set_status("Previous download")
+            self._downloads_panel.history_previous()
             return
         self._status_bar.set_status("Previous track")
         current_pos = self._engine.position
         self._engine.seek(max(0, current_pos - 10))
 
     def _first_track(self) -> None:
-        """On the Radio tab: jump to the first station in history.
+        """Radio: jump to the first station in history. Podcasts: first
+        episode. Downloads: first (most recent) item in History.
         Elsewhere: seek to the start."""
-        if self._listbook.GetSelection() == 0:
+        sel = self._listbook.GetSelection()
+        if sel == self._TAB_RADIO:
             self._status_bar.set_status("First station")
             self._radio_panel.history_first()
+            return
+        if sel == self._TAB_PODCASTS:
+            self._status_bar.set_status("First episode")
+            self._podcast_panel.episode_first()
+            return
+        if sel == self._TAB_DOWNLOADS:
+            self._status_bar.set_status("First download")
+            self._downloads_panel.history_first()
             return
         self._status_bar.set_status("First track")
         self._engine.seek(0)
 
     def _last_track(self) -> None:
-        """On the Radio tab: jump to the most recent station in history.
+        """Radio: jump to the most recent station in history. Podcasts:
+        last episode. Downloads: last (oldest shown) item in History.
         Elsewhere: seek near the end."""
-        if self._listbook.GetSelection() == 0:
+        sel = self._listbook.GetSelection()
+        if sel == self._TAB_RADIO:
             self._status_bar.set_status("Last station")
             self._radio_panel.history_last()
+            return
+        if sel == self._TAB_PODCASTS:
+            self._status_bar.set_status("Last episode")
+            self._podcast_panel.episode_last()
+            return
+        if sel == self._TAB_DOWNLOADS:
+            self._status_bar.set_status("Last download")
+            self._downloads_panel.history_last()
             return
         self._status_bar.set_status("Last track")
         if self._engine.duration > 0:

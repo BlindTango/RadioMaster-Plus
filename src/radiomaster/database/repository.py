@@ -273,6 +273,23 @@ class DownloadRepository:
         self._db.execute("DELETE FROM downloads WHERE id = ?", (download_id,))
         self._db.commit()
 
+    def mark_completed(self, download_id: int, file_path: str = "") -> None:
+        """Marks an existing row completed AND records the real file it
+        ended up as -- update_progress() alone (what DownloadManager's
+        on_complete used before) never touched file_path at all, so a
+        completed podcast/YouTube download had no way to be played back
+        from Download History: the row said "completed" but nothing knew
+        which file on disk it actually corresponded to."""
+        self._db.execute(
+            "UPDATE downloads SET progress = 100, status = 'completed', file_path = ? WHERE id = ?",
+            (file_path, download_id),
+        )
+        self._db.commit()
+
+    def set_file_path(self, download_id: int, file_path: str) -> None:
+        self._db.execute("UPDATE downloads SET file_path = ? WHERE id = ?", (file_path, download_id))
+        self._db.commit()
+
     def get_queued(self) -> list[dict[str, Any]]:
         return self._db.fetchall(
             "SELECT * FROM downloads WHERE status IN ('queued', 'downloading') ORDER BY id"

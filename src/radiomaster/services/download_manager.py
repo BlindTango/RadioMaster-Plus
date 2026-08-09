@@ -27,7 +27,7 @@ class DownloadManager:
         self._lock = threading.Lock()
 
         self._on_progress: Callable[[int, float], None] | None = None
-        self._on_complete: Callable[[int], None] | None = None
+        self._on_complete: Callable[[int, str], None] | None = None
         self._on_error: Callable[[int, str], None] | None = None
 
     def start(self) -> None:
@@ -148,8 +148,35 @@ class DownloadManager:
                 text=True,
             )
 
-            # Monitor progress
+            # Monitor progress, and remember the real output file path yt-dlp
+            # reports -- without this, a completed download had no way to
+            # be played back later (History had no idea what file it even
+            # was). "[ExtractAudio] Destination: ..." (only printed when
+            # extract_audio/-x post-processes the raw download into a
+            # different file, e.g. remuxing to mp3) always wins over the
+            # earlier "[download] Destination: ..." line when both appear,
+            # since that's the actual final file on disk.
+            destination_path = ""
             for line in process.stdout or []:
+                stripped = line.strip()
+                if "Destination:" in line:
+                    candidate = line.split("Destination:", 1)[1].strip()
+                    if candidate and (not destination_path or line.lstrip().startswith("[ExtractAudio]")):
+                        destination_path = candidate
+                elif stripped.startswith("[download]") and stripped.endswith("has already been downloaded"):
+                    # yt-dlp found this exact file already on disk (a
+                    # repeat download of the same episode/video, or
+                    # re-downloading after a crash) and skipped
+                    # re-fetching it entirely -- no "Destination:" line is
+                    # ever printed in that case, so without this branch
+                    # the file path was silently lost even though the
+                    # file genuinely exists right where it's named. This
+                    # was the actual reason file_path came back empty on
+                    # a real repeat-download test.
+                    candidate = stripped[len("[download]"):].rsplit(
+                        "has already been downloaded", 1)[0].strip()
+                    if candidate:
+                        destination_path = candidate
                 if "[download]" in line and "%" in line:
                     try:
                         percent_str = line.split("%")[0].split()[-1]
@@ -163,7 +190,7 @@ class DownloadManager:
 
             if process.returncode == 0:
                 if self._on_complete:
-                    self._on_complete(download_id)
+                    self._on_complete(download_id, destination_path)
             else:
                 if self._on_error:
                     self._on_error(download_id, "Download failed")
@@ -179,7 +206,9 @@ class DownloadManager:
     def on_progress(self, cb: Callable[[int, float], None]) -> None:
         self._on_progress = cb
 
-    def on_complete(self, cb: Callable[[int], None]) -> None:
+    def on_complete(self, cb: Callable[[int, str], None]) -> None:
+        """*cb* receives (download_id, file_path) -- file_path is "" if
+        yt-dlp's output never printed a recognizable Destination line."""
         self._on_complete = cb
 
     def on_error(self, cb: Callable[[int, str], None]) -> None:

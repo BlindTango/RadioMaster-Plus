@@ -544,7 +544,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         safe = re.sub(r'[<>:"/\\|?*]', "_", base_name).strip() or "track"
         return self._unique_path(os.path.join(station_dir, f"{safe}{ext}"))
 
-    def _finalize_current_segment(self, entry: dict[str, Any]) -> None:
+    def _finalize_current_segment(self, key_id: int, entry: dict[str, Any]) -> None:
         """Stops entry's current ffmpeg process and renames the temp file
         it was writing to its real "Artist - Title" (or timestamp) name.
         Caller holds entry['lock']. Only used for the non-split, single-
@@ -560,6 +560,16 @@ class RadioPanel(scrolled.ScrolledPanel):
                 os.replace(temp_path, final_path)
             except OSError as e:
                 log.error(f"Could not finalize recording segment {temp_path}: {e}")
+                return
+            if self._db:
+                # _stop_recording already marked this row "completed"
+                # synchronously (so the Downloads tab reflects Stop
+                # immediately) -- but that happens before the file is
+                # actually renamed here, so file_path couldn't be known
+                # yet. Backfilling it now is what makes a plain (non-
+                # split) recording playable from Download History at all.
+                from radiomaster.database.repository import DownloadRepository
+                DownloadRepository(self._db).set_file_path(key_id, final_path)
 
     # ------------------------------------------------------------------
     # Split-track recording: ONE ffmpeg process stays connected to the
@@ -933,7 +943,7 @@ class RadioPanel(scrolled.ScrolledPanel):
                             pass
                     self._finalize_encode_segment(entry)
                 else:
-                    self._finalize_current_segment(entry)
+                    self._finalize_current_segment(key_id, entry)
 
         threading.Thread(target=worker, daemon=True).start()
         self.set_status(f"Status: Stopped recording {station_name}")
