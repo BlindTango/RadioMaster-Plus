@@ -48,6 +48,30 @@ def set_accessible_name(window: wx.Window, name: str) -> None:
     window.SetName(name)
 
 
+def context_menu_pos(ctrl: wx.Window, event: wx.ContextMenuEvent) -> wx.Point:
+    """Client-coordinate position to pass to ctrl.PopupMenu() for an
+    EVT_CONTEXT_MENU event.
+
+    wx already fires EVT_CONTEXT_MENU for a right-click, the Menu/
+    Applications key, AND Shift+F10 -- no separate keyboard handling is
+    needed for those. The one thing that differs is position: a real
+    right-click gives real screen coordinates via event.GetPosition(), but
+    the keyboard-triggered cases have no mouse location at all and report
+    wx.DefaultPosition -- falling back to the selected row's own position
+    (or the control's top-left) keeps the menu from popping up at (0, 0)
+    on the whole screen when triggered from the keyboard.
+    """
+    pos = event.GetPosition()
+    if pos != wx.DefaultPosition:
+        return ctrl.ScreenToClient(pos)
+    if isinstance(ctrl, wx.ListCtrl):
+        row = ctrl.GetFirstSelected()
+        if row != -1:
+            rect = ctrl.GetItemRect(row)
+            return wx.Point(rect.x + rect.width // 3, rect.y + rect.height // 2)
+    return wx.Point(10, 10)
+
+
 def set_search_ctrl_accessible_name(search_ctrl: wx.SearchCtrl, name: str) -> None:
     """Set the announced name for a wx.SearchCtrl.
 

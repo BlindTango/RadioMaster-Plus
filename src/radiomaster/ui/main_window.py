@@ -1239,7 +1239,13 @@ class MainWindow(wx.Frame):
             "volume_up": lambda: self._on_volume_change(min(1.0, self._engine._volume + 0.05)),
             "volume_down": lambda: self._on_volume_change(max(0.0, self._engine._volume - 0.05)),
             "mute": lambda: self._on_mute_toggle(),
+            "pan_left": lambda: self._on_pan_step(-0.1),
+            "pan_right": lambda: self._on_pan_step(0.1),
+            "rate_up": lambda: self._on_rate_step(0.1),
+            "rate_down": lambda: self._on_rate_step(-0.1),
             "record": lambda: self._radio_panel._on_record(),
+            "open_recording_folder": lambda: self._on_open_recording_folder(),
+            "open_podcast_folder": lambda: self._on_open_podcast_folder(),
             "open_settings": lambda: self._show_settings(),
             "open_scheduler": lambda: self._switch_tab(6),
             "open_help": lambda: self._show_documentation(),
@@ -1249,6 +1255,51 @@ class MainWindow(wx.Frame):
             log = logging.getLogger("radiomaster")
             for warning in warnings:
                 log.warning(f"Global hotkey: {warning}")
+
+    def _on_pan_step(self, delta: float) -> None:
+        """Global-hotkey Pan Left/Right -- steps the same Pan value/slider
+        the transport bar's own pan slider uses, +/-0.1 on its -1.0..1.0
+        scale (matches the reference project's keyboard manager, which
+        uses +/-5 on an equivalent 0-100 scale)."""
+        new_pan = max(-1.0, min(1.0, self._engine.pan + delta))
+        self._on_pan_change(new_pan)
+        self._now_playing.set_pan(new_pan)
+
+    def _on_rate_step(self, delta: float) -> None:
+        """Global-hotkey Playback Rate Up/Down -- steps the same Rate
+        value/slider the transport bar's own rate slider uses, +/-0.1 on
+        its 0.5x..3.0x scale (matches the reference project's keyboard
+        manager exactly -- same scale, same step)."""
+        new_rate = max(0.5, min(3.0, self._engine.rate + delta))
+        self._on_rate_change(new_rate)
+        self._now_playing.set_rate(new_rate)
+
+    def _on_open_recording_folder(self) -> None:
+        """Global-hotkey Open Recording Folder -- opens Settings >
+        Recordings > Recording Location in Windows Explorer."""
+        import os
+        from radiomaster.utils.paths import get_recordings_dir
+        path = get_recordings_dir()
+        try:
+            os.makedirs(path, exist_ok=True)
+            os.startfile(path)
+        except OSError as e:
+            self._status_bar.set_status(f"Error: Could not open recordings folder ({e})")
+
+    def _on_open_podcast_folder(self) -> None:
+        """Global-hotkey Open Podcast Folder -- opens Settings > Downloads
+        > Download Location in Windows Explorer. RadioMaster+ doesn't
+        keep a separate podcast-only folder the way the reference
+        project does (podcast episode downloads land in the same place
+        as YouTube downloads), so this opens that shared folder."""
+        import os
+        from radiomaster.utils.paths import get_paths
+        path = self._config.get("downloads.download_path", default=str(get_paths()["downloads"]))
+        try:
+            os.makedirs(path, exist_ok=True)
+            os.startfile(path)
+        except OSError as e:
+            self._status_bar.set_status(f"Error: Could not open downloads folder ({e})")
 
     def _on_stop_action(self) -> None:
         """Same routing as the transport bar's Stop button (see

@@ -61,7 +61,11 @@ _SPECIAL_KEYS = {
 }
 
 # Actions a global hotkey can be bound to, plus the human-readable label the
-# dialog shows for each.
+# dialog shows for each. pan_left/pan_right/rate_up/rate_down/
+# open_recording_folder/open_podcast_folder are ported from the reference
+# project's keyboard manager (D:\Projects\RadioMaster, core/hotkeys.py +
+# ui/hotkeys_dialog.py); next_track/prev_track/mute/open_help are
+# RadioMaster+'s own additions on top of that and are kept as-is.
 ACTIONS: tuple[tuple[str, str], ...] = (
     ("play_pause", "Play/Pause"),
     ("stop", "Stop"),
@@ -70,7 +74,13 @@ ACTIONS: tuple[tuple[str, str], ...] = (
     ("volume_up", "Volume Up"),
     ("volume_down", "Volume Down"),
     ("mute", "Mute"),
+    ("pan_left", "Pan Left"),
+    ("pan_right", "Pan Right"),
+    ("rate_up", "Playback Rate Up"),
+    ("rate_down", "Playback Rate Down"),
     ("record", "Record"),
+    ("open_recording_folder", "Open Recording Folder"),
+    ("open_podcast_folder", "Open Podcast/Download Folder"),
     ("open_settings", "Open Settings"),
     ("open_scheduler", "Open Recording Scheduler"),
     ("open_help", "Open Help"),
