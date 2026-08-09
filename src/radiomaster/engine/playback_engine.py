@@ -46,6 +46,8 @@ class PlaybackEngine:
     def __init__(self) -> None:
         # --- Video (ffplay subprocess) backend state ---
         self._process: subprocess.Popen | None = None
+        self._ffplay_log_file = None
+        self._ffplay_log_path: str = ""
         self._state = self.STATE_STOPPED
         self._duration: float = 0.0
         self._position: float = 0.0
@@ -274,6 +276,7 @@ class PlaybackEngine:
                 if self._process:
                     self._process.kill()
             self._process = None
+            self._close_ffplay_log()
         self._state = self.STATE_STOPPED
         self._position = 0.0
         self._notify_state()
@@ -515,11 +518,25 @@ class PlaybackEngine:
             env.update(proxy_env)
         try:
             log_io(log, "spawning ffplay: %s", cmd)
+            # ffplay's own stderr (its only channel for real errors --
+            # "Protocol not found", a connection that failed/reset, an
+            # unsupported codec, etc.) used to go straight to DEVNULL,
+            # so a video that opened a window but silently played
+            # nothing left genuinely no trace of why anywhere -- not in
+            # the app, not in a log, nothing to go on if it couldn't be
+            # reproduced live. Captured to a plain file instead
+            # (overwritten each launch -- only the most recent attempt
+            # matters for this).
+            from radiomaster.utils.paths import get_paths
+            log_dir = get_paths()["logs"]
+            os.makedirs(log_dir, exist_ok=True)
+            self._ffplay_log_path = os.path.join(log_dir, "ffplay_last_run.log")
+            self._ffplay_log_file = open(self._ffplay_log_path, "wb")
             self._process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=self._ffplay_log_file,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 env=env,
             )
@@ -538,6 +555,14 @@ class PlaybackEngine:
             self._notify_error("FFplay not found. Ensure ffplay.exe is in the tools/ folder.")
         except Exception as e:
             self._notify_error(f"Failed to start playback: {e}")
+
+    def _close_ffplay_log(self) -> None:
+        if self._ffplay_log_file is not None:
+            try:
+                self._ffplay_log_file.close()
+            except Exception:
+                pass
+            self._ffplay_log_file = None
 
     def _build_ffplay_command(self, url: str, is_video: bool) -> list[str]:
         """Build the FFplay command line with current settings (video only)."""
@@ -596,6 +621,7 @@ class PlaybackEngine:
                 if self._process:
                     self._process.kill()
             self._process = None
+            self._close_ffplay_log()
         self._start_process(self._current_url, self._is_video)
         # Only seek if the restart succeeded (state changed to playing)
         if pos > 0 and self._state == self.STATE_PLAYING:

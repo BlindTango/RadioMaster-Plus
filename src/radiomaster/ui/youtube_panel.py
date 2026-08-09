@@ -99,6 +99,11 @@ class YouTubePanel(wx.Panel):
         self._btn_download_audio.Bind(wx.EVT_BUTTON, self._on_download_audio)
         self._search_ctrl.Bind(wx.EVT_SEARCHCTRL_SEARCH_BTN, self._on_search)
         self._search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
+        # Enter/double-click plays the selected result directly -- every
+        # other list in the app already works this way (Radio stations,
+        # Podcast episodes, Downloads History); this list never had it,
+        # so "Play Video" was the only way in, unlike everywhere else.
+        self._results_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
 
     def _on_search(self, event: wx.Event) -> None:
         """Search YouTube using yt-dlp, off the UI thread.
