@@ -4,6 +4,17 @@ import re
 import requests
 from typing import Any, Optional
 
+# python-requests' default User-Agent ("python-requests/2.x") is a common
+# bot-blocklist signature -- some Icecast/SHOUTcast servers silently refuse
+# or throttle it while happily accepting ffmpeg's own connection (its
+# default UA looks like a normal player, e.g. "Lavf/60.x"). That made the
+# ICY metadata connection specifically (not the actual playback/recording
+# connection, which goes through ffmpeg) fail or hang on some real stations
+# even though nothing about our request was otherwise wrong. Confirmed
+# against a reference implementation (see D:\Projects\RadioMaster) that
+# sends an explicit UA for exactly this reason.
+ICY_USER_AGENT = "RadioMaster+/1.0"
+
 
 class StreamReader:
     """Reads metadata from streaming audio sources.
@@ -40,7 +51,8 @@ class StreamReader:
         """
         try:
             response = requests.get(
-                url, headers={"Icy-MetaData": "1"}, stream=True, timeout=timeout,
+                url, headers={"Icy-MetaData": "1", "User-Agent": ICY_USER_AGENT},
+                stream=True, timeout=timeout,
             )
         except Exception:
             return None, 0
@@ -116,7 +128,7 @@ class StreamReader:
         try:
             response = requests.get(
                 url,
-                headers={"Icy-MetaData": "1"},
+                headers={"Icy-MetaData": "1", "User-Agent": ICY_USER_AGENT},
                 stream=True,
                 timeout=timeout,
             )
