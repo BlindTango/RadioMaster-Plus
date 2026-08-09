@@ -385,6 +385,7 @@ class MainWindow(wx.Frame):
         self._youtube_panel = YouTubePanel(self._listbook, self._db, self._engine)
         self._downloads_panel = DownloadsPanel(self._listbook, self._db, self._engine)
         self._downloads_panel.on_stop_recording = self._radio_panel.stop_recording_by_download_id
+        self._downloads_panel.on_check_recording_active = self._radio_panel.is_recording_active
         self._scheduler_panel = SchedulerPanel(self._listbook, self._db, self._scheduler_service)
 
         self._listbook.AddPage(self._radio_panel, "Radio")

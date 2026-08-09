@@ -24,11 +24,27 @@ class YouTubeService:
         self._check_available()
 
     def _check_available(self) -> None:
-        """Check if yt-dlp is installed."""
+        """Check if yt-dlp is installed.
+
+        Only ever logs a warning -- never raises. This used to catch
+        FileNotFoundError alone, but yt-dlp.exe is itself a real
+        PyInstaller-built onefile executable with its own cold-start
+        overhead (self-extraction, plus antivirus scanning a freshly
+        installed/updated binary), which can genuinely take longer than
+        a tight timeout -- when it did, subprocess.TimeoutExpired went
+        completely uncaught out of the constructor. Since YouTubeService()
+        is instantiated fresh on every single search/download action (not
+        once at startup), that meant ANY slow cold start turned into a
+        user-visible "Search failed: Command [...] timed out after 5
+        seconds" on the very next thing they tried, unrelated to whether
+        the actual search/download itself would have worked fine.
+        """
         try:
-            subprocess.run([get_ytdlp(), "--version"], capture_output=True, timeout=5)
+            subprocess.run([get_ytdlp(), "--version"], capture_output=True, timeout=15)
         except FileNotFoundError:
             logger.warning("yt-dlp not found. YouTube features will be unavailable.")
+        except Exception as e:
+            logger.warning(f"yt-dlp version check failed (continuing anyway): {e}")
 
     def get_stream_url(self, url: str) -> str | None:
         """Get the best stream URL for a video."""

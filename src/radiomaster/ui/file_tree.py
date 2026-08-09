@@ -94,7 +94,15 @@ class FileTreePanel(wx.Panel):
         data = self._tree.GetItemData(item)
         if data and isinstance(data, dict) and data.get("type") == "folder":
             path = data.get("path", "")
-            if path and not self._tree.ItemHasChildren(item):
+            # GetChildrenCount, not ItemHasChildren -- ItemHasChildren can
+            # reflect the same "show an expand arrow" hint
+            # SetItemHasChildren() sets (see _populate_children), which
+            # would already read True the very first time this fires,
+            # before any real children have actually been added -- that
+            # skipped populating entirely, so expanding a subfolder
+            # looked like it opened but stayed empty. Checking the real
+            # child count is what the lazy-loading idiom actually needs.
+            if path and self._tree.GetChildrenCount(item, False) == 0:
                 self._populate_children(item, path)
 
     def _populate_folder(self, path: str) -> None:
@@ -113,6 +121,17 @@ class FileTreePanel(wx.Panel):
                 if os.path.isdir(full_path):
                     child = self._tree.AppendItem(parent_item, f"📁 {entry}")
                     self._tree.SetItemData(child, {"type": "folder", "path": full_path})
+                    # Without this, wx.TreeCtrl has no way to know this
+                    # item might have children until they're actually
+                    # added -- since children are only added lazily, on
+                    # EVT_TREE_ITEM_EXPANDING (see _on_tree_expand), that
+                    # event never fires at all for a subfolder: no expand
+                    # arrow is drawn, Right/Enter on it does nothing.
+                    # Every subfolder past the first browsed level was a
+                    # dead end -- unnavigable for anyone, and especially
+                    # unreadable for a screen reader (NVDA announces a
+                    # plain, non-expandable item instead of "collapsed").
+                    self._tree.SetItemHasChildren(child, True)
                 elif entry.lower().endswith(".zip"):
                     child = self._tree.AppendItem(parent_item, f"📦 {entry}")
                     self._tree.SetItemData(child, {"type": "zip", "path": full_path})

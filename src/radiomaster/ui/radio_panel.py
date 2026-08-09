@@ -736,13 +736,34 @@ class RadioPanel(scrolled.ScrolledPanel):
         much closer to the real boundary and tracks end up named (and
         cut) correctly instead of a beat early. A newer title arriving
         before the timer fires cancels and restarts it, so only the
-        settled, real, final title for that change is ever acted on."""
+        settled, real, final title for that change is ever acted on.
+
+        The real, live-reproduced bug this fixes: this used to compare
+        the incoming title against entry["last_song"] to decide whether
+        to (re)start the settle timer -- but last_song only updates once
+        a split actually APPLIES, several seconds after a change is
+        first seen. Many stations resend the current StreamTitle on
+        EVERY metadata block, not just when it changes. So while a title
+        change was still settling, every repeat of that same still-
+        pending title looked like yet another brand new change relative
+        to the stale last_song, endlessly cancelling and restarting the
+        timer -- it could take a very long time to ever actually fire
+        (only once the station happened to go quiet for a full settle
+        window), which is exactly "recording is not splitting on
+        tracks": confirmed live with a simulated station that resent its
+        title every ~1.5s, where only the very last song of a 3-song
+        test session ever actually got split off. Comparing against
+        pending_title instead -- what's already scheduled/settling --
+        means a repeat of that exact title changes nothing, while an
+        actually different title still cancels and restarts the timer
+        as intended.
+        """
         entry = self._recordings.get(key_id)
         if entry is None:
             return
-        entry["pending_title"] = title
-        if title == entry.get("last_song"):
+        if title == entry.get("pending_title"):
             return
+        entry["pending_title"] = title
         old_timer = entry.get("split_timer")
         if old_timer is not None:
             old_timer.cancel()
@@ -958,6 +979,15 @@ class RadioPanel(scrolled.ScrolledPanel):
             return False
         self._stop_recording(download_id)
         return True
+
+    def is_recording_active(self, download_id: int) -> bool:
+        """Side-effect-free check for the Downloads tab's Remove button --
+        lets it tell a genuinely still-recording row (which Remove should
+        refuse, pointing at Stop Recording instead) apart from a STALE
+        radio_recording row with nothing actually running for it anymore
+        (left behind by a crash, or an older version's tracking), which
+        should be removable like any other row."""
+        return download_id in self._recordings
 
     def _on_add_custom(self, event: wx.CommandEvent) -> None:
         dlg = wx.TextEntryDialog(self, "Enter station URL:", "Add Custom Station")

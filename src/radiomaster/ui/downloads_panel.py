@@ -29,6 +29,15 @@ class DownloadsPanel(wx.Panel):
         # only source_type="radio_recording" rows can be stopped from
         # here (a real youtube/podcast download has no such handle).
         self.on_stop_recording: Optional[Callable[[int], bool]] = None
+        # Set by MainWindow to RadioPanel.is_recording_active -- a
+        # side-effect-free check Remove uses to tell a genuinely still-
+        # recording row (which needs Stop Recording's graceful finalize,
+        # not Remove) apart from a STALE radio_recording row with nothing
+        # actually running for it anymore (e.g. left behind by a crash,
+        # or an older version's tracking) -- which previously could never
+        # be removed at all, Remove refused every radio_recording row
+        # unconditionally.
+        self.on_check_recording_active: Optional[Callable[[int], bool]] = None
         self._setup_ui()
         self._load_data()
 
@@ -65,6 +74,7 @@ class DownloadsPanel(wx.Panel):
         self._active_list.AppendColumn("Title", width=250)
         self._active_list.AppendColumn("Progress", width=100)
         self._active_list.AppendColumn("Status", width=100)
+        self._active_list.Bind(wx.EVT_KEY_DOWN, self._on_active_list_key)
         main_sizer.Add(self._active_list, 1, wx.EXPAND | wx.ALL, 4)
 
         active_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -91,12 +101,19 @@ class DownloadsPanel(wx.Panel):
         self._history_list.AppendColumn("Date", width=150)
         self._history_list.AppendColumn("Status", width=100)
         self._history_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_history_activated)
+        self._history_list.Bind(wx.EVT_KEY_DOWN, self._on_history_list_key)
         main_sizer.Add(self._history_list, 1, wx.EXPAND | wx.ALL, 4)
 
+        history_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._btn_play_history = wx.Button(self, label="&Play")
         set_accessible_name(self._btn_play_history, "Play Selected Download")
         self._btn_play_history.Bind(wx.EVT_BUTTON, lambda e: self._play_selected_history())
-        main_sizer.Add(self._btn_play_history, 0, wx.ALIGN_CENTER | wx.ALL, 4)
+        history_btn_sizer.Add(self._btn_play_history, 1, wx.RIGHT, 2)
+        self._btn_remove_history = wx.Button(self, label="R&emove")
+        set_accessible_name(self._btn_remove_history, "Remove Selected Download From History")
+        self._btn_remove_history.Bind(wx.EVT_BUTTON, self._on_remove_history)
+        history_btn_sizer.Add(self._btn_remove_history, 1, wx.LEFT, 2)
+        main_sizer.Add(history_btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
 
         # Refresh button
         self._btn_refresh = wx.Button(self, label="Refresh")
@@ -201,7 +218,19 @@ class DownloadsPanel(wx.Panel):
                           wx.OK | wx.ICON_INFORMATION)
             self._load_data()
 
-    def _on_remove(self, event: wx.CommandEvent) -> None:
+    def _on_active_list_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_DELETE:
+            self._on_remove(event)
+        else:
+            event.Skip()
+
+    def _on_history_list_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_DELETE:
+            self._on_remove_history(event)
+        else:
+            event.Skip()
+
+    def _on_remove(self, event: wx.Event) -> None:
         idx = self._active_list.GetFirstSelected()
         if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
             wx.MessageBox("Select a download first.", "No Selection",
@@ -209,10 +238,24 @@ class DownloadsPanel(wx.Panel):
             return
         row = self._active_rows[idx]
         if row.get("source_type") == "radio_recording":
-            wx.MessageBox("This is an active recording -- use Stop Recording instead "
-                          "of Remove so the file it's already written gets finalized "
-                          "properly.", "Active Recording", wx.OK | wx.ICON_INFORMATION)
-            return
+            # Only block Remove for a recording that's genuinely still
+            # running -- that needs Stop Recording's graceful finalize
+            # instead, so the file already written gets closed out
+            # properly. A STALE radio_recording row (nothing is actually
+            # recording for it anymore -- left behind by a crash, or an
+            # older version's tracking) used to be refused here
+            # unconditionally, with no other way to ever remove it either
+            # (Stop Recording just says "no longer active" and leaves the
+            # row exactly as stuck as before).
+            is_active = (
+                self.on_check_recording_active(row["id"])
+                if self.on_check_recording_active else True
+            )
+            if is_active:
+                wx.MessageBox("This is an active recording -- use Stop Recording instead "
+                              "of Remove so the file it's already written gets finalized "
+                              "properly.", "Active Recording", wx.OK | wx.ICON_INFORMATION)
+                return
         if wx.MessageBox(
             f"Remove '{row.get('title', 'this download')}' from the queue? "
             "If it's genuinely in progress, this only removes the row -- it doesn't "
@@ -220,6 +263,25 @@ class DownloadsPanel(wx.Panel):
             "Remove Download", wx.YES_NO | wx.ICON_QUESTION,
         ) != wx.YES:
             return
+        from radiomaster.database.repository import DownloadRepository
+        DownloadRepository(self._db).delete(row["id"])
+        self._load_data()
+
+    def _on_remove_history(self, event: wx.Event) -> None:
+        idx = self._history_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._history_rows):
+            wx.MessageBox("Select a download from History first.", "No Selection",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        row = self._history_rows[idx]
+        if wx.MessageBox(
+            f"Remove '{row.get('title', 'this download')}' from History? "
+            "This only removes the entry -- it doesn't delete the downloaded file itself.",
+            "Remove From History", wx.YES_NO | wx.ICON_QUESTION,
+        ) != wx.YES:
+            return
+        if row["id"] == self._playing_history_id:
+            self._playing_history_id = None
         from radiomaster.database.repository import DownloadRepository
         DownloadRepository(self._db).delete(row["id"])
         self._load_data()
