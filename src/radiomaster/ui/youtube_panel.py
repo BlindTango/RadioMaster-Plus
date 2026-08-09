@@ -101,32 +101,56 @@ class YouTubePanel(wx.Panel):
         self._search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
 
     def _on_search(self, event: wx.Event) -> None:
-        """Search YouTube using yt-dlp."""
+        """Search YouTube using yt-dlp, off the UI thread.
+
+        This used to call YouTubeService()/service.search() directly on
+        the UI thread -- a real ytsearch20 query is a single yt-dlp
+        process that has to actually reach and scrape YouTube for all 20
+        results before returning anything at all, easily several
+        seconds, sometimes much longer. For that whole time the entire
+        app was frozen: no repaints, no other tab, nothing -- exactly
+        "freezes the application ... after a while returns 20 searches."
+        """
         query = self._search_ctrl.GetValue().strip()
         if not query:
             return
-        
-        # Clear existing results
+
         self._results_list.DeleteAllItems()
-        
-        try:
+        self._search_results = []
+        self._btn_search.Disable()
+        self._set_status(f"Searching YouTube for '{query}'...")
+
+        def worker():
             from radiomaster.services.youtube_dl import YouTubeService
-            service = YouTubeService()
-            
-            # Search and get results
-            results = service.search(query, max_results=20)
-            
-            for i, result in enumerate(results):
-                idx = self._results_list.InsertItem(i, result.get('title', 'Unknown')[:100])
-                self._results_list.SetItem(idx, 1, self._format_duration(result.get('duration', 0)))
-                self._results_list.SetItem(idx, 2, result.get('channel', 'Unknown'))
-                self._results_list.SetItemData(idx, i)  # Store index for retrieval
-            # Keep a reference to the raw results for later actions
-            self._search_results = results
-            wx.MessageBox(f"Found {len(results)} results for '{query}'", "Search Complete", 
-                         wx.OK | wx.ICON_INFORMATION)
-        except Exception as e:
-            wx.MessageBox(f"Search failed: {str(e)}", "Search Error", wx.OK | wx.ICON_ERROR)
+            try:
+                service = YouTubeService()
+                results = service.search(query, max_results=20)
+            except Exception as e:
+                wx.CallAfter(self._on_search_failed, str(e))
+                return
+            wx.CallAfter(self._apply_search_results, results, query)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _set_status(self, text: str) -> None:
+        top = wx.GetTopLevelParent(self)
+        if hasattr(top, "_status_bar"):
+            top._status_bar.set_status(text)
+
+    def _on_search_failed(self, message: str) -> None:
+        self._btn_search.Enable()
+        wx.MessageBox(f"Search failed: {message}", "Search Error", wx.OK | wx.ICON_ERROR)
+
+    def _apply_search_results(self, results: list[dict], query: str) -> None:
+        self._btn_search.Enable()
+        for i, result in enumerate(results):
+            idx = self._results_list.InsertItem(i, result.get('title', 'Unknown')[:100])
+            self._results_list.SetItem(idx, 1, self._format_duration(result.get('duration', 0)))
+            self._results_list.SetItem(idx, 2, result.get('channel', 'Unknown'))
+            self._results_list.SetItemData(idx, i)  # Store index for retrieval
+        self._search_results = results
+        self._set_status(f"Status: {len(results)} result(s) for '{query}'")
     
     def _format_duration(self, seconds: int) -> str:
         """Format duration in seconds to MM:SS or HH:MM:SS."""
@@ -162,46 +186,75 @@ class YouTubePanel(wx.Panel):
         dlg.Destroy()
 
     def _on_play(self, event: wx.CommandEvent) -> None:
-        """Play the selected video."""
+        """Play the selected video.
+
+        Resolving the real stream URL (a yt-dlp process that has to
+        contact YouTube) used to run right on the UI thread -- same
+        class of freeze as the search button (see _on_search), just
+        shorter since it's one video instead of twenty results.
+        """
         video = self._get_selected_video()
         if not video:
             wx.MessageBox("Please select a video first.", "No Selection", wx.OK | wx.ICON_WARNING)
             return
-
-        # Resolve the actual stream URL using YouTubeService
-        from radiomaster.services.youtube_dl import YouTubeService
-        service = YouTubeService()
-        stream_url = service.get_stream_url(video.get('url') or video.get('webpage_url') or "")
-        if not stream_url:
-            wx.MessageBox("Unable to resolve stream URL for the selected video.", "Error", wx.OK | wx.ICON_ERROR)
-            return
-
+        video_url = video.get('url') or video.get('webpage_url') or ""
         title = video.get('title', 'YouTube Video')
+        self._set_status(f"Status: Resolving stream for '{title}'...")
+        self._btn_play.Disable()
+
+        def worker():
+            from radiomaster.services.youtube_dl import YouTubeService
+            service = YouTubeService()
+            stream_url = service.get_stream_url(video_url)
+            wx.CallAfter(self._apply_play_result, stream_url, title)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_play_result(self, stream_url: str | None, title: str) -> None:
+        self._btn_play.Enable()
+        if not stream_url:
+            wx.MessageBox("Unable to resolve a playable stream for the selected video.",
+                         "Error", wx.OK | wx.ICON_ERROR)
+            return
         self._engine.play(stream_url, title=title, is_video=True)
-        wx.MessageBox(f"Playing: {title}", "Now Playing", wx.OK | wx.ICON_INFORMATION)
+        self._set_status(f"Status: Playing '{title}'")
 
     def _on_load_playlist(self, event: wx.CommandEvent) -> None:
-        """Load a YouTube playlist and show its entries."""
+        """Load a YouTube playlist and show its entries, off the UI
+        thread (same reasoning as _on_search -- yt-dlp has to actually
+        fetch the whole playlist listing before returning anything)."""
         dlg = wx.TextEntryDialog(self, "Enter playlist URL:", "Load Playlist")
         if dlg.ShowModal() == wx.ID_OK:
             url = dlg.GetValue().strip()
             if url:
-                from radiomaster.services.youtube_dl import YouTubeService
-                service = YouTubeService()
-                entries = service.get_playlist_entries(url)
-                if entries:
-                    self._results_list.DeleteAllItems()
-                    self._search_results = []
-                    for i, entry in enumerate(entries):
-                        idx = self._results_list.InsertItem(i, entry.get('title', 'Unknown')[:100])
-                        self._results_list.SetItem(idx, 1, self._format_duration(entry.get('duration', 0)))
-                        self._results_list.SetItem(idx, 2, entry.get('channel', entry.get('uploader', 'Unknown')))
-                        self._results_list.SetItemData(idx, i)
-                        self._search_results.append(entry)
-                    wx.MessageBox(f"Loaded {len(entries)} items from playlist.", "Playlist Loaded", wx.OK | wx.ICON_INFORMATION)
-                else:
-                    wx.MessageBox("No entries found in playlist.", "Playlist Empty", wx.OK | wx.ICON_WARNING)
+                self._set_status(f"Status: Loading playlist...")
+                self._btn_playlist.Disable()
+
+                def worker():
+                    from radiomaster.services.youtube_dl import YouTubeService
+                    service = YouTubeService()
+                    entries = service.get_playlist_entries(url)
+                    wx.CallAfter(self._apply_playlist_entries, entries)
+
+                import threading
+                threading.Thread(target=worker, daemon=True).start()
         dlg.Destroy()
+
+    def _apply_playlist_entries(self, entries: list[dict]) -> None:
+        self._btn_playlist.Enable()
+        if not entries:
+            wx.MessageBox("No entries found in playlist.", "Playlist Empty", wx.OK | wx.ICON_WARNING)
+            return
+        self._results_list.DeleteAllItems()
+        self._search_results = []
+        for i, entry in enumerate(entries):
+            idx = self._results_list.InsertItem(i, entry.get('title', 'Unknown')[:100])
+            self._results_list.SetItem(idx, 1, self._format_duration(entry.get('duration', 0)))
+            self._results_list.SetItem(idx, 2, entry.get('channel', entry.get('uploader', 'Unknown')))
+            self._results_list.SetItemData(idx, i)
+            self._search_results.append(entry)
+        self._set_status(f"Status: Loaded {len(entries)} item(s) from playlist")
 
     def _on_download(self, event: wx.CommandEvent) -> None:
         """Download the selected video."""

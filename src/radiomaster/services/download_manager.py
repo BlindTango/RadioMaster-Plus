@@ -146,6 +146,7 @@ class DownloadManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
 
             # Monitor progress, and remember the real output file path yt-dlp
