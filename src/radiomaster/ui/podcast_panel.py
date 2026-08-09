@@ -81,6 +81,10 @@ class PodcastPanel(wx.Panel):
         search_label = wx.StaticText(self, label="&Search:")
         self.search_ctrl = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
         self.search_ctrl.SetHint("Search by podcast name or topic")
+        # Tabbing/clicking into the box selects whatever's already there
+        # (e.g. the last search term) so typing immediately replaces it,
+        # instead of having to manually clear it first for a new search.
+        self.search_ctrl.Bind(wx.EVT_SET_FOCUS, self._on_search_focus)
         self.search_btn = wx.Button(self, label="&Search")
 
         search_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -231,6 +235,13 @@ class PodcastPanel(wx.Panel):
         if hasattr(top, "_status_bar"):
             top._status_bar.set_status(text)
 
+    def _on_search_focus(self, event: wx.FocusEvent) -> None:
+        # CallAfter -- selecting immediately on the focus event itself gets
+        # overridden back to no-selection/caret-at-end by the native
+        # control's own default focus handling on MSW if done inline here.
+        wx.CallAfter(self.search_ctrl.SelectAll)
+        event.Skip()
+
     def _on_directory_search(self, event: wx.Event) -> None:
         """Search every configured podcast directory (see
         services/podcast_directory.search_all() -- iTunes always, Podcast
@@ -242,6 +253,9 @@ class PodcastPanel(wx.Panel):
         query = self.search_ctrl.GetValue().strip()
         if not query:
             return
+        # Leaves the just-searched term selected so typing right away
+        # (without first clearing it) starts the next search fresh.
+        self.search_ctrl.SelectAll()
         self._set_status(f"Status: Searching podcast directories for '{query}'...")
         self._search_seq += 1
         seq = self._search_seq
