@@ -22,6 +22,7 @@ from radiomaster.ui.widgets.station_tree import StationTree
 from radiomaster.ui.widgets.now_playing import NowPlayingPanel
 from radiomaster.utils.paths import get_paths
 from radiomaster.utils.tools import get_ffmpeg
+from radiomaster.utils.accessibility import context_menu_pos
 
 log = logging.getLogger("radiomaster")
 
@@ -76,6 +77,18 @@ class RadioPanel(scrolled.ScrolledPanel):
         # background but the button never changed state -- indistinguishable
         # from "does nothing" for a screen reader user with no other feedback.
         self.on_recording_changed: Optional[Callable[[bool], None]] = None
+
+        # Volume/Pan/Rate submenus on the station list's context menu
+        # (see _on_station_context_menu) delegate the actual value
+        # change to MainWindow instead of touching self.engine directly
+        # -- MainWindow's handlers also update the transport bar's own
+        # sliders and save the new value to config, which this panel has
+        # no reference to do on its own. delta is signed: positive steps
+        # up/right, negative steps down/left.
+        self.on_volume_step: Optional[Callable[[float], None]] = None
+        self.on_pan_step: Optional[Callable[[float], None]] = None
+        self.on_rate_step: Optional[Callable[[float], None]] = None
+        self.on_mute_toggle: Optional[Callable[[], None]] = None
 
         # Station play history (browser-style back/forward, not a queue):
         # picking a fresh station truncates anything ahead of the current
@@ -140,6 +153,9 @@ class RadioPanel(scrolled.ScrolledPanel):
         # "the saved volume" at slightly different times.
 
         self.tree.add_custom_section(self.station_db.get_custom_stations())
+        self.tree.set_favorite_stations(self.station_db.get_favorite_stations())
+
+        self.tree.station_list.Bind(wx.EVT_CONTEXT_MENU, self._on_station_context_menu)
 
         self._load_stations()
 
@@ -446,6 +462,86 @@ class RadioPanel(scrolled.ScrolledPanel):
         if key is None:
             return False
         return any(e["station_key"] == key for e in self._recordings.values())
+
+    def _toggle_favorite(self, station: Station) -> None:
+        if self.station_db.is_favorite(station.uuid):
+            self.station_db.remove_favorite(station.uuid)
+            self.set_status(f"Status: Removed '{station.name}' from Favorites")
+        else:
+            self.station_db.add_favorite(station)
+            self.set_status(f"Status: Added '{station.name}' to Favorites")
+        self.tree.set_favorite_stations(self.station_db.get_favorite_stations())
+
+    def _on_station_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        """Right-click (or Shift+F10/Menu key) on a station in the list --
+        the first context menu in the app, covering the actions asked
+        for: play/pause/stop, add/remove favorite, record, and Volume/
+        Pan/Rate submenus. Meant as the template other panels' context
+        menus will follow."""
+        station = self.tree.get_selected_station()
+        if station is None:
+            event.Skip()
+            return
+        menu = wx.Menu()
+
+        same_station = self.engine.current_url == station.url
+        if same_station and self.engine.state == "paused":
+            play_item = menu.Append(wx.ID_ANY, "&Resume")
+            self.Bind(wx.EVT_MENU, lambda e: self.engine.resume(), play_item)
+        elif same_station and self.engine.state in ("playing", "buffering"):
+            play_item = menu.Append(wx.ID_ANY, "&Pause")
+            self.Bind(wx.EVT_MENU, lambda e: self.engine.pause(), play_item)
+        else:
+            play_item = menu.Append(wx.ID_ANY, "&Play")
+            self.Bind(wx.EVT_MENU, lambda e: self._play_station(station), play_item)
+
+        stop_item = menu.Append(wx.ID_ANY, "&Stop")
+        stop_item.Enable(same_station and self.engine.state != "stopped")
+        self.Bind(wx.EVT_MENU, lambda e: self._on_stop(), stop_item)
+
+        menu.AppendSeparator()
+
+        is_fav = self.station_db.is_favorite(station.uuid)
+        fav_item = menu.Append(wx.ID_ANY, "Remove from &Favorites" if is_fav else "Add to &Favorites")
+        self.Bind(wx.EVT_MENU, lambda e: self._toggle_favorite(station), fav_item)
+
+        is_recording = self.is_station_recording(station)
+        record_item = menu.Append(wx.ID_ANY, "Stop &Recording" if is_recording else "&Record")
+        self.Bind(wx.EVT_MENU, lambda e: self._on_record(), record_item)
+
+        menu.AppendSeparator()
+
+        volume_menu = wx.Menu()
+        vol_up = volume_menu.Append(wx.ID_ANY, "Volume &Up")
+        vol_down = volume_menu.Append(wx.ID_ANY, "Volume &Down")
+        mute_item = volume_menu.Append(wx.ID_ANY, "&Mute/Unmute")
+        self.Bind(wx.EVT_MENU, lambda e: self.on_volume_step(0.05) if self.on_volume_step else None, vol_up)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_volume_step(-0.05) if self.on_volume_step else None, vol_down)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_mute_toggle() if self.on_mute_toggle else None, mute_item)
+        menu.AppendSubMenu(volume_menu, "&Volume")
+
+        pan_menu = wx.Menu()
+        pan_left = pan_menu.Append(wx.ID_ANY, "Pan &Left")
+        pan_right = pan_menu.Append(wx.ID_ANY, "Pan &Right")
+        pan_center = pan_menu.Append(wx.ID_ANY, "&Center")
+        self.Bind(wx.EVT_MENU, lambda e: self.on_pan_step(-0.1) if self.on_pan_step else None, pan_left)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_pan_step(0.1) if self.on_pan_step else None, pan_right)
+        self.Bind(wx.EVT_MENU,
+                  lambda e: self.on_pan_step(-self.engine.pan) if self.on_pan_step else None, pan_center)
+        menu.AppendSubMenu(pan_menu, "P&an")
+
+        rate_menu = wx.Menu()
+        rate_up = rate_menu.Append(wx.ID_ANY, "Rate &Up")
+        rate_down = rate_menu.Append(wx.ID_ANY, "Rate &Down")
+        rate_reset = rate_menu.Append(wx.ID_ANY, "&Reset to 1.0x")
+        self.Bind(wx.EVT_MENU, lambda e: self.on_rate_step(0.1) if self.on_rate_step else None, rate_up)
+        self.Bind(wx.EVT_MENU, lambda e: self.on_rate_step(-0.1) if self.on_rate_step else None, rate_down)
+        self.Bind(wx.EVT_MENU,
+                  lambda e: self.on_rate_step(1.0 - self.engine.rate) if self.on_rate_step else None, rate_reset)
+        menu.AppendSubMenu(rate_menu, "&Rate")
+
+        self.tree.station_list.PopupMenu(menu, context_menu_pos(self.tree.station_list, event))
+        menu.Destroy()
 
     # Maps Settings > Recordings > "Recording Format" to an output
     # extension and the ffmpeg audio codec that produces it. FLAC/WAV are

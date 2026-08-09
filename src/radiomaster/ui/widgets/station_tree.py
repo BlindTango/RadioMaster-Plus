@@ -92,6 +92,7 @@ SECTION_COUNTRY = "country"
 SECTION_LANGUAGE = "language"
 SECTION_NETWORK = "network"
 SECTION_CUSTOM = "custom"
+SECTION_FAVORITES = "favorites"
 SECTION_SEARCH = "search"
 
 SECTION_CHOICES = [
@@ -101,6 +102,7 @@ SECTION_CHOICES = [
     ("By Language", SECTION_LANGUAGE, "Language", "Languages:"),
     ("By Network", SECTION_NETWORK, "Network", "Networks:"),
     ("Custom Stations", SECTION_CUSTOM, "Station", "Custom Stations:"),
+    ("Favorites", SECTION_FAVORITES, "Station", "Favorites:"),
     ("Search Results", SECTION_SEARCH, "Station", "Search Results:"),
 ]
 
@@ -181,6 +183,7 @@ class StationTree(wx.Panel):
         self._current_groups: list[tuple[str, int]] = []
         self._current_stations: list[Station] = []
         self._custom_stations: list[Station] = []
+        self._favorite_stations: list[Station] = []
         self._search_stations: list[Station] = []
         self._show_duplicates: bool = True
 
@@ -265,6 +268,22 @@ class StationTree(wx.Panel):
         self._current_section = SECTION_CUSTOM
         self._update_group_label(SECTION_CUSTOM)
         self._show_flat_list(self._custom_stations)
+
+    def set_favorite_stations(self, stations: list[Station]) -> None:
+        """Refreshes the Favorites section's contents -- called at
+        startup and after every Add/Remove Favorite from the station
+        list's context menu, so the section reflects the change
+        immediately if it's the one currently on screen."""
+        self._favorite_stations = sorted(stations, key=lambda s: s.name.lower())
+        if self._current_section == SECTION_FAVORITES:
+            self._show_flat_list(self._favorite_stations)
+
+    def show_favorites(self) -> None:
+        idx = [key for _, key, *_ in SECTION_CHOICES].index(SECTION_FAVORITES)
+        self.section_choice.SetSelection(idx)
+        self._current_section = SECTION_FAVORITES
+        self._update_group_label(SECTION_FAVORITES)
+        self._show_flat_list(self._favorite_stations)
 
     def show_country(self, country: str) -> bool:
         """Switch to the Country section and select *country*'s group, if
@@ -386,6 +405,10 @@ class StationTree(wx.Panel):
             self._current_section = SECTION_CUSTOM
             self._update_group_label(SECTION_CUSTOM)
             self._show_flat_list(self._custom_stations)
+        elif key == SECTION_FAVORITES:
+            self._current_section = SECTION_FAVORITES
+            self._update_group_label(SECTION_FAVORITES)
+            self._show_flat_list(self._favorite_stations)
         else:
             self._current_section = SECTION_SEARCH
             self._update_group_label(SECTION_SEARCH)

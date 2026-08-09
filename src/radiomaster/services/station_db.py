@@ -60,6 +60,23 @@ CREATE TABLE IF NOT EXISTS custom_stations (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS favorite_stations (
+    uuid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    favicon TEXT DEFAULT '',
+    tags TEXT DEFAULT '',
+    country TEXT DEFAULT '',
+    language TEXT DEFAULT '',
+    codec TEXT DEFAULT '',
+    bitrate INTEGER DEFAULT 0,
+    votes INTEGER DEFAULT 0,
+    homepage TEXT DEFAULT '',
+    network TEXT DEFAULT '',
+    languagecodes TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS stations_fts USING fts5(
     uuid UNINDEXED, name, tokenize='trigram'
 );
@@ -256,6 +273,38 @@ class StationDB:
                 "SELECT uuid, name, url FROM custom_stations ORDER BY name COLLATE NOCASE ASC"
             ).fetchall()
         return [Station(uuid=r[0], name=r[1], url=r[2], network="Custom") for r in rows]
+
+    def add_favorite(self, station: Station) -> None:
+        """Bookmarks *station* -- stores its full metadata (not just a
+        reference to the catalog) so it stays a complete, playable entry
+        in Favorites even if the station is later dropped from a catalog
+        refresh, same reasoning as custom_stations. INSERT OR REPLACE:
+        re-favoriting an already-favorited station just refreshes its
+        stored metadata rather than erroring on the uuid PK collision."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                f"""INSERT OR REPLACE INTO favorite_stations ({_STATION_COLUMNS})
+                VALUES ({', '.join('?' for _ in _FIELDS)})""",
+                tuple(getattr(station, f) for f in _FIELDS),
+            )
+
+    def remove_favorite(self, station_uuid: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM favorite_stations WHERE uuid = ?", (station_uuid,))
+
+    def is_favorite(self, station_uuid: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM favorite_stations WHERE uuid = ?", (station_uuid,)
+            ).fetchone()
+        return row is not None
+
+    def get_favorite_stations(self) -> list[Station]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {_STATION_COLUMNS} FROM favorite_stations ORDER BY name COLLATE NOCASE ASC"
+            ).fetchall()
+        return self._rows_to_stations(rows)
 
     def stations_by_genre(self, genre: str, limit: int = 200000) -> list[Station]:
         with self._connect() as conn:

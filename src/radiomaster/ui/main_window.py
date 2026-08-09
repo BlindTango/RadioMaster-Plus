@@ -379,6 +379,16 @@ class MainWindow(wx.Frame):
         )
         self._radio_panel.on_history_changed = self._update_transport_button_states
         self._radio_panel.on_now_playing_changed = self._on_radio_now_playing_changed
+        # Station list context menu's Volume/Pan/Rate submenus (see
+        # RadioPanel._on_station_context_menu) delegate here rather than
+        # touching self._engine directly, so the transport bar's own
+        # sliders and saved config stay in sync with a change made from
+        # the context menu, the same as one made from the sliders
+        # themselves.
+        self._radio_panel.on_volume_step = self._on_volume_step
+        self._radio_panel.on_pan_step = self._on_pan_step
+        self._radio_panel.on_rate_step = self._on_rate_step
+        self._radio_panel.on_mute_toggle = self._on_mute_toggle
         self._podcast_panel = PodcastPanel(self._listbook, self._db, self._engine)
         self._audiobook_panel = AudiobookPanel(self._listbook, self._db, self._engine)
         self._media_panel = MediaPlayerPanel(self._listbook, self._db, self._engine)
@@ -1256,6 +1266,14 @@ class MainWindow(wx.Frame):
             log = logging.getLogger("radiomaster")
             for warning in warnings:
                 log.warning(f"Global hotkey: {warning}")
+
+    def _on_volume_step(self, delta: float) -> None:
+        """Global-hotkey/context-menu Volume Up/Down -- steps the same
+        Volume value/slider the transport bar's own volume slider uses,
+        +/-0.05 on its 0.0..1.0 scale (matches the existing hotkey step)."""
+        new_volume = max(0.0, min(1.0, self._engine._volume + delta))
+        self._on_volume_change(new_volume)
+        self._now_playing.set_volume(new_volume)
 
     def _on_pan_step(self, delta: float) -> None:
         """Global-hotkey Pan Left/Right -- steps the same Pan value/slider
