@@ -87,47 +87,78 @@ class DownloadsPanel(wx.Panel):
     def _load_data(self) -> None:
         """Load download data from the repository.
 
-        Remembers and restores the Active list's selection (by the
-        download's real database id, not row position) across the
-        rebuild -- the 3-second auto-refresh timer used to call this and
-        wipe whatever was selected every single time via DeleteAllItems,
-        so clicking "Stop Recording" (or anything else that needs a
-        selection) almost always hit "Select a recording first" even
-        though something genuinely was selected a moment before.
+        The 3-second auto-refresh timer used to blow away and rebuild
+        BOTH lists from scratch (DeleteAllItems + reinsert everything)
+        on every single tick, whether anything had actually changed or
+        not -- almost always just a progress percentage ticking up.
+        Restoring the selected row by id afterward (added previously)
+        stopped the *button clicks* from failing, but the list itself
+        still visibly tore down and rebuilt every 3 seconds, which is
+        exactly what made it "constantly refreshing" and hard to work
+        with for a screen reader user: rebuilding the whole list churns
+        the accessibility tree even when the row you're on didn't move.
+        It could also actually pick the wrong row if the active set
+        reordered while re-selecting only by id and you acted on the
+        list a beat later, which is exactly the "stop recording B, but
+        Remove says recording A is still active" symptom.
+
+        Now: if the exact same set of active download ids is present in
+        the same order as last time, only that row's Progress/Status
+        cells are updated in place via SetItem -- no delete/reinsert at
+        all, so the list, focus, and selection are completely
+        undisturbed. A full rebuild only happens when a row genuinely
+        starts, finishes, or is removed -- an actual list change, not a
+        cosmetic one.
         """
         from radiomaster.database.repository import DownloadRepository
         repo = DownloadRepository(self._db)
 
-        selected_idx = self._active_list.GetFirstSelected()
-        selected_id = (
-            self._active_rows[selected_idx]["id"]
-            if selected_idx != wx.NOT_FOUND and selected_idx < len(self._active_rows)
-            else None
+        new_rows = repo.get_queued()
+        same_rows = (
+            len(new_rows) == len(self._active_rows)
+            and all(a["id"] == b["id"] for a, b in zip(new_rows, self._active_rows))
         )
+        self._active_rows = new_rows
+        if same_rows:
+            for i, d in enumerate(new_rows):
+                self._active_list.SetItem(i, 1, f"{d.get('progress', 0):.0f}%")
+                self._active_list.SetItem(i, 2, d.get("status", "queued"))
+        else:
+            selected_idx = self._active_list.GetFirstSelected()
+            selected_id = (
+                self._active_list.GetItemData(selected_idx) if selected_idx != wx.NOT_FOUND else None
+            )
+            self._active_list.DeleteAllItems()
+            for i, d in enumerate(new_rows):
+                idx = self._active_list.InsertItem(i, d.get("title", "Unknown"))
+                self._active_list.SetItemData(idx, d["id"])
+                self._active_list.SetItem(idx, 1, f"{d.get('progress', 0):.0f}%")
+                self._active_list.SetItem(idx, 2, d.get("status", "queued"))
+            if selected_id is not None:
+                for i, d in enumerate(new_rows):
+                    if d["id"] == selected_id:
+                        self._active_list.Select(i)
+                        break
 
-        # Active/queued downloads
-        self._active_list.DeleteAllItems()
-        self._active_rows = repo.get_queued()
-        for d in self._active_rows:
-            idx = self._active_list.InsertItem(self._active_list.GetItemCount(), d.get("title", "Unknown"))
-            self._active_list.SetItem(idx, 1, f"{d.get('progress', 0):.0f}%")
-            self._active_list.SetItem(idx, 2, d.get("status", "queued"))
-
-        if selected_id is not None:
-            for i, d in enumerate(self._active_rows):
-                if d["id"] == selected_id:
-                    self._active_list.Select(i)
-                    break
-
-        # History (completed/failed downloads)
-        self._history_list.DeleteAllItems()
-        all_downloads = self._db.fetchall(
+        # History (completed/failed downloads) -- refreshed the same
+        # cautious way, though it changes far less often than progress.
+        new_history = self._db.fetchall(
             "SELECT * FROM downloads WHERE status IN ('completed', 'failed') ORDER BY id DESC LIMIT 50"
         )
-        for d in all_downloads:
-            idx = self._history_list.InsertItem(self._history_list.GetItemCount(), d.get("title", "Unknown"))
-            self._history_list.SetItem(idx, 1, d.get("created_at", ""))
-            self._history_list.SetItem(idx, 2, d.get("status", ""))
+        history_same = (
+            self._history_list.GetItemCount() == len(new_history)
+            and all(
+                self._history_list.GetItemData(i) == d["id"]
+                for i, d in enumerate(new_history)
+            )
+        )
+        if not history_same:
+            self._history_list.DeleteAllItems()
+            for i, d in enumerate(new_history):
+                idx = self._history_list.InsertItem(i, d.get("title", "Unknown"))
+                self._history_list.SetItemData(idx, d["id"])
+                self._history_list.SetItem(idx, 1, d.get("created_at", ""))
+                self._history_list.SetItem(idx, 2, d.get("status", ""))
 
     def _on_stop_recording(self, event: wx.CommandEvent) -> None:
         idx = self._active_list.GetFirstSelected()
