@@ -113,6 +113,12 @@ class PodcastRepository:
             (podcast_id,),
         )
 
+    def remove(self, podcast_id: int) -> None:
+        """Unsubscribe: removes the podcast and (via ON DELETE CASCADE,
+        foreign_keys=ON in connection.py) its episodes."""
+        self._db.execute("DELETE FROM podcasts WHERE id = ?", (podcast_id,))
+        self._db.commit()
+
 
 class EpisodeRepository:
     """CRUD operations for individual podcast episodes (play progress)."""

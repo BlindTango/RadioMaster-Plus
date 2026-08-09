@@ -118,9 +118,14 @@ class PodcastPanel(wx.Panel):
         self._podcast_list.InsertColumn(2, "Directory", width=120)
         set_accessible_name(self._podcast_list, "Podcasts")
         col2_sizer.Add(self._podcast_list, 1, wx.EXPAND | wx.ALL, 4)
+        sub_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._btn_subscribe = wx.Button(col2, label="Su&bscribe")
         set_accessible_name(self._btn_subscribe, "Subscribe to selected podcast")
-        col2_sizer.Add(self._btn_subscribe, 0, wx.EXPAND | wx.ALL, 4)
+        sub_btn_sizer.Add(self._btn_subscribe, 1, wx.RIGHT, 2)
+        self._btn_unsubscribe = wx.Button(col2, label="&Unsubscribe")
+        set_accessible_name(self._btn_unsubscribe, "Unsubscribe from selected podcast")
+        sub_btn_sizer.Add(self._btn_unsubscribe, 1, wx.LEFT, 2)
+        col2_sizer.Add(sub_btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
         col2.SetSizer(col2_sizer)
         main_sizer.Add(col2, 1, wx.EXPAND | wx.RIGHT, 4)
 
@@ -135,15 +140,16 @@ class PodcastPanel(wx.Panel):
         set_accessible_name(self._episode_list, "Episodes")
         col3_sizer.Add(self._episode_list, 1, wx.EXPAND | wx.ALL, 4)
 
-        # Buttons
-        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_play = wx.Button(col3, label="Play Episode")
-        set_accessible_name(self._btn_play, "Play Episode")
-        btn_sizer.Add(self._btn_play, 1, wx.RIGHT, 2)
+        # No inline Play button here -- matches RadioPanel, which has none
+        # either: Enter/double-click on the list starts playback (already
+        # bound below), and the shared transport bar (NowPlayingBar) is
+        # what actually controls play/pause/stop of whatever's playing.
+        # A second, separate "Play" button next to that was confusing
+        # (two different-looking play controls that don't do the same
+        # thing) rather than actually useful.
         self._btn_download = wx.Button(col3, label="Download Episode")
         set_accessible_name(self._btn_download, "Download Episode")
-        btn_sizer.Add(self._btn_download, 1, wx.LEFT, 2)
-        col3_sizer.Add(btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
+        col3_sizer.Add(self._btn_download, 0, wx.EXPAND | wx.ALL, 4)
 
         btn2_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._btn_add_feed = wx.Button(col3, label="Add RSS Feed...")
@@ -176,8 +182,8 @@ class PodcastPanel(wx.Panel):
         self._podcast_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_podcast_select)
         self._podcast_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_podcast_activated)
         self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
+        self._btn_unsubscribe.Bind(wx.EVT_BUTTON, self._on_unsubscribe)
         self._episode_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
-        self._btn_play.Bind(wx.EVT_BUTTON, self._on_play)
         self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
         self._btn_add_feed.Bind(wx.EVT_BUTTON, self._on_add_feed)
         self._btn_sync_gpodder.Bind(wx.EVT_BUTTON, self._on_sync_gpodder)
@@ -401,6 +407,44 @@ class PodcastPanel(wx.Panel):
                 self._load_episodes_for_index(i)
                 break
         self._set_status(f"Status: Subscribed to '{title}' ({episode_count} episode(s))")
+
+    def _on_unsubscribe(self, event: wx.Event) -> None:
+        """Removes the selected subscribed podcast (and its episodes, via
+        ON DELETE CASCADE) from the local database. Only meaningful for an
+        already-subscribed podcast, not a bare directory search result --
+        those aren't in the database yet, so there's nothing to remove."""
+        if self._viewing_search_results:
+            wx.MessageBox(
+                "This is a search result, not a subscription yet -- there's nothing to unsubscribe from.",
+                "Not Subscribed", wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        idx = self._podcast_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._podcast_data):
+            wx.MessageBox("Select a podcast to unsubscribe from first.", "No Selection",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        podcast = self._podcast_data[idx]
+        title = podcast.get("title", "this podcast")
+        podcast_id = podcast.get("id")
+        if not podcast_id:
+            return
+        if wx.MessageBox(
+            f"Unsubscribe from '{title}'? This removes it and its downloaded episode list.",
+            "Unsubscribe", wx.YES_NO | wx.ICON_QUESTION,
+        ) != wx.YES:
+            return
+
+        from radiomaster.database.repository import PodcastRepository
+        PodcastRepository(self._db).remove(podcast_id)
+        if self._current_episode_id is not None and any(
+            ep.get("id") == self._current_episode_id for ep in getattr(self, "_episode_data", [])
+        ):
+            self._current_episode_id = None
+        self._episode_list.DeleteAllItems()
+        self._episode_data = []
+        self._on_category_select(None)  # re-populate column 2 without the removed podcast
+        self._set_status(f"Status: Unsubscribed from '{title}'")
 
     def _on_sync_gpodder(self, event: wx.CommandEvent) -> None:
         """Sync subscriptions with gpodder.net."""
