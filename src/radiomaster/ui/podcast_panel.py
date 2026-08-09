@@ -3,11 +3,18 @@
 Laid out the same way as the Radio tab (RadioPanel): a search row (label +
 textbox + button) at the top -- always visible, not buried in a column or
 gated behind picking a category first -- followed by a categorized browser
-below it. Uses three linked listboxes:
+below it. Uses three linked lists:
     1. Categories (All, Custom, Directory)
     2. Podcasts (feeds in the selected category, or live search results
        when the Directory category is showing what was just searched)
     3. Episodes (episodes of the selected podcast)
+
+All three are wx.ListCtrl (report view), the same native control RadioPanel
+and DownloadsPanel already use -- not wx.ListBox. A plain wx.ListBox's
+per-item text isn't reliably exposed to screen readers on Windows (NVDA
+read every row as a bare "list item" with no name); ListCtrl in report
+view is the control this codebase already establishes for anything that
+needs to actually be readable.
 
 Searching queries every configured podcast directory (see
 services/podcast_directory.py's search_all()) and shows the results in the
@@ -66,7 +73,7 @@ class PodcastPanel(wx.Panel):
 
     def _setup_ui(self) -> None:
         """Create the podcast panel layout: a Radio-tab-style search row on
-        top, then three linked listboxes below it."""
+        top, then three linked ListCtrls below it."""
         outer = wx.BoxSizer(wx.VERTICAL)
 
         # --- Search row (matches RadioPanel's search_row exactly: label +
@@ -84,23 +91,27 @@ class PodcastPanel(wx.Panel):
 
         main_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        # --- Column 1: Category listbox ---
+        # --- Column 1: Category list ---
         col1 = wx.Panel(self)
         col1_sizer = wx.BoxSizer(wx.VERTICAL)
         col1_sizer.Add(wx.StaticText(col1, label="Category"), 0, wx.ALL, 4)
-        self._category_list = wx.ListBox(col1, style=wx.LB_SINGLE)
+        self._category_list = wx.ListCtrl(col1, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self._category_list.InsertColumn(0, "Category", width=180)
         set_accessible_name(self._category_list, "Podcast Category")
         for cat in ["All Podcasts", "Custom Feeds", "Directory"]:
-            self._category_list.Append(cat)
+            self._category_list.InsertItem(self._category_list.GetItemCount(), cat)
         col1_sizer.Add(self._category_list, 1, wx.EXPAND | wx.ALL, 4)
         col1.SetSizer(col1_sizer)
         main_sizer.Add(col1, 1, wx.EXPAND | wx.RIGHT, 4)
 
-        # --- Column 2: Podcast listbox ---
+        # --- Column 2: Podcast list ---
         col2 = wx.Panel(self)
         col2_sizer = wx.BoxSizer(wx.VERTICAL)
         col2_sizer.Add(wx.StaticText(col2, label="Podcasts"), 0, wx.ALL, 4)
-        self._podcast_list = wx.ListBox(col2, style=wx.LB_SINGLE)
+        self._podcast_list = wx.ListCtrl(col2, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self._podcast_list.InsertColumn(0, "Title", width=200)
+        self._podcast_list.InsertColumn(1, "Author", width=140)
+        self._podcast_list.InsertColumn(2, "Directory", width=120)
         set_accessible_name(self._podcast_list, "Podcasts")
         col2_sizer.Add(self._podcast_list, 1, wx.EXPAND | wx.ALL, 4)
         self._btn_subscribe = wx.Button(col2, label="Su&bscribe")
@@ -109,11 +120,14 @@ class PodcastPanel(wx.Panel):
         col2.SetSizer(col2_sizer)
         main_sizer.Add(col2, 1, wx.EXPAND | wx.RIGHT, 4)
 
-        # --- Column 3: Episode listbox ---
+        # --- Column 3: Episode list ---
         col3 = wx.Panel(self)
         col3_sizer = wx.BoxSizer(wx.VERTICAL)
         col3_sizer.Add(wx.StaticText(col3, label="Episodes"), 0, wx.ALL, 4)
-        self._episode_list = wx.ListBox(col3, style=wx.LB_SINGLE)
+        self._episode_list = wx.ListCtrl(col3, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self._episode_list.InsertColumn(0, "Episode", width=260)
+        self._episode_list.InsertColumn(1, "Published", width=140)
+        self._episode_list.InsertColumn(2, "Duration", width=80)
         set_accessible_name(self._episode_list, "Episodes")
         col3_sizer.Add(self._episode_list, 1, wx.EXPAND | wx.ALL, 4)
 
@@ -154,11 +168,11 @@ class PodcastPanel(wx.Panel):
         # Bind events
         self.search_btn.Bind(wx.EVT_BUTTON, self._on_directory_search)
         self.search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_directory_search)
-        self._category_list.Bind(wx.EVT_LISTBOX, self._on_category_select)
-        self._podcast_list.Bind(wx.EVT_LISTBOX, self._on_podcast_select)
-        self._podcast_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_podcast_activated)
+        self._category_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_category_select)
+        self._podcast_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_podcast_select)
+        self._podcast_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_podcast_activated)
         self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
-        self._episode_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_play)
+        self._episode_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
         self._btn_play.Bind(wx.EVT_BUTTON, self._on_play)
         self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
         self._btn_add_feed.Bind(wx.EVT_BUTTON, self._on_add_feed)
@@ -167,31 +181,50 @@ class PodcastPanel(wx.Panel):
         self._btn_export_opml.Bind(wx.EVT_BUTTON, self._on_export_opml)
 
     # ------------------------------------------------------------------
+    # Small ListCtrl helpers (InsertItem/SetItem is a lot of boilerplate
+    # for a 1-3 column row -- these keep the call sites below readable).
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _append_row(list_ctrl: wx.ListCtrl, *columns: str) -> int:
+        idx = list_ctrl.InsertItem(list_ctrl.GetItemCount(), columns[0])
+        for col, text in enumerate(columns[1:], start=1):
+            list_ctrl.SetItem(idx, col, text)
+        return idx
+
+    @staticmethod
+    def _find_row(list_ctrl: wx.ListCtrl, text: str) -> int:
+        return list_ctrl.FindItem(-1, text)
+
+    # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
     def _on_category_select(self, event: wx.CommandEvent) -> None:
         """Populate the podcast list when a category is selected."""
         from radiomaster.database.repository import PodcastRepository
         repo = PodcastRepository(self._db)
-        self._podcast_list.Clear()
-        self._episode_list.Clear()
+        self._podcast_list.DeleteAllItems()
+        self._episode_list.DeleteAllItems()
         self._podcast_data: list[dict[str, Any]] = []
         self._viewing_search_results = False
 
-        cat = self._category_list.GetStringSelection()
+        cat = self._selected_category()
         if cat == "All Podcasts":
             for p in repo.get_all():
-                self._podcast_list.Append(p.get("title", "Unknown"))
+                self._append_row(self._podcast_list, p.get("title", "Unknown"), p.get("author", ""))
                 self._podcast_data.append(p)
         elif cat == "Custom Feeds":
             for p in repo.get_all():
                 if p.get("is_custom"):
-                    self._podcast_list.Append(p.get("title", "Unknown"))
+                    self._append_row(self._podcast_list, p.get("title", "Unknown"), p.get("author", ""))
                     self._podcast_data.append(p)
         elif cat == "Directory":
-            self._podcast_list.Clear()
+            self._podcast_list.DeleteAllItems()
             self._podcast_data = []
-            self._podcast_list.Append("(Use Search above to find podcasts to subscribe to)")
+            self._append_row(self._podcast_list, "(Use Search above to find podcasts to subscribe to)")
+
+    def _selected_category(self) -> str:
+        idx = self._category_list.GetFirstSelected()
+        return self._category_list.GetItemText(idx) if idx != wx.NOT_FOUND else ""
 
     def _set_status(self, text: str) -> None:
         top = wx.GetTopLevelParent(self)
@@ -235,39 +268,40 @@ class PodcastPanel(wx.Panel):
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_search_results(self, results: list[dict[str, Any]], query: str) -> None:
-        # Switching category to "Directory" doesn't fire EVT_LISTBOX (wx
-        # doesn't raise it for programmatic SetSelection), so the results
+        # Switching category to "Directory" doesn't fire EVT_LIST_ITEM_SELECTED
+        # (wx doesn't raise it for a programmatic Select()), so the results
         # are populated directly here rather than relying on
         # _on_category_select to do it.
-        idx = self._category_list.FindString("Directory")
+        idx = self._find_row(self._category_list, "Directory")
         if idx != wx.NOT_FOUND:
-            self._category_list.SetSelection(idx)
-        self._episode_list.Clear()
-        self._podcast_list.Clear()
+            self._category_list.Select(idx)
+        self._episode_list.DeleteAllItems()
+        self._podcast_list.DeleteAllItems()
         self._podcast_data = results
         self._viewing_search_results = True
         if not results:
-            self._podcast_list.Append("(No results -- try a different search term)")
+            self._append_row(self._podcast_list, "(No results -- try a different search term)")
         for r in results:
-            display = f"{r.get('title', 'Unknown')}  [{r.get('author', '')}]  -- {r.get('directory', '')}"
-            self._podcast_list.Append(display)
-        if self._podcast_list.GetCount():
+            self._append_row(
+                self._podcast_list, r.get("title", "Unknown"), r.get("author", ""), r.get("directory", ""),
+            )
+        if self._podcast_list.GetItemCount():
             # A previous, longer list (e.g. "All Podcasts" after scrolling
-            # down) can leave the native listbox's scroll position not
-            # reset by Clear() -- the new items genuinely exist (GetCount()
-            # is correct) but can render scrolled out of view, looking
-            # exactly like "found 25 but nothing shows". Force it back to
-            # the top and repaint explicitly rather than trust that.
-            self._podcast_list.SetFirstItem(0)
+            # down) can leave the native control's scroll position not
+            # reset by DeleteAllItems() -- the new items genuinely exist
+            # (GetItemCount() is correct) but can render scrolled out of
+            # view, looking exactly like "found 25 but nothing shows".
+            # Force it back to the top and repaint explicitly.
+            self._podcast_list.EnsureVisible(0)
             self._podcast_list.Refresh()
             self._podcast_list.Update()
         self._set_status(f"Status: {len(results)} result(s) for '{query}'")
 
     def _on_podcast_activated(self, event: wx.CommandEvent) -> None:
-        """Double-click in the Podcasts list: subscribes when browsing live
-        search results (mirrors RadioPanel activating a station to play it
-        -- one action commits to using what's selected); a no-op for
-        already-subscribed podcasts, which single-click already loads."""
+        """Double-click/Enter in the Podcasts list: subscribes when browsing
+        live search results (mirrors RadioPanel activating a station to
+        play it -- one action commits to using what's selected); a no-op
+        for already-subscribed podcasts, which single-click already loads."""
         if self._viewing_search_results:
             self._on_subscribe(event)
 
@@ -283,7 +317,7 @@ class PodcastPanel(wx.Panel):
                 "Nothing To Subscribe", wx.OK | wx.ICON_INFORMATION,
             )
             return
-        idx = self._podcast_list.GetSelection()
+        idx = self._podcast_list.GetFirstSelected()
         if idx == wx.NOT_FOUND or idx >= len(self._podcast_data):
             wx.MessageBox("Select a podcast from the search results first.", "No Selection",
                           wx.OK | wx.ICON_INFORMATION)
@@ -333,22 +367,23 @@ class PodcastPanel(wx.Panel):
         self._btn_subscribe.Enable()
         # "All Podcasts" -- switching category re-populates column 2 from
         # the DB, which now includes the podcast just subscribed to.
-        idx = self._category_list.FindString("All Podcasts")
+        idx = self._find_row(self._category_list, "All Podcasts")
         if idx != wx.NOT_FOUND:
-            self._category_list.SetSelection(idx)
+            self._category_list.Select(idx)
         self._viewing_search_results = False
         from radiomaster.database.repository import PodcastRepository
         repo = PodcastRepository(self._db)
-        self._podcast_list.Clear()
+        self._podcast_list.DeleteAllItems()
         self._podcast_data = []
         for p in repo.get_all():
-            self._podcast_list.Append(p.get("title", "Unknown"))
+            self._append_row(self._podcast_list, p.get("title", "Unknown"), p.get("author", ""))
             self._podcast_data.append(p)
         # Select the podcast just subscribed to and load its episodes,
         # same as clicking it manually would.
         for i, p in enumerate(self._podcast_data):
             if p.get("title") == title:
-                self._podcast_list.SetSelection(i)
+                self._podcast_list.Select(i)
+                self._podcast_list.EnsureVisible(i)
                 self._load_episodes_for_index(i)
                 break
         self._set_status(f"Status: Subscribed to '{title}' ({episode_count} episode(s))")
@@ -390,7 +425,7 @@ class PodcastPanel(wx.Panel):
 
     def _on_download(self, event: wx.CommandEvent) -> None:
         """Download the selected episode for offline playback."""
-        idx = self._episode_list.GetSelection()
+        idx = self._episode_list.GetFirstSelected()
         if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
             wx.MessageBox("Please select an episode first.", "No Selection", wx.OK | wx.ICON_WARNING)
             return
@@ -407,10 +442,10 @@ class PodcastPanel(wx.Panel):
 
     def _on_podcast_select(self, event: wx.CommandEvent) -> None:
         """Populate the episode list when a podcast is selected."""
-        self._episode_list.Clear()
+        self._episode_list.DeleteAllItems()
         self._episode_data: list[dict[str, Any]] = []
 
-        idx = self._podcast_list.GetSelection()
+        idx = self._podcast_list.GetFirstSelected()
         if idx < 0 or not hasattr(self, '_podcast_data') or idx >= len(self._podcast_data):
             return
 
@@ -428,19 +463,21 @@ class PodcastPanel(wx.Panel):
     def _load_episodes_for_index(self, idx: int) -> None:
         from radiomaster.database.repository import PodcastRepository
         repo = PodcastRepository(self._db)
-        self._episode_list.Clear()
+        self._episode_list.DeleteAllItems()
         self._episode_data = []
         podcast = self._podcast_data[idx]
         podcast_id = podcast.get("id")
         if podcast_id:
             for ep in repo.get_episodes(podcast_id):
-                display = f"{ep.get('title', 'Unknown')}  [{ep.get('published_date', '')}]"
-                self._episode_list.Append(display)
+                self._append_row(
+                    self._episode_list, ep.get("title", "Unknown"),
+                    ep.get("published_date", ""), str(ep.get("duration", "") or ""),
+                )
                 self._episode_data.append(ep)
 
     def _on_play(self, event: wx.Event) -> None:
         """Play the selected episode, resuming from saved position if any."""
-        idx = self._episode_list.GetSelection()
+        idx = self._episode_list.GetFirstSelected()
         if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
             return
         ep = self._episode_data[idx]
