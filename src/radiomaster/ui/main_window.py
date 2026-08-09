@@ -622,18 +622,27 @@ class MainWindow(wx.Frame):
             self._engine.resume()
         elif self._engine.state in ("playing", "buffering"):
             self._engine.pause()
+        elif self._engine.state == "stopped":
+            # Pressing Stop clears state back to "stopped" but deliberately
+            # leaves current_url/title/duration alone (see
+            # PlaybackEngine.stop()) -- exactly so Play here can restart
+            # the same episode/track from the beginning, matching what the
+            # button visually promises. Previously this state had no
+            # branch at all, so Play silently did nothing after Stop.
+            if self._engine.current_url:
+                self._engine.play(
+                    self._engine.current_url, title=self._engine.current_title,
+                    artist=self._engine.current_artist, is_video=self._engine.is_video,
+                    duration=self._engine.duration,
+                )
 
     def _on_play_pause_accel(self) -> None:
-        """Handle Ctrl+P / Space play/pause accelerator."""
-        if self._listbook.GetSelection() == 0:
-            self._radio_panel._on_play_pause()
-            return
-        if self._engine.state == "stopped":
-            self._engine.play("", title="Playback")
-        elif self._engine.state == "playing":
-            self._engine.pause()
-        elif self._engine.state == "paused":
-            self._engine.resume()
+        """Handle Ctrl+P / Space play/pause accelerator -- same logic as
+        the transport bar's own Play/Pause button (_on_transport_play_pause),
+        which already handles every state correctly; this used to
+        duplicate it with its own, different (and broken -- play("") is
+        not a real track) stopped-state handling."""
+        self._on_transport_play_pause()
 
     def _on_search_focus(self) -> None:
         """Focus the search bar."""

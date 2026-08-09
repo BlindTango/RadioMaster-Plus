@@ -555,7 +555,17 @@ class LiveAudioEngine:
             self._notify_state()
 
     def seek(self, position_seconds: float) -> None:
-        if self._is_local_file:
+        # A local file is always finite/seekable; a remote URL is too as
+        # long as it has a known duration (an on-demand file like a
+        # podcast episode) -- ffmpeg's http protocol handler supports
+        # Range-request seeking same as a local filesystem seek. Only a
+        # genuinely unbounded live stream (radio -- duration always 0)
+        # can't be meaningfully seeked. This previously gated on
+        # _is_local_file alone, which silently no-op'd every remote URL
+        # including podcast episodes -- exactly the case the transport
+        # bar's seek slider/rewind/fast-forward are *enabled* for
+        # (set_seekable(duration > 0), the same signal used here now).
+        if self._is_local_file or self._duration > 0:
             self._seek_request = position_seconds
 
     # ------------------------------------------------------------------
