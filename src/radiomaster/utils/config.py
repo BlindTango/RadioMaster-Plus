@@ -166,20 +166,34 @@ class ConfigManager:
     _instance: "ConfigManager | None" = None
 
     @staticmethod
-    def get_instance() -> "ConfigManager":
-        """Get or create the global ConfigManager singleton.
+    def set_instance(instance: "ConfigManager") -> None:
+        """Registers *instance* as the global singleton -- app.py calls
+        this right after constructing the app's one real ConfigManager, so
+        every get_instance() call anywhere in the app (a dozen-plus
+        services/panels that read settings without being handed a
+        reference directly) sees the exact same object the Settings
+        dialog writes to, instead of get_instance() lazily creating its
+        own second, disconnected instance the first time something reads
+        a setting before app.py's real one exists."""
+        ConfigManager._instance = instance
 
-        This is used by services (e.g. :class:`LyricsService`) that need
-        to read configuration but are not passed a ``ConfigManager``
-        reference during construction.
+    @staticmethod
+    def get_instance() -> "ConfigManager":
+        """Get the global ConfigManager singleton, creating a fallback
+        instance only if app.py hasn't registered the real one yet (e.g.
+        a unit test constructing a panel directly).
+
+        The fallback's directory matches get_paths()["config"] (portable-
+        aware) rather than always the non-portable per-user location --
+        it previously used user_config_dir(...) directly, which in a
+        portable install pointed at a completely different, effectively
+        empty config file: every setting read through get_instance()
+        while running portable silently saw defaults instead of whatever
+        was actually saved via Settings, no matter what the user changed.
         """
         if ConfigManager._instance is None:
-            import os
-            from platformdirs import user_config_dir
-            from radiomaster import __app_name__
-            app_name = __app_name__.replace("+", "Plus")
-            config_dir = user_config_dir(app_name, app_name)
-            ConfigManager._instance = ConfigManager(config_dir)
+            from radiomaster.utils.paths import get_paths
+            ConfigManager._instance = ConfigManager(get_paths()["config"])
         return ConfigManager._instance
 
     def load(self) -> None:

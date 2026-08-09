@@ -342,6 +342,21 @@ class PodcastsPanel(SettingsPanel):
         podcastindex_link = wx.StaticText(self, label="Get a free key at api.podcastindex.org")
         sizer.Add(podcastindex_link, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
+        sizer.Add(wx.StaticText(self, label="Episode order:"), 0, wx.ALL, 5)
+        self.episode_order_choice = wx.ComboBox(
+            self, choices=["Newest first", "Oldest first"], style=wx.CB_READONLY,
+        )
+        current_order = self.config.get("podcasts.episode_order", default="newest")
+        self.episode_order_choice.SetStringSelection(
+            "Oldest first" if current_order == "oldest" else "Newest first"
+        )
+        set_accessible_name(self.episode_order_choice, "Episode order")
+        sizer.Add(self.episode_order_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        self.auto_advance_chk = wx.CheckBox(self, label="Auto-advance to the next episode when one finishes")
+        self.auto_advance_chk.SetValue(self.config.get("podcasts.auto_advance", default=False))
+        sizer.Add(self.auto_advance_chk, 0, wx.ALL, 5)
+
     def onSave(self) -> None:
         self.config.set("podcasts.auto_download", value=self.auto_download_chk.IsChecked())
         self.config.set("podcasts.download_limit", value=self.download_limit_spin.GetValue())
@@ -350,6 +365,11 @@ class PodcastsPanel(SettingsPanel):
         self.config.set("podcasts.gpodder_username", value=self.gpodder_user_txt.GetValue().strip())
         self.config.set("podcasts.podcastindex_api_key", value=self.podcastindex_key_txt.GetValue().strip())
         self.config.set("podcasts.podcastindex_api_secret", value=self.podcastindex_secret_txt.GetValue().strip())
+        self.config.set(
+            "podcasts.episode_order",
+            value="oldest" if self.episode_order_choice.GetStringSelection() == "Oldest first" else "newest",
+        )
+        self.config.set("podcasts.auto_advance", value=self.auto_advance_chk.IsChecked())
 
 
 class DownloadsPanel(SettingsPanel):

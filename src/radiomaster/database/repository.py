@@ -107,9 +107,10 @@ class PodcastRepository:
     def get_all(self) -> list[dict[str, Any]]:
         return self._db.fetchall("SELECT * FROM podcasts ORDER BY title")
 
-    def get_episodes(self, podcast_id: int) -> list[dict[str, Any]]:
+    def get_episodes(self, podcast_id: int, ascending: bool = False) -> list[dict[str, Any]]:
+        direction = "ASC" if ascending else "DESC"
         return self._db.fetchall(
-            "SELECT * FROM episodes WHERE podcast_id = ? ORDER BY published_date DESC",
+            f"SELECT * FROM episodes WHERE podcast_id = ? ORDER BY published_date {direction}",
             (podcast_id,),
         )
 

@@ -71,6 +71,11 @@ class RadioMasterApp(wx.App):
 
         # Load configuration
         self._config = ConfigManager(self._paths["config"])
+        # Every ConfigManager.get_instance() call anywhere in the app (a
+        # dozen-plus services/panels that read settings without being
+        # handed a reference directly) must see this exact object -- see
+        # ConfigManager.set_instance()'s docstring for why this matters.
+        ConfigManager.set_instance(self._config)
 
         # Setup logging
         setup_logging(

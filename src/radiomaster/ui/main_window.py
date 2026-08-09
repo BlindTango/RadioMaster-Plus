@@ -513,7 +513,11 @@ class MainWindow(wx.Frame):
         self._engine.on_state_change(lambda state: wx.CallAfter(self._on_engine_state, state))
         self._engine.on_position_update(lambda pos, dur: wx.CallAfter(self._on_engine_position, pos, dur))
         self._engine.on_error(lambda message: wx.CallAfter(self._on_engine_error, message))
-        self._engine.on_track_finished(lambda: wx.CallAfter(self._media_panel.try_auto_advance))
+        # on_track_finished is a single shared signal (not per-tab), so
+        # each candidate gets a turn to claim it via its own "was this
+        # actually my track" guard -- MediaPlayerPanel first (existing
+        # behavior, unchanged), then PodcastPanel if Media declined.
+        self._engine.on_track_finished(lambda: wx.CallAfter(self._on_track_finished))
         self._engine.on_effects_changed(self._on_effects_state_changed)
 
         self._now_playing.on_play(lambda: self._on_transport_play_pause())
@@ -876,6 +880,16 @@ class MainWindow(wx.Frame):
             f"About {__app_name__}",
             wx.OK | wx.ICON_INFORMATION,
         )
+
+    def _on_track_finished(self) -> None:
+        """A track reached its own natural end (engine.on_track_finished).
+        Not scoped to whichever tab is active, so each candidate that
+        might own it gets a turn via its own try_auto_advance() -- each
+        one's internal guard (does the engine's current URL match what it
+        itself last played) is what actually decides whether it was theirs
+        to advance, not tab selection."""
+        if not self._media_panel.try_auto_advance():
+            self._podcast_panel.try_auto_advance()
 
     def _on_effect_toggle(self, effect_id: str, enabled: bool) -> None:
         """Handle an effect's On/Off menu item."""

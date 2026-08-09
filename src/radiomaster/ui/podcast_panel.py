@@ -41,6 +41,10 @@ class PodcastPanel(wx.Panel):
         self._engine = engine
         self._current_episode_id: int | None = None
         self._resume_position: float = 0.0
+        # Which episode row is actually playing (vs merely selected) and
+        # its URL -- see try_auto_advance().
+        self._current_playing_index: int | None = None
+        self._last_played_url: str = ""
         # True while the Podcasts list (column 2) is showing live directory
         # search results rather than subscribed podcasts from the local DB
         # -- selecting a row in that state needs Subscribe, not a direct
@@ -520,13 +524,15 @@ class PodcastPanel(wx.Panel):
 
     def _load_episodes_for_index(self, idx: int) -> None:
         from radiomaster.database.repository import PodcastRepository
+        from radiomaster.utils.config import ConfigManager
         repo = PodcastRepository(self._db)
         self._episode_list.DeleteAllItems()
         self._episode_data = []
         podcast = self._podcast_data[idx]
         podcast_id = podcast.get("id")
         if podcast_id:
-            for ep in repo.get_episodes(podcast_id):
+            ascending = ConfigManager.get_instance().get("podcasts.episode_order", default="newest") == "oldest"
+            for ep in repo.get_episodes(podcast_id, ascending=ascending):
                 self._append_row(
                     self._episode_list, ep.get("title", "Unknown"),
                     ep.get("published_date", ""), str(ep.get("duration", "") or ""),
@@ -538,6 +544,9 @@ class PodcastPanel(wx.Panel):
         idx = self._episode_list.GetFirstSelected()
         if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
             return
+        self._play_episode_at(idx, offer_resume=True)
+
+    def _play_episode_at(self, idx: int, offer_resume: bool) -> None:
         ep = self._episode_data[idx]
         url = ep.get("audio_url", "")
         if not url:
@@ -547,16 +556,34 @@ class PodcastPanel(wx.Panel):
         self._save_position()
 
         self._current_episode_id = ep.get("id")
+        # Which row is actually PLAYING (vs merely selected/browsed) and
+        # what it's playing, so try_auto_advance() below can tell "the
+        # engine just finished MY episode" apart from some other panel's
+        # (radio, media player, ...) track ending -- on_track_finished is
+        # a single shared signal, not scoped to whichever tab is active.
+        self._current_playing_index = idx
+        self._last_played_url = url
         resume_position = ep.get("play_position") or 0.0
 
-        if resume_position > 0:
+        if offer_resume and resume_position > 0:
             if wx.MessageBox(
                 f"Resume from your last position in this episode?",
                 "Resume Playback", wx.YES_NO | wx.ICON_QUESTION,
             ) != wx.YES:
                 resume_position = 0.0
+        elif not offer_resume:
+            resume_position = 0.0
 
-        self._engine.play(url, title=ep.get("title", ""))
+        # Duration matters beyond just display: the engine reads
+        # duration == 0.0 as "this is an unbounded live stream" and, with
+        # Settings > Radio > Auto-reconnect on (the default), reconnects
+        # on ANY natural end instead of treating it as finished -- for a
+        # podcast episode (always a finite file) that meant every episode
+        # silently restarted itself from the beginning forever instead of
+        # stopping or advancing. Passing the episode's real duration (from
+        # itunes:duration in the feed) is what tells the engine this one
+        # actually ends.
+        self._engine.play(url, title=ep.get("title", ""), duration=float(ep.get("duration") or 0.0))
 
         if resume_position > 0:
             import threading
@@ -565,6 +592,35 @@ class PodcastPanel(wx.Panel):
         if self._current_episode_id is not None:
             from radiomaster.database.repository import EpisodeRepository
             EpisodeRepository(self._db).mark_played(self._current_episode_id, True)
+
+    def try_auto_advance(self) -> bool:
+        """Called when the engine reports a track finished naturally (see
+        MainWindow's on_track_finished wiring, which tries MediaPlayerPanel
+        first and falls through to this). Mirrors MediaPlayerPanel's own
+        try_auto_advance -- same "is this actually my track, and is there
+        a next one" guards, gated additionally on Settings > Podcasts >
+        Auto-advance, which is off by default (unattended auto-play isn't
+        everyone's preference, unlike a manually-built media playlist)."""
+        if self._current_playing_index is None or not hasattr(self, "_episode_data"):
+            return False
+        if self._current_playing_index >= len(self._episode_data):
+            return False
+        if self._engine.current_url != self._last_played_url:
+            return False  # a stray natural-end notification for something else entirely
+        from radiomaster.utils.config import ConfigManager
+        if not ConfigManager.get_instance().get("podcasts.auto_advance", default=False):
+            return False
+        next_index = self._current_playing_index + 1
+        if next_index >= len(self._episode_data):
+            # No next episode -- let it stay stopped instead of looping
+            # the last one (the actual bug report): _current_playing_index
+            # is left alone here on purpose, so a stray duplicate
+            # notification can't advance past the list's end either.
+            return False
+        self._episode_list.Select(next_index)
+        self._episode_list.EnsureVisible(next_index)
+        self._play_episode_at(next_index, offer_resume=False)
+        return True
 
     def _on_add_feed(self, event: wx.CommandEvent) -> None:
         """Add a podcast RSS feed and parse it immediately."""
