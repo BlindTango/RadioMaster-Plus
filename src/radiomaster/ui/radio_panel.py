@@ -7,7 +7,6 @@ import os
 import re
 import subprocess
 import threading
-import time
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -273,32 +272,56 @@ class RadioPanel(scrolled.ScrolledPanel):
         generation = self._now_playing_generation
         threading.Thread(target=self._poll_now_playing, args=(station.url, generation), daemon=True).start()
 
-    # Each poll opens a fresh connection to the stream and reads real
-    # audio bytes up to the station's icy-metaint boundary just to reach
-    # the metadata block (see StreamReader.get_icy_metadata) -- not free,
-    # so this can't be tightened arbitrarily without meaningfully adding
-    # to a station's bandwidth bill. 8s (rather than the previous 25s)
-    # caps how long a radio song-change can go undetected -- and with it,
-    # how far the LRC sync offset in MainWindow._lyrics_song_start_position
-    # can lag behind the song's real start -- while staying a reasonable
-    # request rate for a single listening session.
-    NOW_PLAYING_POLL_SECONDS = 8
-
     def _poll_now_playing(self, url: str, generation: int) -> None:
+        """Watches ICY/SHOUTcast in-band metadata for song changes over
+        ONE persistent connection for the whole time this station is
+        selected (see StreamReader.open_icy_stream) -- this used to open
+        a brand new connection to the station every 8 seconds, forever,
+        completely separate from the actual playback connection. That
+        reconnect churn (a second full TCP/TLS handshake competing for
+        bandwidth with the real stream, repeated indefinitely, sometimes
+        a THIRD connection too if recording the same station -- see
+        _record_track_watcher) is exactly what made continuous listening
+        sound like the stream "kept breaking": some Icecast/SHOUTcast
+        servers cap concurrent connections per listener or total
+        listener slots and would throttle or drop the real playback
+        connection under that pressure. One connection, read
+        continuously, has no such churn and also detects song changes
+        as fast as the station announces them rather than only every 8s.
+        """
         from radiomaster.engine.stream_reader import StreamReader
+        response, meta_interval = StreamReader.open_icy_stream(url, timeout=15)
+        if response is None or meta_interval <= 0:
+            # No ICY metadata on offer (or the connection failed) --
+            # nothing to poll, and no point retrying: same as before,
+            # stations without icy-metaint just never populated Now
+            # Playing.
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+            return
         last_song = None
-        while generation == self._now_playing_generation:
-            metadata = StreamReader.get_icy_metadata(url, timeout=8)
-            if generation != self._now_playing_generation:
-                return
-            song = metadata.get("current_song", "")
-            if song and song != last_song:
-                last_song = song
-                wx.CallAfter(self.now_playing.set_now_playing, song)
-                artist, title = _parse_icy_song(song)
-                if title and self.on_now_playing_changed:
-                    wx.CallAfter(self.on_now_playing_changed, artist, title)
-            time.sleep(self.NOW_PLAYING_POLL_SECONDS)
+        try:
+            while generation == self._now_playing_generation:
+                try:
+                    song = StreamReader.read_next_icy_song(response, meta_interval)
+                except Exception:
+                    return
+                if generation != self._now_playing_generation:
+                    return
+                if song and song != last_song:
+                    last_song = song
+                    wx.CallAfter(self.now_playing.set_now_playing, song)
+                    artist, title = _parse_icy_song(song)
+                    if title and self.on_now_playing_changed:
+                        wx.CallAfter(self.on_now_playing_changed, artist, title)
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Station history (Previous/Next/First/Last on the transport bar)
@@ -398,11 +421,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         "flac": (".flac", "flac"),
         "wav": (".wav", "pcm_s16le"),
     }
-
-    # How often an active recording polls ICY metadata to detect a track
-    # change -- same cadence as NOW_PLAYING_POLL_SECONDS, for the same
-    # bandwidth-vs-responsiveness reasoning.
-    RECORDING_POLL_SECONDS = 8
 
     def _recording_ffmpeg_args(self, station: Station, output_path: str,
                                 song: Optional[str] = None) -> list[str]:
@@ -539,27 +557,59 @@ class RadioPanel(scrolled.ScrolledPanel):
                 log.error(f"Could not start next recording segment: {e}")
 
     def _record_track_watcher(self, key_id: int) -> None:
-        """Polls ICY metadata for an active recording and splits into a
-        new file each time the station announces a different song --
-        independent of playback/Now Playing polling, since the station
-        being recorded doesn't have to be the one currently playing."""
+        """Watches ICY metadata for an active recording over ONE
+        persistent connection (see StreamReader.open_icy_stream) and
+        splits into a new file each time the station announces a
+        different song -- independent of playback/Now Playing polling,
+        since the station being recorded doesn't have to be the one
+        currently playing.
+
+        Previously reopened a brand new connection to the station every
+        8 seconds for as long as the recording ran, on top of whatever
+        the Now Playing poller (and the actual playback connection, if
+        the same station happened to be playing too) were separately
+        doing -- up to three concurrent/repeatedly-churning connections
+        to one station at once. See _poll_now_playing's docstring for
+        why that's exactly what made ordinary listening sound like the
+        stream kept breaking."""
         from radiomaster.engine.stream_reader import StreamReader
-        while True:
-            entry = self._recordings.get(key_id)
-            if entry is None:
-                return
-            metadata = StreamReader.get_icy_metadata(entry["station"].url, timeout=8)
-            entry = self._recordings.get(key_id)  # may have stopped during the fetch
-            if entry is None:
-                return
-            song = metadata.get("current_song", "")
-            if song and song != entry.get("last_song"):
-                if entry.get("last_song") is not None:
-                    # A real change -- the segment recorded so far belongs
-                    # to the *previous* song, not this new one.
-                    self._split_recording_segment(key_id, entry)
-                entry["last_song"] = song
-            time.sleep(self.RECORDING_POLL_SECONDS)
+        entry = self._recordings.get(key_id)
+        if entry is None:
+            return
+        response, meta_interval = StreamReader.open_icy_stream(entry["station"].url, timeout=15)
+        if response is None or meta_interval <= 0:
+            # No ICY metadata to watch -- recording still proceeds as one
+            # continuous file (already visible from _on_record's own
+            # DownloadRepository row); there's just nothing to split on.
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+            return
+        try:
+            while True:
+                entry = self._recordings.get(key_id)
+                if entry is None:
+                    return
+                try:
+                    song = StreamReader.read_next_icy_song(response, meta_interval)
+                except Exception:
+                    return
+                entry = self._recordings.get(key_id)  # may have stopped during the read
+                if entry is None:
+                    return
+                if song and song != entry.get("last_song"):
+                    if entry.get("last_song") is not None:
+                        # A real change -- the segment recorded so far belongs
+                        # to the *previous* song, not this new one.
+                        self._split_recording_segment(key_id, entry)
+                    entry["last_song"] = song
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
 
     def _on_record(self) -> None:
         """Toggle recording of the selected station's stream to a file.
