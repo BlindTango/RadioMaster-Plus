@@ -21,6 +21,7 @@ import wx
 from typing import Any
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
+from radiomaster.utils.wx_safe import call_after_safe
 from radiomaster.utils.accessibility import set_accessible_name
 
 
@@ -224,11 +225,11 @@ class PodcastPanel(wx.Panel):
                 # and just showed "0 results" -- indistinguishable from a
                 # real search that genuinely found nothing, and impossible
                 # to diagnose. Show the actual reason instead.
-                wx.CallAfter(self._set_status, f"Status: Podcast search failed -- {exc}")
+                call_after_safe(self, self._set_status, f"Status: Podcast search failed -- {exc}")
                 return
             if seq != self._search_seq:
                 return  # a newer search superseded this one; discard stale results
-            wx.CallAfter(self._apply_search_results, results, query)
+            call_after_safe(self, self._apply_search_results, results, query)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -250,6 +251,16 @@ class PodcastPanel(wx.Panel):
         for r in results:
             display = f"{r.get('title', 'Unknown')}  [{r.get('author', '')}]  -- {r.get('directory', '')}"
             self._podcast_list.Append(display)
+        if self._podcast_list.GetCount():
+            # A previous, longer list (e.g. "All Podcasts" after scrolling
+            # down) can leave the native listbox's scroll position not
+            # reset by Clear() -- the new items genuinely exist (GetCount()
+            # is correct) but can render scrolled out of view, looking
+            # exactly like "found 25 but nothing shows". Force it back to
+            # the top and repaint explicitly rather than trust that.
+            self._podcast_list.SetFirstItem(0)
+            self._podcast_list.Refresh()
+            self._podcast_list.Update()
         self._set_status(f"Status: {len(results)} result(s) for '{query}'")
 
     def _on_podcast_activated(self, event: wx.CommandEvent) -> None:
@@ -312,8 +323,8 @@ class PodcastPanel(wx.Panel):
                 self._db.commit()
                 episode_count = len(episodes)
             except Exception as e:
-                wx.CallAfter(self._set_status, f"Status: Subscribed, but episodes could not be loaded ({e})")
-            wx.CallAfter(self._finish_subscribe, result.get("title", feed_url), episode_count)
+                call_after_safe(self, self._set_status, f"Status: Subscribed, but episodes could not be loaded ({e})")
+            call_after_safe(self, self._finish_subscribe, result.get("title", feed_url), episode_count)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
