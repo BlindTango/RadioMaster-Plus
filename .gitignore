@@ -34,6 +34,15 @@ radiomaster.db
 dist/
 build/
 *.spec
+# ...except packaging/radiomaster.spec itself -- that's not disposable
+# PyInstaller auto-gen output, it's the actual hand-maintained build
+# recipe (hidden imports, data bundling, exclude_binaries, icon) that
+# defines what actually ships. The blanket *.spec rule above meant it was
+# never committed at all -- any fix made to it (including the
+# exclude_binaries=True fix for the "_MEI...\python312.dll" onefile
+# self-extraction failure) only ever existed on whichever machine
+# happened to have it, with git never able to show a diff or track drift.
+!packaging/radiomaster.spec
 *.exe
 *.msi
 
