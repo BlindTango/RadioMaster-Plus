@@ -182,12 +182,34 @@ class YouTubePanel(wx.Panel):
         return {'title': title, 'url': ''}
 
     def _on_play_url(self, event: wx.CommandEvent) -> None:
-        """Play a YouTube URL."""
+        """Play a YouTube URL.
+
+        This used to hand the raw pasted URL (a YouTube webpage URL,
+        not an actual media stream) straight to the player -- it never
+        actually worked for a real youtube.com/watch link at all, only
+        for a URL that already happened to be a direct playable stream.
+        Now resolved through yt-dlp first, same as picking a search
+        result, off the UI thread, with the real duration fetched too
+        (see _on_play's comment for why that matters -- without it,
+        closing the video window just replays it from the start
+        forever)."""
         dlg = wx.TextEntryDialog(self, "Enter YouTube URL:", "Play YouTube Video")
         if dlg.ShowModal() == wx.ID_OK:
             url = dlg.GetValue().strip()
             if url:
-                self._engine.play(url, title=url, is_video=True)
+                self._set_status(f"Status: Resolving stream for '{url}'...")
+
+                def worker():
+                    from radiomaster.services.youtube_dl import YouTubeService
+                    service = YouTubeService()
+                    stream_url = service.get_stream_url(url)
+                    info = service.get_info(url) if stream_url else None
+                    title = (info or {}).get('title') or url
+                    duration = float((info or {}).get('duration') or 0.0)
+                    wx.CallAfter(self._apply_play_result, stream_url, title, duration)
+
+                import threading
+                threading.Thread(target=worker, daemon=True).start()
         dlg.Destroy()
 
     def _on_play(self, event: wx.CommandEvent) -> None:
@@ -204,6 +226,18 @@ class YouTubePanel(wx.Panel):
             return
         video_url = video.get('url') or video.get('webpage_url') or ""
         title = video.get('title', 'YouTube Video')
+        # The engine reads duration == 0.0 as "this is an unbounded live
+        # stream" and, with Settings > Radio > Auto-reconnect on (the
+        # default), reconnects on ANY natural end instead of treating it
+        # as finished -- including the process ending because the video
+        # window was simply closed. A regular YouTube video is never
+        # actually unbounded; search/playlist results already carry a
+        # real duration (in seconds) straight from yt-dlp, so pass it
+        # through. Without this, closing the video window just replayed
+        # it from the start every time, over and over, with quitting the
+        # whole app the only way out -- the exact same bug already fixed
+        # for podcast episodes (v1.1.18), just never ported to video.
+        duration = float(video.get('duration') or 0.0)
         self._set_status(f"Status: Resolving stream for '{title}'...")
         self._btn_play.Disable()
 
@@ -211,18 +245,18 @@ class YouTubePanel(wx.Panel):
             from radiomaster.services.youtube_dl import YouTubeService
             service = YouTubeService()
             stream_url = service.get_stream_url(video_url)
-            wx.CallAfter(self._apply_play_result, stream_url, title)
+            wx.CallAfter(self._apply_play_result, stream_url, title, duration)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_play_result(self, stream_url: str | None, title: str) -> None:
+    def _apply_play_result(self, stream_url: str | None, title: str, duration: float = 0.0) -> None:
         self._btn_play.Enable()
         if not stream_url:
             wx.MessageBox("Unable to resolve a playable stream for the selected video.",
                          "Error", wx.OK | wx.ICON_ERROR)
             return
-        self._engine.play(stream_url, title=title, is_video=True)
+        self._engine.play(stream_url, title=title, is_video=True, duration=duration)
         self._set_status(f"Status: Playing '{title}'")
 
     def _on_load_playlist(self, event: wx.CommandEvent) -> None:
