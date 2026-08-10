@@ -813,6 +813,22 @@ class LiveAudioEngine:
                 self._handle_decode_failure(_describe_stream_error(e))
 
     def _handle_decode_failure(self, message: str) -> None:
+        # Confirmed live: switching stations while one is reconnecting in
+        # the background leaves the *old* station's decode thread still
+        # alive -- stop()'s join(timeout=3) only waits up to 3s, and a
+        # thread blocked inside av.open()'s own up to-10s connect/read
+        # timeout doesn't notice _stop_flag in time. play() reuses the
+        # same shared _stop_flag Event and clears it for the *new*
+        # session, so the stale thread's own is_set() check (further
+        # down/in _decode_loop) sees "not stopped" and happily keeps
+        # going -- eventually giving up long after the user moved on, and
+        # firing a "lost connection" error for a station they're no
+        # longer even listening to (while the new one plays fine).
+        # self._decode_thread is reassigned to a fresh Thread object on
+        # every play(), so comparing identity is a reliable "is this
+        # still the current session" check that a shared Event isn't.
+        if threading.current_thread() is not self._decode_thread:
+            return
         if (self._auto_reconnect and self._duration == 0.0 and self._current_url
                 and self._reconnect_attempts < self._MAX_RECONNECT_ATTEMPTS
                 and not self._stop_flag.is_set()):
@@ -832,6 +848,27 @@ class LiveAudioEngine:
             self._notify_error("Lost connection to the stream and could not reconnect.")
         else:
             self._notify_error(f"Playback failed: {message}")
+        # Confirmed live: without this, giving up here reports "stopped"
+        # and fires the fatal error, but the sounddevice output stream is
+        # never actually closed -- its callback just keeps draining
+        # whatever's still sitting in the queue (up to ~4s of already
+        # -decoded audio), so playback audibly continues for a few
+        # seconds after the "could not reconnect" error, even though the
+        # engine has already given up for good. Mirrors stop()'s own
+        # abort()-not-stop() teardown (immediate, not the tail end of
+        # whatever's buffered) -- just without the decode-thread join,
+        # since we *are* that thread and joining ourselves would deadlock.
+        if self._output_stream is not None:
+            try:
+                self._output_stream.abort()
+                self._output_stream.close()
+            except Exception:
+                pass
+            self._output_stream = None
+        self._pcm_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
+        with self._callback_lock:
+            self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
+            self._leftover_was_padded = False
         self._state = self.STATE_STOPPED
         self._notify_state()
 
@@ -845,14 +882,19 @@ class LiveAudioEngine:
                 raise RuntimeError("No audio stream found")
             resampler = av.AudioResampler(format="fltp", layout="stereo", rate=SAMPLE_RATE)
 
-            if self._stop_flag.is_set():
+            if self._stop_flag.is_set() or threading.current_thread() is not self._decode_thread:
                 # Opening the container (can take seconds, e.g. a fresh
                 # TCP connection on a reconnect attempt) is the one place
                 # this loop went a while without checking stop_flag.
                 # Without this, Stop clicked during that window still let
                 # a reconnect finish and start a brand new output stream
                 # right after -- Stop looked like it worked (briefly
-                # silent) and then played anyway moments later.
+                # silent) and then played anyway moments later. The
+                # thread-identity half of this check catches the sibling
+                # case: a *station switch* (not a Stop) during that same
+                # window, where _stop_flag gets cleared again for the new
+                # session before this stale one wakes up -- see the
+                # matching comment in _handle_decode_failure.
                 return
             self._start_output_stream()
             self._state = self.STATE_PLAYING
