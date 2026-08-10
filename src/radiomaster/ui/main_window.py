@@ -891,6 +891,10 @@ class MainWindow(wx.Frame):
         )
         self._engine.set_replaygain_mode(self._config.get('playback.replaygain', default='none'))
         self._engine.set_auto_reconnect(self._config.get('radio.auto_reconnect', default=True))
+        self._engine.set_reconnect_settings(
+            self._config.get('radio.reconnect_max_attempts', default=5),
+            self._config.get('radio.reconnect_interval', default=2.0),
+        )
 
         # Re-apply network settings (proxy, user agent) -- StationAPI was
         # constructed once at startup, so a change here would otherwise only

@@ -407,6 +407,7 @@ class LiveAudioEngine:
         self._auto_reconnect: bool = False
         self._reconnect_attempts: int = 0
         self._MAX_RECONNECT_ATTEMPTS = 5
+        self._reconnect_interval: float = 2.0
 
         self._output_device_index: Optional[int] = None
 
@@ -652,6 +653,13 @@ class LiveAudioEngine:
     def set_auto_reconnect(self, enabled: bool) -> None:
         self._auto_reconnect = enabled
 
+    def set_reconnect_settings(self, max_attempts: int, interval: float) -> None:
+        """Configure the reconnect-attempt budget and delay between
+        attempts for a dropped live stream (radio.reconnect_max_attempts /
+        radio.reconnect_interval in Settings > Radio)."""
+        self._MAX_RECONNECT_ATTEMPTS = max(1, max_attempts)
+        self._reconnect_interval = max(0.5, interval)
+
     def set_output_device(self, device_index: Optional[int]) -> None:
         """*device_index* is a sounddevice device index, or None for the
         system default. Rebuilding the output stream (not the decoder) is
@@ -835,7 +843,7 @@ class LiveAudioEngine:
             self._reconnect_attempts += 1
             self._state = self.STATE_BUFFERING
             self._notify_state()
-            time.sleep(2.0)
+            time.sleep(self._reconnect_interval)
             if self._stop_flag.is_set():
                 return
             try:

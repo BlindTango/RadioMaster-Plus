@@ -235,6 +235,20 @@ class RadioPanel(SettingsPanel):
         self.auto_reconnect_chk.SetValue(self.config.get("radio.auto_reconnect", default=True))
         sizer.Add(self.auto_reconnect_chk, 0, wx.ALL, 5)
 
+        sizer.Add(wx.StaticText(self, label="Reconnect attempts before giving up:"), 0, wx.ALL, 5)
+        self.reconnect_attempts_spin = wx.SpinCtrl(
+            self, value=str(self.config.get("radio.reconnect_max_attempts", default=5)),
+            min=1, max=20,
+        )
+        sizer.Add(self.reconnect_attempts_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        sizer.Add(wx.StaticText(self, label="Interval between reconnect attempts (seconds):"), 0, wx.ALL, 5)
+        self.reconnect_interval_spin = wx.SpinCtrl(
+            self, value=str(int(self.config.get("radio.reconnect_interval", default=2))),
+            min=1, max=30,
+        )
+        sizer.Add(self.reconnect_interval_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
         self.auto_play_last_chk = wx.CheckBox(self, label="Automatically play the last station on launch")
         self.auto_play_last_chk.SetValue(self.config.get("radio.auto_play_last_station", default=False))
         sizer.Add(self.auto_play_last_chk, 0, wx.ALL, 5)
@@ -290,6 +304,8 @@ class RadioPanel(SettingsPanel):
         self.config.set("radio.default_country", value=self.country_combo.GetStringSelection().lower())
         self.config.set("radio.show_duplicates", value=self.show_duplicates_chk.IsChecked())
         self.config.set("radio.auto_reconnect", value=self.auto_reconnect_chk.IsChecked())
+        self.config.set("radio.reconnect_max_attempts", value=self.reconnect_attempts_spin.GetValue())
+        self.config.set("radio.reconnect_interval", value=float(self.reconnect_interval_spin.GetValue()))
         self.config.set("radio.auto_play_last_station", value=self.auto_play_last_chk.IsChecked())
         self.config.set("radio.station_update_frequency", value=FREQUENCIES[self.update_freq_choice.GetSelection()])
 

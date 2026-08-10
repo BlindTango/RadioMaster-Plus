@@ -75,6 +75,7 @@ class PlaybackEngine:
         self._auto_reconnect: bool = False
         self._reconnect_attempts: int = 0
         self._MAX_RECONNECT_ATTEMPTS = 5
+        self._reconnect_interval: float = 2.0
         self._is_video: bool = False
         self._is_video_active: bool = False  # which backend owns the *current* session
 
@@ -421,6 +422,14 @@ class PlaybackEngine:
         self._auto_reconnect = enabled
         self._live.set_auto_reconnect(enabled)
 
+    def set_reconnect_settings(self, max_attempts: int, interval: float) -> None:
+        """Configure the reconnect-attempt budget and delay between
+        attempts for both backends (video/ffplay here, audio via
+        LiveAudioEngine)."""
+        self._MAX_RECONNECT_ATTEMPTS = max(1, max_attempts)
+        self._reconnect_interval = max(0.5, interval)
+        self._live.set_reconnect_settings(max_attempts, interval)
+
     def set_output_device(self, device_name: str) -> None:
         """Set the audio output device by name (see utils/audio_devices.py),
         or "" for the system default."""
@@ -755,7 +764,7 @@ class PlaybackEngine:
                         url, is_video = self._current_url, self._is_video
                         with self._restart_lock:
                             self._reconnect_timer = threading.Timer(
-                                2.0, lambda: self._start_process(url, is_video)
+                                self._reconnect_interval, lambda: self._start_process(url, is_video)
                             )
                             self._reconnect_timer.daemon = True
                             self._reconnect_timer.start()
