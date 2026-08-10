@@ -24,12 +24,15 @@ Radio's search-then-activate-to-play, except a podcast has to be
 subscribed before its episodes can be browsed/played at all.
 """
 
+import logging
 import wx
 from typing import Any, Optional
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.utils.wx_safe import call_after_safe
 from radiomaster.utils.accessibility import set_accessible_name
+
+logger = logging.getLogger("radiomaster")
 
 
 class PodcastPanel(wx.Panel):
@@ -486,7 +489,13 @@ class PodcastPanel(wx.Panel):
         threading.Thread(target=_do_sync, daemon=True).start()
 
     def _on_download(self, event: wx.CommandEvent) -> None:
-        """Download the selected episode for offline playback."""
+        """Download the selected episode for offline playback.
+
+        Lands in its own <Podcast Download Location>/<Feed Name>/ folder
+        (not the shared Downloads folder YouTube uses) alongside a plain
+        -text show-notes file sharing the exact same base filename --
+        see _write_show_notes() and DownloadManager.add_download()'s
+        filename_base parameter for why that pairing is guaranteed."""
         idx = self._episode_list.GetFirstSelected()
         if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
             wx.MessageBox("Please select an episode first.", "No Selection", wx.OK | wx.ICON_WARNING)
@@ -497,7 +506,19 @@ class PodcastPanel(wx.Panel):
             wx.MessageBox("This episode has no audio URL.", "Cannot Download", wx.OK | wx.ICON_WARNING)
             return
         from radiomaster.database.repository import DownloadRepository
+        from radiomaster.utils.helpers import sanitize_filename
+        from radiomaster.utils.paths import get_podcasts_dir
+        import os
+
         title = ep.get("title", "Podcast Episode")
+        podcast_idx = self._podcast_list.GetFirstSelected()
+        podcast_title = "Unknown Podcast"
+        if podcast_idx >= 0 and hasattr(self, "_podcast_data") and podcast_idx < len(self._podcast_data):
+            podcast_title = self._podcast_data[podcast_idx].get("title") or podcast_title
+
+        feed_dir = os.path.join(get_podcasts_dir(), sanitize_filename(podcast_title))
+        filename_base = sanitize_filename(title)[:150]  # avoid MAX_PATH issues on very long titles
+
         repo = DownloadRepository(self._db)
         download_id = repo.add(url, title=title, source_type="podcast")
         # Inserting the DB row alone was the whole bug: nothing ever
@@ -507,16 +528,58 @@ class PodcastPanel(wx.Panel):
         # downloads already use.
         app = wx.GetApp()
         if hasattr(app, "download_manager") and hasattr(app.download_manager, "add_download"):
-            from radiomaster.utils.config import ConfigManager
-            from radiomaster.utils.paths import get_paths
-            config = ConfigManager.get_instance()
-            output_dir = config.get("downloads.download_path", default=str(get_paths()["downloads"]))
             app.download_manager.add_download(
-                download_id, url, output_dir=output_dir, title=title,
-                extract_audio=True, format="mp3",
+                download_id, url, output_dir=feed_dir, title=title,
+                extract_audio=True, format="mp3", filename_base=filename_base,
             )
+        self._write_show_notes(feed_dir, filename_base, podcast_title, ep)
         wx.MessageBox(f"Download added to queue: {title}", "Download Added",
                      wx.OK | wx.ICON_INFORMATION)
+
+    @staticmethod
+    def _write_show_notes(feed_dir: str, filename_base: str, podcast_title: str,
+                           ep: dict[str, Any]) -> None:
+        """Write a plain-text show-notes file next to the episode's audio
+        download, sharing its exact base filename (see add_download's
+        filename_base) so anyone browsing the feed folder can tell which
+        notes belong to which episode at a glance -- a screen reader user
+        included, since a folder full of same-named .mp3/.txt pairs reads
+        unambiguously where two differently-named files wouldn't.
+
+        content_encoded (RSS <content:encoded>, when a feed provides it)
+        is normally the fuller of the two -- description is often just a
+        one-line teaser duplicated from it -- so prefer it, falling back
+        to description only when a feed doesn't supply the richer field.
+        Both are arbitrary feed-supplied HTML, so run through BeautifulSoup
+        to get plain, readable text instead of dumping raw markup into a
+        .txt file.
+        """
+        import os
+        raw_notes = ep.get("content_encoded") or ep.get("description") or ""
+        notes_text = ""
+        if raw_notes.strip():
+            try:
+                from bs4 import BeautifulSoup
+                notes_text = BeautifulSoup(raw_notes, "html.parser").get_text("\n", strip=True)
+            except Exception:
+                notes_text = raw_notes
+        if not notes_text.strip():
+            notes_text = "(This episode has no show notes.)"
+
+        try:
+            os.makedirs(feed_dir, exist_ok=True)
+            notes_path = os.path.join(feed_dir, f"{filename_base}.txt")
+            with open(notes_path, "w", encoding="utf-8") as f:
+                f.write(f"{ep.get('title', 'Podcast Episode')}\n")
+                f.write(f"{podcast_title}\n")
+                published = ep.get("published_date", "")
+                if published:
+                    f.write(f"Published: {published}\n")
+                f.write("-" * 40 + "\n\n")
+                f.write(notes_text)
+                f.write("\n")
+        except OSError as e:
+            logger.warning("Could not write show notes for %r: %s", ep.get("title"), e)
 
     def _on_podcast_select(self, event: wx.CommandEvent) -> None:
         """Populate the episode list when a podcast is selected."""

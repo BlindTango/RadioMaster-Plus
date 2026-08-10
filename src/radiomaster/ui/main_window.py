@@ -1306,14 +1306,14 @@ class MainWindow(wx.Frame):
             self._status_bar.set_status(f"Error: Could not open recordings folder ({e})")
 
     def _on_open_podcast_folder(self) -> None:
-        """Global-hotkey Open Podcast Folder -- opens Settings > Downloads
-        > Download Location in Windows Explorer. RadioMaster+ doesn't
-        keep a separate podcast-only folder the way the reference
-        project does (podcast episode downloads land in the same place
-        as YouTube downloads), so this opens that shared folder."""
+        """Global-hotkey Open Podcast Folder -- opens Settings > Podcasts
+        > Podcast Download Location (its own dedicated folder, separate
+        from the general Downloads location YouTube downloads use --
+        see podcast_panel.py's _on_download for the per-feed subfolder
+        layout underneath it)."""
         import os
-        from radiomaster.utils.paths import get_paths
-        path = self._config.get("downloads.download_path", default=str(get_paths()["downloads"]))
+        from radiomaster.utils.paths import get_podcasts_dir
+        path = get_podcasts_dir()
         try:
             os.makedirs(path, exist_ok=True)
             os.startfile(path)

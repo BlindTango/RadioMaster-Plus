@@ -65,12 +65,24 @@ class DownloadManager:
 
     def add_download(self, download_id: int, url: str, output_dir: str,
                      title: str = "", format: str = "best",
-                     extract_audio: bool = False, audio_quality: str = "0") -> None:
+                     extract_audio: bool = False, audio_quality: str = "0",
+                     filename_base: str = "") -> None:
         """Add a download to the queue.
 
         ``audio_quality`` is a yt-dlp ``--audio-quality`` value: "0" (the
         default) means best VBR; a bitrate like "192K" pins an exact rate.
         Only meaningful when ``extract_audio`` is set.
+
+        ``filename_base`` (already filesystem-sanitized by the caller), if
+        given, pins the output filename instead of yt-dlp's own
+        ``%(title)s`` (drawn from the URL's own metadata, which for a
+        podcast episode is not guaranteed to match the app's own episode
+        title at all -- a generic MP3 URL often has no useful embedded
+        title). Podcast downloads pass this so the show-notes file
+        written alongside it (see podcast_panel.py's _on_download) is
+        guaranteed to share the exact same base name as the audio file
+        it documents, instead of the two drifting apart by whatever
+        yt-dlp happened to extract.
         """
         self._queue.put({
             "id": download_id,
@@ -80,6 +92,7 @@ class DownloadManager:
             "format": format,
             "extract_audio": extract_audio,
             "audio_quality": audio_quality,
+            "filename_base": filename_base,
         })
 
     def _worker(self) -> None:
@@ -116,7 +129,8 @@ class DownloadManager:
 
         os.makedirs(output_dir, exist_ok=True)
 
-        cmd = [get_ytdlp(), "--no-playlist", "-o", f"{output_dir}/%(title)s.%(ext)s"]
+        filename_base = item.get("filename_base") or "%(title)s"
+        cmd = [get_ytdlp(), "--no-playlist", "-o", f"{output_dir}/{filename_base}.%(ext)s"]
         from radiomaster.utils.network import get_yt_dlp_proxy_args
         cmd.extend(get_yt_dlp_proxy_args())
         if extract_audio:

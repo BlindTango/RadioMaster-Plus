@@ -298,6 +298,20 @@ class PodcastsPanel(SettingsPanel):
     title = "Podcasts"
 
     def makeSettings(self, sizer: wx.BoxSizer) -> None:
+        from radiomaster.utils.paths import get_podcasts_dir
+        sizer.Add(wx.StaticText(self, label="Podcast Download Location:"), 0, wx.ALL, 5)
+        path_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        # get_podcasts_dir(), not a raw config.get() -- same self-healing
+        # reasoning as Downloads/Recordings above. Each podcast gets its
+        # own subfolder under here (see podcast_panel.py's _on_download),
+        # so this is a dedicated location, not the shared Downloads one.
+        self.podcast_path_txt = wx.TextCtrl(self, value=get_podcasts_dir())
+        path_sizer.Add(self.podcast_path_txt, 1, wx.EXPAND)
+        podcast_browse_btn = wx.Button(self, label="Browse...")
+        podcast_browse_btn.Bind(wx.EVT_BUTTON, lambda e: self._browse(self.podcast_path_txt))
+        path_sizer.Add(podcast_browse_btn, 0, wx.LEFT, 5)
+        sizer.Add(path_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
         self.auto_download_chk = wx.CheckBox(self, label="Auto-download new episodes")
         self.auto_download_chk.SetValue(self.config.get("podcasts.auto_download", default=False))
         sizer.Add(self.auto_download_chk, 0, wx.ALL, 5)
@@ -357,7 +371,14 @@ class PodcastsPanel(SettingsPanel):
         self.auto_advance_chk.SetValue(self.config.get("podcasts.auto_advance", default=False))
         sizer.Add(self.auto_advance_chk, 0, wx.ALL, 5)
 
+    def _browse(self, ctrl: wx.TextCtrl) -> None:
+        dlg = wx.DirDialog(self, "Choose directory", ctrl.GetValue())
+        if dlg.ShowModal() == wx.ID_OK:
+            ctrl.SetValue(dlg.GetPath())
+        dlg.Destroy()
+
     def onSave(self) -> None:
+        self.config.set("podcasts.download_path", value=self.podcast_path_txt.GetValue())
         self.config.set("podcasts.auto_download", value=self.auto_download_chk.IsChecked())
         self.config.set("podcasts.download_limit", value=self.download_limit_spin.GetValue())
         self.config.set("podcasts.keep_episodes", value=self.keep_episodes_spin.GetValue())
@@ -378,9 +399,13 @@ class DownloadsPanel(SettingsPanel):
     def makeSettings(self, sizer: wx.BoxSizer) -> None:
         sizer.Add(wx.StaticText(self, label="Download Location:"), 0, wx.ALL, 5)
         path_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.download_path_txt = wx.TextCtrl(
-            self, value=self.config.get("downloads.download_path", default=str(get_paths()["downloads"])),
-        )
+        from radiomaster.utils.paths import get_downloads_dir
+        # get_downloads_dir(), not a raw config.get() -- self-heals a
+        # value saved once while running installed (or before being
+        # moved to a portable location) back to the correct portable
+        # default instead of showing that stale Music-folder path
+        # forever after. See get_downloads_dir()'s own docstring.
+        self.download_path_txt = wx.TextCtrl(self, value=get_downloads_dir())
         path_sizer.Add(self.download_path_txt, 1, wx.EXPAND)
         btn = wx.Button(self, label="Browse...")
         btn.Bind(wx.EVT_BUTTON, lambda e: self._browse(self.download_path_txt))
@@ -441,9 +466,12 @@ class RecordingsPanel(SettingsPanel):
     def makeSettings(self, sizer: wx.BoxSizer) -> None:
         sizer.Add(wx.StaticText(self, label="Recording Location:"), 0, wx.ALL, 5)
         path_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.recording_path_txt = wx.TextCtrl(
-            self, value=self.config.get("recordings.recording_path", default=str(get_paths()["recordings"])),
-        )
+        from radiomaster.utils.paths import get_recordings_dir
+        # get_recordings_dir() -- same self-healing reasoning as the
+        # Download Location field above; this is also what actually
+        # decides where recordings get written (see radio_panel.py), so
+        # showing anything else here would make Settings lie about it.
+        self.recording_path_txt = wx.TextCtrl(self, value=get_recordings_dir())
         path_sizer.Add(self.recording_path_txt, 1, wx.EXPAND)
         btn = wx.Button(self, label="Browse...")
         btn.Bind(wx.EVT_BUTTON, lambda e: self._browse(self.recording_path_txt))

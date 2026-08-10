@@ -104,34 +104,62 @@ def get_paths() -> dict[str, str]:
     }
 
 
-def get_recordings_dir() -> str:
-    """Settings > Recordings > Recording Location, self-healing against a
-    stale saved value.
-
-    That setting is only ever written once, when Settings is saved -- if
-    it happened to be saved while running non-portable (e.g. installed to
-    Program Files, or before being moved to a portable location), the
-    Music-folder path it captured then keeps being used forever after,
-    even once the app is genuinely running portable and get_paths() would
-    otherwise resolve inside the app's own folder as documented ("The app
-    itself is portable by default regardless of install type"). Comparing
-    the saved value against *both* modes' auto-computed defaults (not just
+def _self_healing_dir(config_section: str, config_key: str, current_default: str,
+                       music_default: str) -> str:
+    """Shared self-healing logic for a Settings-configurable folder that
+    also has an auto-computed default -- see get_recordings_dir()'s own
+    original docstring for the full story: such a setting is only ever
+    written when Settings is actually saved, and if that happened while
+    running non-portable (e.g. installed to Program Files, or before
+    being moved to a portable location), the Music-folder path it
+    captured then keeps being used forever after, even once the app is
+    genuinely running portable and get_paths() would otherwise resolve
+    inside the app's own folder as documented ("The app itself is
+    portable by default regardless of install type"). Comparing the
+    saved value against *both* modes' auto-computed defaults (not just
     the current one) tells an actual deliberate custom folder (respected
     always) apart from a stale snapshot of whichever default happened to
     be live the one time Settings was opened.
     """
     from radiomaster.utils.config import ConfigManager
     config = ConfigManager.get_instance()
-    saved = config.get("recordings", "recording_path", default="").strip()
-    current_default = str(get_paths()["recordings"])
+    saved = config.get(config_section, config_key, default="").strip()
     if not saved:
         return current_default
 
-    app_name = __app_name__.replace("+", "Plus")
-    music_default = os.path.join(os.path.expanduser("~"), "Music", app_name, "Recordings")
     stale_defaults = {os.path.normcase(os.path.normpath(current_default)),
                        os.path.normcase(os.path.normpath(music_default))}
     if os.path.normcase(os.path.normpath(saved)) in stale_defaults \
             and os.path.normpath(saved) != os.path.normpath(current_default):
         return current_default
     return saved
+
+
+def get_recordings_dir() -> str:
+    """Settings > Recordings > Recording Location, self-healing against a
+    stale saved value (see _self_healing_dir)."""
+    app_name = __app_name__.replace("+", "Plus")
+    music_default = os.path.join(os.path.expanduser("~"), "Music", app_name, "Recordings")
+    return _self_healing_dir("recordings", "recording_path", str(get_paths()["recordings"]), music_default)
+
+
+def get_downloads_dir() -> str:
+    """Settings > Downloads > Download Location, self-healing against a
+    stale saved value (see _self_healing_dir). Shared by YouTube
+    downloads and (as the parent of get_podcasts_dir()'s own default)
+    podcast episode downloads."""
+    app_name = __app_name__.replace("+", "Plus")
+    music_default = os.path.join(os.path.expanduser("~"), "Music", app_name)
+    return _self_healing_dir("downloads", "download_path", str(get_paths()["downloads"]), music_default)
+
+
+def get_podcasts_dir() -> str:
+    """Settings > Podcasts > Podcast Download Location, self-healing
+    against a stale saved value (see _self_healing_dir). Defaults to a
+    "Podcasts" subfolder of get_downloads_dir() rather than its own
+    independent portable/installed split -- it inherits the parent
+    downloads location's own self-healing instead of duplicating it."""
+    current_default = os.path.join(get_downloads_dir(), "Podcasts")
+    app_name = __app_name__.replace("+", "Plus")
+    music_default = os.path.join(os.path.expanduser("~"), "Music", app_name, "Podcasts")
+    return _self_healing_dir("podcasts", "download_path", current_default, music_default)
