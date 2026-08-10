@@ -291,6 +291,7 @@ class MainWindow(wx.Frame):
             on_toggle=self._on_effect_toggle,
             on_preset=self._on_effect_preset,
             get_preset=lambda eid: self._engine.get_effect_preset(eid),
+            apply_live=lambda eid, params: self._engine.apply_effect_params(eid, params),
         )
 
         # Tools menu

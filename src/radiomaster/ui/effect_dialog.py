@@ -4,18 +4,28 @@ actions to get concrete parameter values for a preset.
 """
 
 import wx
-from typing import Any
+from typing import Any, Callable, Optional
 from radiomaster.utils.accessibility import set_accessible_name
 from radiomaster.ui.effects_data import PARAM_DEFS, EFFECT_LABELS
 
 
 class EffectParamsDialog(wx.Dialog):
-    """A slider per adjustable parameter of one effect."""
+    """A slider per adjustable parameter of one effect.
+
+    *on_live_change*, when given, fires on every slider move with the
+    dialog's current full param dict -- e.g. wired to
+    PlaybackEngine.apply_effect_params so dragging a slider is audible
+    immediately (matching the Equalizer dialog's own live-preview
+    behavior), instead of a New/Edit Preset session being silent until
+    OK is clicked, with no way to tell whether the values being picked
+    are actually what you want."""
 
     def __init__(self, parent: wx.Window | None, effect_id: str, current_params: dict[str, Any],
-                 title: str | None = None) -> None:
+                 title: str | None = None,
+                 on_live_change: Optional[Callable[[dict[str, float]], None]] = None) -> None:
         self._effect_id = effect_id
         self._param_defs = PARAM_DEFS[effect_id]
+        self._on_live_change = on_live_change
         # No fixed size: the number of parameters ranges from 2 (Distortion)
         # to 10 (Equalizer) -- a size picked for the middle of that range
         # left Equalizer's rows clipped at the bottom (needed 398px tall,
@@ -64,6 +74,8 @@ class EffectParamsDialog(wx.Dialog):
             if s is slider:
                 self._labels[key].SetLabel(f"{slider.GetValue() / self._scales[key]:g}")
                 break
+        if self._on_live_change:
+            self._on_live_change(self.get_params())
 
     def get_params(self) -> dict[str, float]:
         """Get current parameter values."""

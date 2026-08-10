@@ -9,7 +9,7 @@ full CRUD set: Create (New...), Read (the list + Apply), Update
 """
 
 import wx
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from radiomaster.utils.accessibility import set_accessible_name
 from radiomaster.utils.config import ConfigManager
 from radiomaster.ui.effects_data import BUILTIN_PRESETS, EFFECT_LABELS
@@ -17,11 +17,17 @@ from radiomaster.ui.effect_dialog import EffectParamsDialog
 
 
 class PresetManagerDialog(wx.Dialog):
-    """Manage presets (built-in + custom) for one effect."""
+    """Manage presets (built-in + custom) for one effect.
 
-    def __init__(self, parent: wx.Window | None, effect_id: str, current_params: dict[str, Any]) -> None:
+    *apply_live*, when given, is threaded through to New/Edit's
+    EffectParamsDialog as its live-preview callback -- see
+    effect_dialog.py's docstring for why that matters."""
+
+    def __init__(self, parent: wx.Window | None, effect_id: str, current_params: dict[str, Any],
+                 apply_live: Optional[Callable[[dict[str, Any]], None]] = None) -> None:
         self._effect_id = effect_id
         self._current_params = current_params
+        self._apply_live = apply_live
         self._config = ConfigManager.get_instance()
         self._builtin = BUILTIN_PRESETS.get(effect_id, {})
         self._result: Optional[tuple[str, dict[str, Any]]] = None
@@ -146,7 +152,8 @@ class PresetManagerDialog(wx.Dialog):
 
     def _on_new(self, event: wx.CommandEvent) -> None:
         seed = self._params_for(self._selected_name()) if self._selected_name() else self._current_params
-        param_dlg = EffectParamsDialog(self, self._effect_id, seed, title="New Preset")
+        param_dlg = EffectParamsDialog(self, self._effect_id, seed, title="New Preset",
+                                        on_live_change=self._apply_live)
         if param_dlg.ShowModal() != wx.ID_OK:
             param_dlg.Destroy()
             return
@@ -171,7 +178,7 @@ class PresetManagerDialog(wx.Dialog):
         if not name or self._is_builtin(name):
             return
         param_dlg = EffectParamsDialog(self, self._effect_id, self._params_for(name),
-                                        title=f"Edit '{name}'")
+                                        title=f"Edit '{name}'", on_live_change=self._apply_live)
         if param_dlg.ShowModal() == wx.ID_OK:
             presets = self._custom_presets()
             presets[name] = param_dlg.get_params()

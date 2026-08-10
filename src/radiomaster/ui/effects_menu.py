@@ -24,13 +24,18 @@ class EffectsMenu:
                  is_enabled: Callable[[str], bool],
                  on_toggle: Callable[[str, bool], None],
                  on_preset: Callable[[str, str, dict[str, Any]], None],
-                 get_preset: Callable[[str], str] = lambda eid: "") -> None:
+                 get_preset: Callable[[str], str] = lambda eid: "",
+                 apply_live: Callable[[str, dict[str, Any]], None] | None = None) -> None:
         self._parent = parent
         self._get_params = get_params
         self._is_enabled = is_enabled
         self._on_toggle = on_toggle
         self._on_preset = on_preset
         self._get_preset = get_preset
+        # Threaded through to the Preset Manager's New/Edit dialogs so
+        # dragging a parameter slider is audible immediately instead of
+        # silent until OK is clicked -- see effect_dialog.py.
+        self._apply_live = apply_live
         self._toggle_items: dict[str, wx.MenuItem] = {}
         # Preset radio items per effect, keyed by preset name -- lets a
         # preset applied programmatically (e.g. via the Preset Manager,
@@ -98,13 +103,21 @@ class EffectsMenu:
 
     def _open_manager(self, effect_id: str) -> None:
         from radiomaster.ui.preset_manager_dialog import PresetManagerDialog
-        dlg = PresetManagerDialog(None, effect_id, self._get_params(effect_id))
+        apply_live = (lambda params, eid=effect_id: self._apply_live(eid, params)) if self._apply_live else None
+        dlg = PresetManagerDialog(None, effect_id, self._get_params(effect_id), apply_live=apply_live)
         if dlg.ShowModal() == wx.ID_OK:
             result = dlg.get_result()
             if result:
                 name, params = result
                 self._apply_preset(effect_id, name, params)
         dlg.Destroy()
+        # New/Edit's live preview (see apply_live above) can have
+        # auto-enabled the effect even when nothing was ultimately
+        # Applied (e.g. previewed a new preset's sliders, saved it, but
+        # closed the manager without clicking Apply) -- resync the
+        # On/Off checkmark against the engine's actual current state so
+        # it doesn't keep showing "Off" while the effect is audibly on.
+        self.set_enabled(effect_id, self._is_enabled(effect_id))
 
     def set_enabled(self, effect_id: str, enabled: bool) -> None:
         """Sync the On/Off checkmark (e.g. after a preset auto-enables)."""
