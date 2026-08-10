@@ -501,20 +501,26 @@ class PlaybackEngine:
             self._restart_timer.daemon = True
             self._restart_timer.start()
 
-    def _start_process(self, url: str, is_video: bool) -> None:
-        """Start the FFplay subprocess (video only)."""
+    def _start_process(self, url: str, is_video: bool, force_default_device: bool = False) -> None:
+        """Start the FFplay subprocess (video only). *force_default_device*
+        is a one-attempt override used only by _watch_for_audio_device_failure's
+        retry -- it never touches the saved Settings > Playback > Output
+        Device value itself, only what this particular launch asks SDL for."""
         cmd = self._build_ffplay_command(url, is_video)
         # ffplay has no CLI flag for choosing an output device -- it goes
         # through SDL2, which picks the device from this env var on the
         # child process. See utils/audio_devices.py for how the exact name
-        # is derived (has to match SDL's own enumeration precisely).
+        # is derived (has to match SDL's own enumeration precisely) --
+        # that fragility is exactly what _watch_for_audio_device_failure
+        # exists to recover from.
+        device_for_this_attempt = "" if force_default_device else self._output_device
         from radiomaster.utils.network import get_ffplay_http_proxy_env
         proxy_env = get_ffplay_http_proxy_env()
         env = None
-        if self._output_device or proxy_env:
+        if device_for_this_attempt or proxy_env:
             env = dict(os.environ)
-            if self._output_device:
-                env["SDL_AUDIO_DEVICE_NAME"] = self._output_device
+            if device_for_this_attempt:
+                env["SDL_AUDIO_DEVICE_NAME"] = device_for_this_attempt
             env.update(proxy_env)
         try:
             log_io(log, "spawning ffplay: %s", cmd)
@@ -551,10 +557,77 @@ class PlaybackEngine:
             threading.Thread(
                 target=self._apply_volume_live_with_retry, args=(self._process,), daemon=True
             ).start()
+            # Only need to watch for a bad SDL device name when we actually
+            # asked for one -- the fallback attempt itself (force_default_device)
+            # never spawns a watcher of its own, which is what keeps this
+            # from being able to retry forever.
+            if device_for_this_attempt:
+                threading.Thread(
+                    target=self._watch_for_audio_device_failure,
+                    args=(self._process, self._ffplay_log_path, url, is_video),
+                    daemon=True,
+                ).start()
         except FileNotFoundError:
             self._notify_error("FFplay not found. Ensure ffplay.exe is in the tools/ folder.")
         except Exception as e:
             self._notify_error(f"Failed to start playback: {e}")
+
+    def _watch_for_audio_device_failure(
+        self, process: "subprocess.Popen[bytes]", log_path: str, url: str, is_video: bool
+    ) -> None:
+        """Confirmed live from a real user log: the saved Settings > Playback
+        > Output Device name has to match SDL's own device enumeration
+        *exactly* (see utils/audio_devices.py's docstring on how fragile
+        that matching is), and once it's stale -- device renamed,
+        disconnected, or just reordered by Windows -- SDL_OpenAudio fails
+        with "No such device" and ffplay carries on decoding and "playing"
+        video completely silently forever, with no error surfaced anywhere.
+        That's indistinguishable from "nothing is playing" to anyone
+        relying on the audio. This polls the just-started process's own
+        stderr log for that failure signature for a few seconds after
+        launch (SDL_OpenAudio fails, or doesn't, right at open -- not
+        later), and if seen, restarts this same playback once with the
+        system default device instead of the stale saved one, without
+        touching the saved setting itself."""
+        deadline = time.time() + 5
+        text = ""
+        found = False
+        while time.time() < deadline:
+            if self._process is not process:
+                return  # superseded by a stop/new play since this attempt started
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                pass
+            if "No more combinations to try, audio open failed" in text:
+                found = True
+                break
+            time.sleep(0.5)
+        if not found or self._process is not process:
+            return
+        log.warning("Configured audio output device not found by SDL; falling back to system default")
+        self._notify_error(
+            "The configured audio output device could not be found. "
+            "Falling back to the system default for this session -- "
+            "check Settings > Playback > Output Device."
+        )
+        # Stop the monitor loop first, same as _restart_with_effects -- otherwise
+        # it can observe this deliberate terminate() as a natural process exit
+        # and race this restart with its own reconnect/stopped-state handling.
+        self._monitor_running = False
+        try:
+            process.terminate()
+            process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        if self._process is process:
+            self._process = None
+            self._close_ffplay_log()
+            self._start_process(url, is_video, force_default_device=True)
 
     def _close_ffplay_log(self) -> None:
         if self._ffplay_log_file is not None:
