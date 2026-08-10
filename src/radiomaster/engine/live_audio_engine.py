@@ -50,6 +50,27 @@ FADE_SAMPLES = 64  # ~1.3ms at 48kHz -- inaudible as a level change, but
 # queue for an immediate-feeling change (see _drain_queue_for_immediate_effect).
 
 
+def _describe_stream_error(exc: Exception) -> str:
+    """Turn a raw connection failure into something a user can act on.
+    PyAV falls back to a useless "Error number -138 occurred" whenever its
+    own error-name table doesn't cover a code (confirmed live against a
+    real dead station: errno 138 has no entry in Python's own
+    errno.errorcode table either) -- but the OS's own C runtime, which is
+    where ffmpeg's error codes are actually drawn from, does know a plain
+    string for most of these (os.strerror(138) resolves to "timed out")
+    even when the higher-level tables above it don't."""
+    errno_val = getattr(exc, "errno", None)
+    if errno_val:
+        import os as _os
+        try:
+            desc = _os.strerror(errno_val)
+        except (ValueError, OSError):
+            desc = None
+        if desc and "unknown error" not in desc.lower():
+            return f"Could not connect to the stream ({desc}). The station may be down or unreachable."
+    return str(exc)
+
+
 def build_effects_filters(rate: float, effects: dict[str, dict[str, Any]]) -> list[str]:
     """Build the list of "name=args" libavfilter descriptors for the
     current rate + effects settings. Shared between this engine (graph
@@ -789,7 +810,7 @@ class LiveAudioEngine:
         except Exception as e:
             if not self._stop_flag.is_set():
                 logger.error(f"Decode error: {e}")
-                self._handle_decode_failure(str(e))
+                self._handle_decode_failure(_describe_stream_error(e))
 
     def _handle_decode_failure(self, message: str) -> None:
         if (self._auto_reconnect and self._duration == 0.0 and self._current_url
@@ -805,7 +826,7 @@ class LiveAudioEngine:
                 self._decode_loop(self._current_url)
                 return
             except Exception as e2:
-                self._handle_decode_failure(str(e2))
+                self._handle_decode_failure(_describe_stream_error(e2))
                 return
         if self._auto_reconnect and self._reconnect_attempts >= self._MAX_RECONNECT_ATTEMPTS:
             self._notify_error("Lost connection to the stream and could not reconnect.")
