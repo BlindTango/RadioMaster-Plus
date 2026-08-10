@@ -494,6 +494,12 @@ class RecordingsPanel(SettingsPanel):
         path_sizer.Add(btn, 0, wx.LEFT, 5)
         sizer.Add(path_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
+        self.match_source_chk = wx.CheckBox(
+            self, label="Record in the station's original format when possible "
+                        "(codec/bitrate/sample rate/channels)")
+        self.match_source_chk.SetValue(self.config.get("recordings.match_source_format", default=True))
+        sizer.Add(self.match_source_chk, 0, wx.ALL, 5)
+
         sizer.Add(wx.StaticText(self, label="Recording Format:"), 0, wx.ALL, 5)
         self.rec_format_combo = wx.ComboBox(
             self, choices=["MP3", "AAC", "OGG", "FLAC", "WAV"], style=wx.CB_READONLY,
@@ -512,6 +518,21 @@ class RecordingsPanel(SettingsPanel):
         )
         sizer.Add(self.rec_quality_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
+        # Format/Quality only apply when NOT matching the source (they're
+        # ignored -- see RecordingSession.match_source -- while it's on),
+        # so disable them together with the checkbox instead of leaving
+        # two controls visibly enabled but silently inert, which a screen
+        # reader user would have no way to discover.
+        def _on_match_source_toggle(event: wx.CommandEvent) -> None:
+            enabled = not self.match_source_chk.IsChecked()
+            self.rec_format_combo.Enable(enabled)
+            self.rec_quality_combo.Enable(enabled)
+            event.Skip()
+
+        self.match_source_chk.Bind(wx.EVT_CHECKBOX, _on_match_source_toggle)
+        self.rec_format_combo.Enable(not self.match_source_chk.IsChecked())
+        self.rec_quality_combo.Enable(not self.match_source_chk.IsChecked())
+
         self.split_tracks_chk = wx.CheckBox(self, label="Split recordings into tracks")
         self.split_tracks_chk.SetValue(self.config.get("recordings.split_tracks", default=True))
         sizer.Add(self.split_tracks_chk, 0, wx.ALL, 5)
@@ -528,6 +549,7 @@ class RecordingsPanel(SettingsPanel):
 
     def onSave(self) -> None:
         self.config.set("recordings.recording_path", value=self.recording_path_txt.GetValue())
+        self.config.set("recordings.match_source_format", value=self.match_source_chk.IsChecked())
         self.config.set("recordings.recording_format", value=self.rec_format_combo.GetStringSelection().lower())
         self.config.set("recordings.recording_quality", value=self.rec_quality_combo.GetStringSelection())
         self.config.set("recordings.split_tracks", value=self.split_tracks_chk.IsChecked())

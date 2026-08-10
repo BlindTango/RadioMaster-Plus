@@ -19,14 +19,15 @@ class StatusBar(wx.StatusBar):
     FIELD_BUFFERING = 1
     FIELD_QUALITY = 2
     FIELD_SOURCE = 3
+    FIELD_FORMAT = 4
 
     def __init__(self, parent: wx.Window) -> None:
         super().__init__(parent, style=wx.SB_FLAT)
-        self.SetFieldsCount(4)
+        self.SetFieldsCount(5)
         # FIELD_QUALITY carries elapsed/total/remaining now (see
         # set_time_info) instead of the bitrate/quality text its name
         # suggests -- that needs more room than the other three fields.
-        self.SetStatusWidths([-2, -1, -3, -2])
+        self.SetStatusWidths([-2, -1, -3, -2, -2])
 
         self._set_defaults()
 
@@ -36,6 +37,7 @@ class StatusBar(wx.StatusBar):
         self.SetStatusText("", self.FIELD_BUFFERING)
         self.SetStatusText("", self.FIELD_QUALITY)
         self.SetStatusText("", self.FIELD_SOURCE)
+        self.SetStatusText("", self.FIELD_FORMAT)
 
     def set_status(self, text: str) -> None:
         """Set the main status field."""
@@ -55,6 +57,14 @@ class StatusBar(wx.StatusBar):
     def set_source(self, text: str) -> None:
         """Set source type (Radio, Podcast, etc.)."""
         self.SetStatusText(text, self.FIELD_SOURCE)
+
+    def set_format(self, text: str) -> None:
+        """Set the station's actual broadcast format -- codec, sample
+        rate, channel count, bitrate (see services/stream_prober.py).
+        Probed directly from the stream rather than trusted from the
+        station database, whose codec/bitrate fields are self-reported
+        and often missing or wrong."""
+        self.SetStatusText(text, self.FIELD_FORMAT)
 
     def set_time_info(self, elapsed: float, duration: float) -> None:
         """Elapsed/total/remaining -- for a podcast episode (a real,

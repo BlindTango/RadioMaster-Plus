@@ -70,6 +70,7 @@ class SchedulerService:
         "record for 60 minutes" schedule was actually only ever
         recording for 60 seconds."""
         from radiomaster.services.recording_session import RecordingSession
+        from radiomaster.services.stream_prober import probe_stream_format
         from radiomaster.utils.config import ConfigManager
         config = ConfigManager.get_instance()
         rec_format = format if format and format != "auto" else config.get(
@@ -77,6 +78,8 @@ class SchedulerService:
         quality = config.get("recordings.recording_quality", default="320k")
         add_metadata = config.get("recordings.add_metadata", default=True)
         split_tracks = config.get("recordings.split_tracks", default=True)
+        match_source = config.get("recordings.match_source_format", default=True)
+        source_format = probe_stream_format(url, timeout=6.0) if match_source else None
 
         def _on_segment(file_path: str, title: str) -> None:
             logger.info(f"Recording segment finalized: {file_path}")
@@ -85,7 +88,8 @@ class SchedulerService:
             session = RecordingSession(
                 station_url=url, station_name=station_name, output_dir=self._recordings_dir,
                 rec_format=rec_format, quality=quality, add_metadata=add_metadata,
-                split_tracks=split_tracks, on_segment_finalized=_on_segment,
+                split_tracks=split_tracks, match_source=match_source, source_format=source_format,
+                on_segment_finalized=_on_segment,
             )
             session.start()
             self._active_recordings[schedule_id] = session

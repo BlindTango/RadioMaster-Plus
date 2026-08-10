@@ -374,7 +374,8 @@ class TestRecording:
 
         assert win._now_playing._btn_record.GetLabelText() == "● Record Off"
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
             mock_popen.return_value = MagicMock()
             panel._on_record()
         assert win._now_playing._btn_record.GetLabelText() == "● Recording On"
@@ -391,7 +392,8 @@ class TestRecording:
         panel._selected_station = Station(uuid="a", name="A", url="http://a")
         panel.engine.stop = MagicMock()
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
             mock_popen.return_value = MagicMock()
             panel._on_record()
         assert len(panel._recordings) == 1
@@ -425,7 +427,8 @@ class TestRecording:
                     return list_ctrl.GetItemText(i, 2)
             return None
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
             mock_popen.return_value = MagicMock()
             panel._on_record()
 
@@ -447,7 +450,8 @@ class TestRecording:
         station_a = Station(uuid="rec-a", name="Rec A", url="http://a")
         station_b = Station(uuid="rec-b", name="Rec B", url="http://b")
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
             mock_popen.side_effect = lambda *a, **k: MagicMock()
 
             panel._selected_station = station_a
@@ -478,7 +482,8 @@ class TestRecording:
         station_a = Station(uuid="rec-a", name="Rec A", url="http://a")
         station_b = Station(uuid="rec-b", name="Rec B", url="http://b")
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
             mock_popen.side_effect = lambda *a, **k: MagicMock()
             panel._selected_station = station_a
             panel._on_record()  # A is now recording
@@ -501,7 +506,8 @@ class TestRecording:
         station_a = Station(uuid="rec-a", name="Rec A", url="http://a")
         station_b = Station(uuid="rec-b", name="Rec B", url="http://b")
 
-        with patch("subprocess.Popen") as mock_popen:
+        with patch("subprocess.Popen") as mock_popen, \
+                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
             mock_popen.side_effect = lambda *a, **k: MagicMock()
             panel._selected_station = station_a
             panel._on_record()

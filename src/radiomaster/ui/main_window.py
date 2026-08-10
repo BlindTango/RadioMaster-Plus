@@ -425,6 +425,7 @@ class MainWindow(wx.Frame):
         self._now_playing = NowPlayingBar(self._content_panel)
         main_sizer.Add(self._now_playing, 0, wx.EXPAND)
         self._radio_panel.on_recording_changed = self._on_radio_recording_changed
+        self._radio_panel.on_format_detected = self._status_bar.set_format
 
         # Lyrics/Show Notes panel
         self._lyrics_panel = LyricsPanel(self._content_panel)

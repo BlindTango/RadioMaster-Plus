@@ -36,6 +36,25 @@ RECORDING_CODECS: dict[str, tuple[str, str]] = {
     "wav": (".wav", "pcm_s16le"),
 }
 
+# Maps a probed source codec (ffprobe's codec_name -- see
+# stream_prober.py) to an output extension and ffmpeg encoder, for
+# "record in the station's original format" -- deliberately a separate
+# table from RECORDING_CODECS since ffprobe's codec_name vocabulary
+# doesn't match the user-facing "Recording Format" combo's values.
+SOURCE_CODEC_MAP: dict[str, tuple[str, str]] = {
+    "mp3": (".mp3", "libmp3lame"),
+    "aac": (".aac", "aac"),
+    "flac": (".flac", "flac"),
+    "vorbis": (".ogg", "libvorbis"),
+    "opus": (".opus", "libopus"),
+    "alac": (".m4a", "alac"),
+    "pcm_s16le": (".wav", "pcm_s16le"),
+    "pcm_s24le": (".wav", "pcm_s24le"),
+    "wmav2": (".wma", "wmav2"),
+}
+# Codecs that don't take a bitrate (constant, format-defined instead).
+_LOSSLESS_CODECS = {"flac", "pcm_s16le", "pcm_s24le", "alac"}
+
 _DECODE_SAMPLE_RATE = 44100
 _DECODE_CHANNELS = 2
 # See _on_title_changed's docstring for why acting on a title change
@@ -80,7 +99,17 @@ class RecordingSession:
     def __init__(self, station_url: str, station_name: str, output_dir: str,
                  rec_format: str = "mp3", quality: str = "320k",
                  add_metadata: bool = True, split_tracks: bool = False,
+                 match_source: bool = False, source_format: Optional[dict] = None,
                  on_segment_finalized: Optional[Callable[[str, str], None]] = None) -> None:
+        """*match_source*, when True and *source_format* (see
+        stream_prober.probe_stream_format) names a codec this class
+        knows how to target, records using the station's own real
+        codec/sample-rate/channels/bitrate instead of transcoding down
+        to *rec_format*/*quality* -- a lossless (e.g. FLAC) station then
+        gets recorded losslessly instead of unconditionally squashed to
+        MP3. Falls back to *rec_format*/*quality* if *source_format* is
+        None or names a codec with no known ffmpeg encoder mapping
+        (SOURCE_CODEC_MAP)."""
         self.station_url = station_url
         self.station_name = station_name
         self.rec_format = rec_format
@@ -89,7 +118,23 @@ class RecordingSession:
         self.split_tracks = split_tracks
         self.on_segment_finalized = on_segment_finalized
 
-        self.ext, self._codec = RECORDING_CODECS.get(rec_format, (".mp3", "libmp3lame"))
+        self.match_source = False
+        self._source_sample_rate = _DECODE_SAMPLE_RATE
+        self._source_channels = _DECODE_CHANNELS
+        self._source_bit_rate: Optional[int] = None
+        if match_source and source_format and source_format.get("codec"):
+            mapped = SOURCE_CODEC_MAP.get(source_format["codec"])
+            if mapped is not None:
+                self.ext, self._codec = mapped
+                self.match_source = True
+                if source_format.get("sample_rate"):
+                    self._source_sample_rate = source_format["sample_rate"]
+                if source_format.get("channels"):
+                    self._source_channels = source_format["channels"]
+                self._source_bit_rate = source_format.get("bit_rate") or None
+        if not self.match_source:
+            self.ext, self._codec = RECORDING_CODECS.get(rec_format, (".mp3", "libmp3lame"))
+
         safe_station_name = re.sub(r'[<>:"/\\|?*]', "_", station_name).strip() or "station"
         self.station_dir = os.path.join(output_dir, safe_station_name)
         os.makedirs(self.station_dir, exist_ok=True)
@@ -143,8 +188,13 @@ class RecordingSession:
     # Non-split path
     # ------------------------------------------------------------------
     def _recording_ffmpeg_args(self, output_path: str, song: Optional[str]) -> list[str]:
-        cmd = [get_ffmpeg(), "-y", "-i", self.station_url, "-c:a", self._codec]
-        if self.rec_format in ("mp3", "aac", "ogg"):
+        # match_source uses stream copy -- no re-encode at all, so the
+        # recording is bit-for-bit the station's own broadcast (same
+        # codec, bitrate, sample rate, channels) rather than a
+        # transcoded approximation of it.
+        codec_arg = "copy" if self.match_source else self._codec
+        cmd = [get_ffmpeg(), "-y", "-i", self.station_url, "-c:a", codec_arg]
+        if not self.match_source and self.rec_format in ("mp3", "aac", "ogg"):
             cmd += ["-b:a", "320k" if self.quality.lower() == "best" else self.quality]
         if self.add_metadata:
             artist, title = parse_icy_song(song) if song else ("", "")
@@ -223,13 +273,21 @@ class RecordingSession:
         """The one network connection for the whole session. -reconnect
         lets ffmpeg itself recover from a transient drop without this
         class needing to notice and restart anything (the per-segment
-        encode processes never touch the network at all)."""
+        encode processes never touch the network at all).
+
+        Splitting a compressed bitstream at an arbitrary byte offset
+        would produce a corrupted/clickable boundary, so even in
+        match_source mode this still decodes to raw PCM -- but at the
+        station's own real sample rate/channel count (not a hardcoded
+        44.1kHz/stereo) so the PCM->re-encode roundtrip doesn't quietly
+        resample or downmix a station that isn't already 44.1kHz
+        stereo."""
         cmd = [
             get_ffmpeg(), "-hide_banner", "-loglevel", "error",
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
             "-i", self.station_url,
             "-vn", "-f", "s16le", "-acodec", "pcm_s16le",
-            "-ac", str(_DECODE_CHANNELS), "-ar", str(_DECODE_SAMPLE_RATE),
+            "-ac", str(self._source_channels), "-ar", str(self._source_sample_rate),
             "pipe:1",
         ]
         return subprocess.Popen(
@@ -239,15 +297,19 @@ class RecordingSession:
 
     def _start_encode_segment(self, output_path: str) -> subprocess.Popen:
         """One track's local encode process: raw PCM in via stdin (fed by
-        _feed_decode_to_encode), the real configured format/quality out.
+        _feed_decode_to_encode), the real configured (or, in
+        match_source mode, the station's own) format/quality out.
         Closing stdin is a clean EOF that makes ffmpeg finish encoding
         and exit on its own."""
         cmd = [
             get_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "s16le", "-ar", str(_DECODE_SAMPLE_RATE), "-ac", str(_DECODE_CHANNELS),
+            "-f", "s16le", "-ar", str(self._source_sample_rate), "-ac", str(self._source_channels),
             "-i", "pipe:0", "-c:a", self._codec,
         ]
-        if self.rec_format in ("mp3", "aac", "ogg"):
+        if self.match_source:
+            if self._codec not in _LOSSLESS_CODECS and self._source_bit_rate:
+                cmd += ["-b:a", f"{self._source_bit_rate // 1000}k"]
+        elif self.rec_format in ("mp3", "aac", "ogg"):
             cmd += ["-b:a", "320k" if self.quality.lower() == "best" else self.quality]
         cmd.append(output_path)
         return subprocess.Popen(
