@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import threading
 import uuid as uuid_module
@@ -360,7 +361,38 @@ class StationDB:
                    ORDER BY name COLLATE NOCASE ASC""",
                 uuids,
             ).fetchall()
-        return self._rows_to_stations(rows)
+        return self._rank_by_match_quality(self._rows_to_stations(rows), query)
+
+    def _rank_by_match_quality(self, stations: list[Station], query: str) -> list[Station]:
+        """search_local's SQL is a plain LIKE '%query%' -- it matches the
+        query text ANYWHERE in a station's name, including buried in the
+        middle of an unrelated word. Confirmed live: searching "KAMU"
+        (the Texas A&M NPR affiliate) surfaces "Skamusic Munster" purely
+        because those four letters happen to appear inside "Skamusic" --
+        nothing to do with KAMU at all -- and alphabetical order doesn't
+        distinguish a real match from that kind of coincidence. Someone
+        typing a station's name expects that name, not a substring
+        collision, so rank a real word-boundary match ahead of a
+        mid-word one instead of leaving A-Z as the only sort key."""
+        q = query.strip().lower()
+        if not q:
+            return stations
+        word_boundary = re.compile(r"(?:^|[^a-z0-9])" + re.escape(q), re.IGNORECASE)
+
+        def rank(station: Station) -> tuple[int, str]:
+            name = station.name or ""
+            lname = name.lower()
+            if lname == q:
+                tier = 0
+            elif lname.startswith(q):
+                tier = 1
+            elif word_boundary.search(name):
+                tier = 2
+            else:
+                tier = 3  # mid-word substring only, e.g. "Skamusic" for "KAMU"
+            return (tier, lname)
+
+        return sorted(stations, key=rank)
 
     def get_metadata(self, key: str, default: Optional[str] = None) -> Optional[str]:
         with self._connect() as conn:
