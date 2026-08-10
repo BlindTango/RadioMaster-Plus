@@ -47,12 +47,14 @@ class YouTubePanel(wx.Panel):
         self._results_list.AppendColumn("Channel", width=150)
         main_sizer.Add(self._results_list, 1, wx.EXPAND | wx.ALL, 4)
 
-        # Controls
+        # Controls -- no inline Play button here: matches RadioPanel and
+        # PodcastPanel, neither of which has one either. Enter/double-
+        # click on the list (bound below) plus the shared transport
+        # bar's own Play button are what actually start playback; a
+        # second, separate "Play Video" button next to those was two
+        # different-looking play controls that don't do quite the same
+        # thing, not actually useful.
         ctrl_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_play = wx.Button(self, label="Play Video")
-        set_accessible_name(self._btn_play, "Play Video")
-        ctrl_sizer.Add(self._btn_play, 0, wx.RIGHT, 4)
-
         self._btn_playlist = wx.Button(self, label="Load Playlist")
         set_accessible_name(self._btn_playlist, "Load Playlist")
         ctrl_sizer.Add(self._btn_playlist, 0, wx.RIGHT, 4)
@@ -93,7 +95,6 @@ class YouTubePanel(wx.Panel):
 
         self._btn_search.Bind(wx.EVT_BUTTON, self._on_search)
         self._btn_play_url.Bind(wx.EVT_BUTTON, self._on_play_url)
-        self._btn_play.Bind(wx.EVT_BUTTON, self._on_play)
         self._btn_playlist.Bind(wx.EVT_BUTTON, self._on_load_playlist)
         self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
         self._btn_download_audio.Bind(wx.EVT_BUTTON, self._on_download_audio)
@@ -239,7 +240,6 @@ class YouTubePanel(wx.Panel):
         # for podcast episodes (v1.1.18), just never ported to video.
         duration = float(video.get('duration') or 0.0)
         self._set_status(f"Status: Resolving stream for '{title}'...")
-        self._btn_play.Disable()
 
         def worker():
             from radiomaster.services.youtube_dl import YouTubeService
@@ -251,7 +251,6 @@ class YouTubePanel(wx.Panel):
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_play_result(self, stream_url: str | None, title: str, duration: float = 0.0) -> None:
-        self._btn_play.Enable()
         if not stream_url:
             wx.MessageBox("Unable to resolve a playable stream for the selected video.",
                          "Error", wx.OK | wx.ICON_ERROR)
