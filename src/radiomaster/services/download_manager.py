@@ -10,7 +10,7 @@ from typing import Any, Callable
 logger = logging.getLogger("radiomaster")
 
 
-from radiomaster.utils.tools import get_ytdlp
+from radiomaster.utils.tools import get_ffmpeg, get_ytdlp
 
 
 class DownloadManager:
@@ -112,7 +112,18 @@ class DownloadManager:
     # UI-facing quality labels aren't valid yt-dlp -f selectors on their own
     # (e.g. "1080p" needs to become a real format expression); map them here.
     _VIDEO_QUALITY_SELECTORS = {
-        "best": "best",
+        # "best" (the literal yt-dlp format name) selects only a single
+        # pre-merged/progressive format -- on YouTube that tops out well
+        # below the real best available quality (confirmed live: capped
+        # at 360p on a video that actually has a 4K stream), since
+        # anything above ~720p is served as separate video-only +
+        # audio-only DASH streams that "best" can't see at all.
+        # "bestvideo+bestaudio/best" is yt-dlp's own documented default
+        # (what you get by passing no -f at all) -- picks the true best
+        # available video and audio and merges them via ffmpeg, falling
+        # back to a single combined format only if that's genuinely all
+        # that's offered.
+        "best": "bestvideo+bestaudio/best",
         "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
         "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
         "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
@@ -131,6 +142,19 @@ class DownloadManager:
 
         filename_base = item.get("filename_base") or "%(title)s"
         cmd = [get_ytdlp(), "--no-playlist", "-o", f"{output_dir}/{filename_base}.%(ext)s"]
+        # RadioMaster+ bundles its own ffmpeg specifically so users don't
+        # need one on their system -- but yt-dlp only looks on PATH by
+        # default, so without this it silently can't find our bundled
+        # copy on a machine that has no system-wide ffmpeg at all.
+        # Confirmed live: with ffmpeg off PATH, a video quality selector
+        # needing bestvideo+bestaudio merging (every quality option
+        # except a raw progressive "best") produced two separate,
+        # unmuxed video-only/audio-only files instead of one real video
+        # -- "WARNING: You have requested merging of multiple formats
+        # but ffmpeg is not installed. The formats won't be merged."
+        # Also needed for audio extraction/transcoding (-x) and artwork
+        # embedding, both of which shell out to ffmpeg too.
+        cmd.extend(["--ffmpeg-location", get_ffmpeg()])
         from radiomaster.utils.network import get_yt_dlp_proxy_args
         cmd.extend(get_yt_dlp_proxy_args())
         if extract_audio:
