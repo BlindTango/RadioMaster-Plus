@@ -1,16 +1,11 @@
 """Recording scheduler service for managing timed recordings."""
 
 import threading
-import subprocess
-import os
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
 logger = logging.getLogger("radiomaster")
-
-
-from radiomaster.utils.tools import get_ffmpeg
 
 
 class SchedulerService:
@@ -19,7 +14,8 @@ class SchedulerService:
     def __init__(self, recordings_dir: str) -> None:
         self._recordings_dir = recordings_dir
         self._schedules: list[dict[str, Any]] = []
-        self._active_recordings: dict[int, subprocess.Popen] = {}
+        self._active_recordings: dict[int, Any] = {}
+        self._duration_timers: dict[int, threading.Timer] = {}
         self._running = False
         self._thread: threading.Thread | None = None
 
@@ -56,39 +52,62 @@ class SchedulerService:
         """
         self._schedules = list(schedules)
 
-    def start_recording(self, schedule_id: int, url: str, output_path: str,
+    def start_recording(self, schedule_id: int, url: str, station_name: str,
                         format: str = "auto", duration: int = 0) -> None:
-        """Start recording a stream."""
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        """Start recording a stream -- uses the same split-track-capable
+        RecordingSession as the Radio panel's manual Record button (see
+        recording_session.py), instead of the bare `ffmpeg -c copy`
+        single-file recording this used to be stuck with regardless of
+        Settings > Recordings > "Split recordings into tracks". Confirmed
+        live: a scheduled recording never split into per-track files at
+        all before this, since nothing here ever looked at that setting
+        or watched ICY metadata -- it just copied the raw stream to one
+        file until *duration* (or the schedule) ended.
 
-        cmd = [get_ffmpeg(), "-y", "-i", url]
-        if duration > 0:
-            cmd.extend(["-t", str(duration)])
-        cmd.extend(["-c", "copy" if format == "auto" else format, output_path])
+        *duration* is minutes, matching how _detect_conflicts already
+        interprets a schedule's duration field -- the previous `-t
+        str(duration)` passed it to ffmpeg as raw SECONDS instead, so a
+        "record for 60 minutes" schedule was actually only ever
+        recording for 60 seconds."""
+        from radiomaster.services.recording_session import RecordingSession
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        rec_format = format if format and format != "auto" else config.get(
+            "recordings.recording_format", default="mp3")
+        quality = config.get("recordings.recording_quality", default="320k")
+        add_metadata = config.get("recordings.add_metadata", default=True)
+        split_tracks = config.get("recordings.split_tracks", default=False)
+
+        def _on_segment(file_path: str, title: str) -> None:
+            logger.info(f"Recording segment finalized: {file_path}")
 
         try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            session = RecordingSession(
+                station_url=url, station_name=station_name, output_dir=self._recordings_dir,
+                rec_format=rec_format, quality=quality, add_metadata=add_metadata,
+                split_tracks=split_tracks, on_segment_finalized=_on_segment,
             )
-            self._active_recordings[schedule_id] = process
+            session.start()
+            self._active_recordings[schedule_id] = session
+            if duration > 0:
+                timer = threading.Timer(duration * 60, self.stop_recording, args=(schedule_id,))
+                timer.daemon = True
+                timer.start()
+                self._duration_timers[schedule_id] = timer
             if self._on_recording_start:
                 self._on_recording_start(schedule_id)
-            logger.info(f"Recording started: {output_path}")
+            logger.info(f"Recording started: {station_name} -> {session.station_dir}")
         except Exception as e:
             logger.error(f"Failed to start recording: {e}")
 
     def stop_recording(self, schedule_id: int) -> None:
         """Stop an active recording."""
-        process = self._active_recordings.pop(schedule_id, None)
-        if process:
-            try:
-                process.terminate()
-                process.wait(timeout=5)
-            except Exception:
-                process.kill()
+        timer = self._duration_timers.pop(schedule_id, None)
+        if timer is not None:
+            timer.cancel()
+        session = self._active_recordings.pop(schedule_id, None)
+        if session:
+            session.stop()
             if self._on_recording_stop:
                 self._on_recording_stop(schedule_id)
 
@@ -128,13 +147,7 @@ class SchedulerService:
                         title = schedule.get("title", "recording")
                         duration = schedule.get("duration", 0)
                         fmt = schedule.get("format", "auto")
-                        timestamp = now.strftime("%Y%m%d_%H%M%S")
-                        ext = "mp3" if fmt == "auto" else fmt
-                        output = os.path.join(
-                            self._recordings_dir,
-                            f"{title}_{timestamp}.{ext}",
-                        )
-                        self.start_recording(schedule_id, url, output, fmt, duration)
+                        self.start_recording(schedule_id, url, title, fmt, duration)
                         schedule["last_run"] = now.isoformat()
 
                         recurrence = schedule.get("recurrence", "")
