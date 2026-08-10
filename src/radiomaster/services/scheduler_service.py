@@ -76,7 +76,7 @@ class SchedulerService:
             "recordings.recording_format", default="mp3")
         quality = config.get("recordings.recording_quality", default="320k")
         add_metadata = config.get("recordings.add_metadata", default=True)
-        split_tracks = config.get("recordings.split_tracks", default=False)
+        split_tracks = config.get("recordings.split_tracks", default=True)
 
         def _on_segment(file_path: str, title: str) -> None:
             logger.info(f"Recording segment finalized: {file_path}")

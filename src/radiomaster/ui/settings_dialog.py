@@ -513,7 +513,7 @@ class RecordingsPanel(SettingsPanel):
         sizer.Add(self.rec_quality_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         self.split_tracks_chk = wx.CheckBox(self, label="Split recordings into tracks")
-        self.split_tracks_chk.SetValue(self.config.get("recordings.split_tracks", default=False))
+        self.split_tracks_chk.SetValue(self.config.get("recordings.split_tracks", default=True))
         sizer.Add(self.split_tracks_chk, 0, wx.ALL, 5)
 
         self.add_metadata_chk = wx.CheckBox(self, label="Add metadata to recordings")

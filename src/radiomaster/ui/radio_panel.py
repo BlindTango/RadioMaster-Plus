@@ -945,7 +945,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         recordings_dir = get_recordings_dir()
         rec_format = config.get("recordings.recording_format", default="mp3")
         ext, _ = self._RECORDING_CODECS.get(rec_format, (".mp3", "libmp3lame"))
-        split_tracks = config.get("recordings.split_tracks", default=False)
+        split_tracks = config.get("recordings.split_tracks", default=True)
 
         safe_station_name = re.sub(r'[<>:"/\\|?*]', "_", station.name).strip() or "station"
         station_dir = os.path.join(recordings_dir, safe_station_name)
