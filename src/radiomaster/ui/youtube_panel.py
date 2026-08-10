@@ -16,6 +16,20 @@ class YouTubePanel(wx.Panel):
         self._engine = engine
         # Store the latest search results so we can retrieve URLs later
         self._search_results: list[dict] = []
+        # Enter and double-click both fire EVT_LIST_ITEM_ACTIVATED for
+        # what a user experiences as one action, but a fast double-click
+        # can still land two separate activations (or Enter + a
+        # double-click close together) before the first stream URL has
+        # even finished resolving -- each starts its own background
+        # yt-dlp resolution. Without tracking which one is the latest,
+        # whichever resolution happened to finish LAST would win no
+        # matter which the user actually meant, including an older,
+        # already-superseded request replacing a video that had already
+        # started playing correctly -- exactly the "opened two windows /
+        # a video that isn't playing" symptom. Every worker checks this
+        # against the request it was given before actually calling
+        # engine.play(); a stale one is silently dropped.
+        self._play_request_seq = 0
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -199,6 +213,8 @@ class YouTubePanel(wx.Panel):
             url = dlg.GetValue().strip()
             if url:
                 self._set_status(f"Status: Resolving stream for '{url}'...")
+                self._play_request_seq += 1
+                seq = self._play_request_seq
 
                 def worker():
                     from radiomaster.services.youtube_dl import YouTubeService
@@ -207,7 +223,7 @@ class YouTubePanel(wx.Panel):
                     info = service.get_info(url) if stream_url else None
                     title = (info or {}).get('title') or url
                     duration = float((info or {}).get('duration') or 0.0)
-                    wx.CallAfter(self._apply_play_result, stream_url, title, duration)
+                    wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq)
 
                 import threading
                 threading.Thread(target=worker, daemon=True).start()
@@ -240,17 +256,31 @@ class YouTubePanel(wx.Panel):
         # for podcast episodes (v1.1.18), just never ported to video.
         duration = float(video.get('duration') or 0.0)
         self._set_status(f"Status: Resolving stream for '{title}'...")
+        self._play_request_seq += 1
+        seq = self._play_request_seq
 
         def worker():
             from radiomaster.services.youtube_dl import YouTubeService
             service = YouTubeService()
             stream_url = service.get_stream_url(video_url)
-            wx.CallAfter(self._apply_play_result, stream_url, title, duration)
+            wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_play_result(self, stream_url: str | None, title: str, duration: float = 0.0) -> None:
+    def _apply_play_result(self, stream_url: str | None, title: str,
+                            duration: float = 0.0, seq: int = 0) -> None:
+        if seq and seq != self._play_request_seq:
+            # A newer play request has started (or finished) since this
+            # one was kicked off -- e.g. two quick double-clicks each
+            # resolving their own stream in the background. Applying
+            # this one now would silently replace whatever the user's
+            # most recent action actually started, which is what "two
+            # windows"/"a video that isn't playing" looked like: an
+            # older, already-superseded resolution winning the race and
+            # restarting playback right after the real one had already
+            # begun.
+            return
         if not stream_url:
             wx.MessageBox("Unable to resolve a playable stream for the selected video.",
                          "Error", wx.OK | wx.ICON_ERROR)
