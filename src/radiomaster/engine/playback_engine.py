@@ -675,6 +675,21 @@ class PlaybackEngine:
         if is_video:
             cmd.remove("-nodisp")
 
+        # HTTP(S) reconnect -- confirmed live: a long googlevideo.com stream
+        # (YouTube) can have its TLS connection reset mid-download (Windows
+        # error -10054) well before the video actually ends; without these,
+        # ffplay has no instruction to retry and just dies with corrupted
+        # h264 packets ("Invalid NAL unit size", "partial file") instead of
+        # picking the download back up. These are demuxer-level input
+        # options, so they must come immediately before the URL.
+        if url.startswith(("http://", "https://")):
+            cmd.extend([
+                "-reconnect", "1",
+                "-reconnect_at_eof", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "5",
+            ])
+
         cmd.append(url)
         return cmd
 
