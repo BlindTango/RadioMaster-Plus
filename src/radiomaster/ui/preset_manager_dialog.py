@@ -51,8 +51,16 @@ class PresetManagerDialog(wx.Dialog):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         sizer.Add(wx.StaticText(self, label="Presets:"), 0, wx.ALL, 5)
-        self._preset_list = wx.ListBox(self, style=wx.LB_SINGLE)
+        # wx.ListBox instead of wx.ListCtrl here (unlike every other list
+        # in the app) was reported as inaccessible to a screen reader --
+        # switched to the same LC_REPORT single-column ListCtrl pattern
+        # used everywhere else (e.g. theme_editor.py's color list,
+        # settings_dialog.py's category list) for consistent, working
+        # accessibility.
+        self._preset_list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.LC_NO_HEADER)
         set_accessible_name(self._preset_list, "Preset List")
+        self._preset_list.InsertColumn(0, "Preset")
+        self._preset_list.Bind(wx.EVT_SIZE, self._on_preset_list_resize)
         sizer.Add(self._preset_list, 1, wx.EXPAND | wx.ALL, 5)
 
         row1 = wx.BoxSizer(wx.HORIZONTAL)
@@ -92,35 +100,45 @@ class PresetManagerDialog(wx.Dialog):
         sizer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.ALL, 5)
 
         self.SetSizer(sizer)
-        self._preset_list.Bind(wx.EVT_LISTBOX, lambda e: self._update_button_states())
+        self._preset_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda e: self._update_button_states())
+        self._preset_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda e: self._update_button_states())
+
+    def _on_preset_list_resize(self, event: wx.SizeEvent) -> None:
+        event.Skip()
+        self._preset_list.SetColumnWidth(0, self._preset_list.GetClientSize().width)
 
     # ------------------------------------------------------------------
+    def _select_index(self, index: int) -> None:
+        state = wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED
+        self._preset_list.SetItemState(index, state, state)
+        self._preset_list.EnsureVisible(index)
+
     def _refresh_list(self, select: str | None = None) -> None:
-        self._preset_list.Clear()
+        self._preset_list.DeleteAllItems()
         for name in self._builtin:
-            self._preset_list.Append(f"{name} (built-in)")
+            self._preset_list.Append((f"{name} (built-in)",))
         for name in self._custom_presets():
-            self._preset_list.Append(name)
+            self._preset_list.Append((name,))
         if select:
             idx = self._find_index(select)
             if idx >= 0:
-                self._preset_list.SetSelection(idx)
-        elif self._preset_list.GetCount():
-            self._preset_list.SetSelection(0)
+                self._select_index(idx)
+        elif self._preset_list.GetItemCount():
+            self._select_index(0)
         self._update_button_states()
 
     def _find_index(self, name: str) -> int:
-        for i in range(self._preset_list.GetCount()):
+        for i in range(self._preset_list.GetItemCount()):
             if self._selected_name_at(i) == name:
                 return i
         return -1
 
     def _selected_name_at(self, index: int) -> str:
-        label = self._preset_list.GetString(index)
+        label = self._preset_list.GetItemText(index, 0)
         return label[: -len(" (built-in)")] if label.endswith(" (built-in)") else label
 
     def _selected_name(self) -> str | None:
-        idx = self._preset_list.GetSelection()
+        idx = self._preset_list.GetFirstSelected()
         if idx == wx.NOT_FOUND:
             return None
         return self._selected_name_at(idx)
