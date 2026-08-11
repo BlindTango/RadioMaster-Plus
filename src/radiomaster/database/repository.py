@@ -1,6 +1,6 @@
 """Repository layer for database CRUD operations."""
 
-from typing import Any
+from typing import Any, Optional
 from radiomaster.database.connection import DatabaseManager
 
 
@@ -245,14 +245,37 @@ class DownloadRepository:
         self._db = db
 
     def add(self, url: str, title: str = "", source_type: str = "",
-            format: str = "", quality: str = "") -> int:
+            format: str = "", quality: str = "", output_dir: str = "",
+            extract_audio: bool = False, filename_base: str = "") -> int:
+        """*output_dir*/*extract_audio*/*filename_base* mirror the same-
+        named DownloadManager.add_download() params -- stored so a row
+        can be correctly re-submitted later (retry(), or resuming an
+        orphaned one) instead of only remembering *what* to download
+        and not *how*."""
         cursor = self._db.execute(
-            """INSERT INTO downloads (url, title, source_type, format, quality)
-            VALUES (?, ?, ?, ?, ?)""",
-            (url, title, source_type, format, quality),
+            """INSERT INTO downloads
+            (url, title, source_type, format, quality, output_dir, extract_audio, filename_base)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (url, title, source_type, format, quality, output_dir, int(extract_audio), filename_base),
         )
         self._db.commit()
         return cursor.lastrowid
+
+    def get(self, download_id: int) -> Optional[dict[str, Any]]:
+        rows = self._db.fetchall("SELECT * FROM downloads WHERE id = ?", (download_id,))
+        return rows[0] if rows else None
+
+    def reset_for_retry(self, download_id: int) -> None:
+        """Puts a failed (or stuck) download back to a fresh 'queued'/0%
+        state -- the caller (DownloadsPanel) still has to actually
+        resubmit it to DownloadManager; this only fixes up the DB side
+        so the Active list picks it back up instead of it still reading
+        'failed'/100 from the attempt that didn't work."""
+        self._db.execute(
+            "UPDATE downloads SET status = 'queued', progress = 0, error = NULL WHERE id = ?",
+            (download_id,),
+        )
+        self._db.commit()
 
     def add_completed(self, url: str, title: str, source_type: str = "", file_path: str = "") -> int:
         """Inserts a download row that's already finished -- e.g. one

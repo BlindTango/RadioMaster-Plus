@@ -347,15 +347,16 @@ class YouTubePanel(wx.Panel):
 
         # Add to download queue with selected quality via DownloadManager
         quality = self._quality_choice.GetStringSelection()
-        download_id = repo.add(video_url, title=video.get('title', 'YouTube Video'), format=quality)
+        from radiomaster.utils.paths import get_downloads_dir
+        # get_downloads_dir(), not a raw config.get() -- self-heals a
+        # value saved once while running installed back to the
+        # correct portable default instead of writing into a stale
+        # Music-folder path forever after. See its own docstring.
+        output_dir = get_downloads_dir()
+        download_id = repo.add(video_url, title=video.get('title', 'YouTube Video'), format=quality,
+                                output_dir=output_dir)
         app = wx.GetApp()
         if hasattr(app, 'download_manager') and hasattr(app.download_manager, 'add_download'):
-            from radiomaster.utils.paths import get_downloads_dir
-            # get_downloads_dir(), not a raw config.get() -- self-heals a
-            # value saved once while running installed back to the
-            # correct portable default instead of writing into a stale
-            # Music-folder path forever after. See its own docstring.
-            output_dir = get_downloads_dir()
             app.download_manager.add_download(
                 download_id, video_url, output_dir=output_dir,
                 title=video.get('title', 'YouTube Video'),
@@ -391,11 +392,12 @@ class YouTubePanel(wx.Panel):
         # best VBR or an explicit bitrate like "192K".
         quality_setting = config.get("downloads.audio_quality", default="192k")
         audio_quality = "0" if quality_setting.lower() == "best" else quality_setting.upper()
-        download_id = repo.add(video_url, title=video.get('title', 'YouTube Audio'), format=audio_fmt, quality=quality_setting)
+        from radiomaster.utils.paths import get_downloads_dir
+        output_dir = get_downloads_dir()
+        download_id = repo.add(video_url, title=video.get('title', 'YouTube Audio'), format=audio_fmt,
+                                quality=quality_setting, output_dir=output_dir, extract_audio=True)
         app = wx.GetApp()
         if hasattr(app, 'download_manager') and hasattr(app.download_manager, 'add_download'):
-            from radiomaster.utils.paths import get_downloads_dir
-            output_dir = get_downloads_dir()
             app.download_manager.add_download(
                 download_id, video_url, output_dir=output_dir,
                 title=video.get('title', 'YouTube Audio'),

@@ -269,6 +269,19 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE bookmarks ADD COLUMN url TEXT DEFAULT '';
         ALTER TABLE bookmarks ADD COLUMN notes TEXT DEFAULT '';
     """),
+    # DownloadManager.add_download()'s output_dir/extract_audio/
+    # filename_base were only ever passed in-memory at request time and
+    # never persisted -- so a download that needed retrying (stalled,
+    # failed, or orphaned by an app restart -- see DownloadRepository.
+    # fail_orphaned/retry) had no way to be correctly re-submitted: the
+    # row remembered *what* to download but not *how*. audio_quality
+    # isn't stored separately since it's always deterministically
+    # re-derivable from the existing quality column (see youtube_panel.py).
+    (22, """
+        ALTER TABLE downloads ADD COLUMN output_dir TEXT DEFAULT '';
+        ALTER TABLE downloads ADD COLUMN extract_audio INTEGER DEFAULT 0;
+        ALTER TABLE downloads ADD COLUMN filename_base TEXT DEFAULT '';
+    """),
 ]
 
 

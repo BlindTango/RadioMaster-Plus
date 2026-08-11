@@ -520,7 +520,8 @@ class PodcastPanel(wx.Panel):
         filename_base = sanitize_filename(title)[:150]  # avoid MAX_PATH issues on very long titles
 
         repo = DownloadRepository(self._db)
-        download_id = repo.add(url, title=title, source_type="podcast")
+        download_id = repo.add(url, title=title, source_type="podcast", format="mp3",
+                                output_dir=feed_dir, extract_audio=True, filename_base=filename_base)
         # Inserting the DB row alone was the whole bug: nothing ever
         # actually told DownloadManager to fetch the file, so the row sat
         # at its insert-time "queued" status forever and never moved to

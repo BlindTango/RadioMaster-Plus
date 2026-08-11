@@ -5,7 +5,7 @@ import wx
 from typing import Any, Callable, Optional
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
-from radiomaster.utils.accessibility import set_accessible_name
+from radiomaster.utils.accessibility import context_menu_pos, set_accessible_name
 
 
 class DownloadsPanel(wx.Panel):
@@ -75,6 +75,7 @@ class DownloadsPanel(wx.Panel):
         self._active_list.AppendColumn("Progress", width=100)
         self._active_list.AppendColumn("Status", width=100)
         self._active_list.Bind(wx.EVT_KEY_DOWN, self._on_active_list_key)
+        self._active_list.Bind(wx.EVT_CONTEXT_MENU, self._on_active_context_menu)
         main_sizer.Add(self._active_list, 1, wx.EXPAND | wx.ALL, 4)
 
         active_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -102,6 +103,7 @@ class DownloadsPanel(wx.Panel):
         self._history_list.AppendColumn("Status", width=100)
         self._history_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_history_activated)
         self._history_list.Bind(wx.EVT_KEY_DOWN, self._on_history_list_key)
+        self._history_list.Bind(wx.EVT_CONTEXT_MENU, self._on_history_context_menu)
         main_sizer.Add(self._history_list, 1, wx.EXPAND | wx.ALL, 4)
 
         history_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -285,6 +287,107 @@ class DownloadsPanel(wx.Panel):
         from radiomaster.database.repository import DownloadRepository
         DownloadRepository(self._db).delete(row["id"])
         self._load_data()
+
+    # ------------------------------------------------------------------
+    # Context menus -- EVT_CONTEXT_MENU covers right-click, the
+    # Menu/Applications key, AND Shift+F10 in one binding (see
+    # context_menu_pos's own docstring), so no separate keyboard handling
+    # is needed. Both menus mirror their panel's existing buttons (Stop
+    # Recording/Remove, Play/Remove) plus the one new action each: Restart
+    # for a stalled active download, Retry for a failed one in History.
+    # ------------------------------------------------------------------
+    def _on_active_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        idx = self._active_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
+            event.Skip()
+            return
+        row = self._active_rows[idx]
+        is_recording = row.get("source_type") == "radio_recording"
+
+        menu = wx.Menu()
+        if is_recording:
+            stop_item = menu.Append(wx.ID_ANY, "Stop &Recording")
+            self.Bind(wx.EVT_MENU, lambda e: self._on_stop_recording(e), stop_item)
+        else:
+            restart_item = menu.Append(wx.ID_ANY, "&Restart")
+            self.Bind(wx.EVT_MENU, lambda e, r=row: self._restart_download(r), restart_item)
+        menu.AppendSeparator()
+        remove_item = menu.Append(wx.ID_ANY, "Re&move")
+        self.Bind(wx.EVT_MENU, lambda e: self._on_remove(e), remove_item)
+
+        self._active_list.PopupMenu(menu, context_menu_pos(self._active_list, event))
+        menu.Destroy()
+
+    def _on_history_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        idx = self._history_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._history_rows):
+            event.Skip()
+            return
+        row = self._history_rows[idx]
+
+        menu = wx.Menu()
+        play_item = menu.Append(wx.ID_ANY, "&Play")
+        play_item.Enable(row.get("status") == "completed")
+        self.Bind(wx.EVT_MENU, lambda e, i=idx: self._play_history_row(i), play_item)
+        if row.get("status") == "failed":
+            retry_item = menu.Append(wx.ID_ANY, "&Retry")
+            self.Bind(wx.EVT_MENU, lambda e, r=row: self._retry_download(r), retry_item)
+        menu.AppendSeparator()
+        remove_item = menu.Append(wx.ID_ANY, "R&emove")
+        self.Bind(wx.EVT_MENU, lambda e: self._on_remove_history(e), remove_item)
+
+        self._history_list.PopupMenu(menu, context_menu_pos(self._history_list, event))
+        menu.Destroy()
+
+    # ------------------------------------------------------------------
+    # Retry / Restart -- both resubmit the same row to DownloadManager
+    # using output_dir/extract_audio/filename_base persisted alongside
+    # it (see DownloadRepository.add()/migration 22); the only
+    # difference is Restart also has to stop whatever's still actually
+    # running for a stalled download first.
+    # ------------------------------------------------------------------
+    def _resubmit(self, row: dict[str, Any]) -> None:
+        from radiomaster.database.repository import DownloadRepository
+        repo = DownloadRepository(self._db)
+        repo.reset_for_retry(row["id"])
+
+        app = wx.GetApp()
+        if not (hasattr(app, "download_manager") and hasattr(app.download_manager, "add_download")):
+            self._load_data()
+            return
+        quality = row.get("quality") or ""
+        audio_quality = "0" if quality.lower() == "best" else (quality.upper() if quality else "0")
+        app.download_manager.add_download(
+            row["id"], row["url"],
+            output_dir=row.get("output_dir") or "",
+            title=row.get("title", ""),
+            format=row.get("format") or "",
+            extract_audio=bool(row.get("extract_audio")),
+            audio_quality=audio_quality,
+            filename_base=row.get("filename_base") or "",
+        )
+        self._load_data()
+
+    def _retry_download(self, row: dict[str, Any]) -> None:
+        """History > Retry -- nothing is running for a 'failed' row, so
+        this is just resetting the DB row and resubmitting it."""
+        self._resubmit(row)
+
+    def _restart_download(self, row: dict[str, Any]) -> None:
+        """Active > Restart -- for a download that's stalled (or you
+        just want to redo). Stops whatever's still actually running for
+        it first (best-effort; see DownloadManager.cancel()), then
+        resubmits a fresh attempt under the same row."""
+        if wx.MessageBox(
+            f"Restart '{row.get('title', 'this download')}'? "
+            "If it's still downloading, the current attempt will be stopped and a new one started.",
+            "Restart Download", wx.YES_NO | wx.ICON_QUESTION,
+        ) != wx.YES:
+            return
+        app = wx.GetApp()
+        if hasattr(app, "download_manager") and hasattr(app.download_manager, "cancel"):
+            app.download_manager.cancel(row["id"])
+        self._resubmit(row)
 
     # ------------------------------------------------------------------
     # Playback -- a completed download's file (podcast episode, YouTube
