@@ -53,6 +53,17 @@ class PodcastPanel(wx.Panel):
         # -- selecting a row in that state needs Subscribe, not a direct
         # episode load (search results have no local podcast id yet).
         self._viewing_search_results = False
+        # Title of whichever podcast's episodes are actually loaded into
+        # _episode_list right now -- set only by _load_episodes_for_index(),
+        # never re-derived from _podcast_list's own selection at download
+        # time. Podcast-list selection can drift away from the episode
+        # list it originally populated (arrow-key browsing the list,
+        # focus moving around) without ever re-firing a select event, so
+        # re-reading GetFirstSelected() in _on_download() could silently
+        # attribute an episode to a completely different podcast than the
+        # one its own episode list belongs to -- confirmed live: episodes
+        # from one show ended up filed under a different show's folder.
+        self._current_podcast_title = "Unknown Podcast"
         self._search_seq = 0
         self._setup_ui()
 
@@ -511,10 +522,7 @@ class PodcastPanel(wx.Panel):
         import os
 
         title = ep.get("title", "Podcast Episode")
-        podcast_idx = self._podcast_list.GetFirstSelected()
-        podcast_title = "Unknown Podcast"
-        if podcast_idx >= 0 and hasattr(self, "_podcast_data") and podcast_idx < len(self._podcast_data):
-            podcast_title = self._podcast_data[podcast_idx].get("title") or podcast_title
+        podcast_title = self._current_podcast_title
 
         feed_dir = os.path.join(get_podcasts_dir(), sanitize_filename(podcast_title))
         filename_base = sanitize_filename(title)[:150]  # avoid MAX_PATH issues on very long titles
@@ -609,6 +617,7 @@ class PodcastPanel(wx.Panel):
         self._episode_list.DeleteAllItems()
         self._episode_data = []
         podcast = self._podcast_data[idx]
+        self._current_podcast_title = podcast.get("title") or "Unknown Podcast"
         podcast_id = podcast.get("id")
         if podcast_id:
             ascending = ConfigManager.get_instance().get("podcasts.episode_order", default="newest") == "oldest"
