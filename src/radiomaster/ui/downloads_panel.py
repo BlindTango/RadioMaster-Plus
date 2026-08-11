@@ -190,6 +190,7 @@ class DownloadsPanel(wx.Panel):
             self._history_list.GetItemCount() == len(new_history)
             and all(
                 self._history_list.GetItemData(i) == d["id"]
+                and self._history_list.GetItemText(i, 2) == d.get("status", "")
                 for i, d in enumerate(new_history)
             )
         )

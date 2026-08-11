@@ -124,7 +124,25 @@ class DownloadManager:
                 self._queue.task_done()
                 continue
 
-            self._execute_download(item)
+            try:
+                self._execute_download(item)
+            except Exception:
+                # _execute_download already catches everything it can
+                # from the Popen call onward (see its own try/except) and
+                # reports failure via on_error -- this is a last-resort
+                # backstop for anything that can throw *before* that
+                # (os.makedirs, building the yt-dlp command, reading
+                # config), which used to propagate straight out of this
+                # loop and permanently kill the worker thread with no
+                # crash, no log entry, and no restart -- leaving every
+                # future download silently stuck at "queued" forever
+                # until the app itself was relaunched. Confirmed as the
+                # actual cause of a real report that read exactly like
+                # "downloads just sit at 0% now" after having worked
+                # earlier in the same session.
+                logger.exception(f"Worker thread crashed processing download {item.get('id')}")
+                if self._on_error:
+                    self._on_error(item["id"], "Download failed (internal error)")
             self._queue.task_done()
 
     def cancel(self, download_id: int) -> bool:
