@@ -30,7 +30,7 @@ from typing import Any, Optional
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.utils.wx_safe import call_after_safe
-from radiomaster.utils.accessibility import set_accessible_name
+from radiomaster.utils.accessibility import set_accessible_name, context_menu_pos
 
 logger = logging.getLogger("radiomaster")
 
@@ -202,6 +202,7 @@ class PodcastPanel(wx.Panel):
         self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
         self._btn_unsubscribe.Bind(wx.EVT_BUTTON, self._on_unsubscribe)
         self._episode_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
+        self._episode_list.Bind(wx.EVT_CONTEXT_MENU, self._on_episode_context_menu)
         self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
         self._btn_add_feed.Bind(wx.EVT_BUTTON, self._on_add_feed)
         self._btn_sync_gpodder.Bind(wx.EVT_BUTTON, self._on_sync_gpodder)
@@ -500,22 +501,53 @@ class PodcastPanel(wx.Panel):
         threading.Thread(target=_do_sync, daemon=True).start()
 
     def _on_download(self, event: wx.CommandEvent) -> None:
-        """Download the selected episode for offline playback.
+        """Download the selected episode for offline playback (Download
+        Episode button and the episode context menu's Download item)."""
+        idx = self._episode_list.GetFirstSelected()
+        if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
+            wx.MessageBox("Please select an episode first.", "No Selection", wx.OK | wx.ICON_WARNING)
+            return
+        self._download_episode_at(idx, show_confirmation=True)
+
+    def _on_download_all(self, event: wx.CommandEvent | None = None) -> None:
+        """Queue every episode currently listed for the loaded podcast --
+        one confirmation up front, one summary at the end, instead of a
+        "Download Added" message box per episode which would be
+        unusable for a feed with dozens of episodes."""
+        episodes = getattr(self, "_episode_data", [])
+        if not episodes:
+            wx.MessageBox("No episodes to download.", "Download All", wx.OK | wx.ICON_INFORMATION)
+            return
+        if wx.MessageBox(
+            f"Download all {len(episodes)} episode(s) of '{self._current_podcast_title}'?",
+            "Download All", wx.YES_NO | wx.ICON_QUESTION,
+        ) != wx.YES:
+            return
+        queued = sum(
+            1 for i in range(len(episodes)) if self._download_episode_at(i, show_confirmation=False)
+        )
+        wx.MessageBox(
+            f"Added {queued} of {len(episodes)} episode(s) to the download queue.",
+            "Download All", wx.OK | wx.ICON_INFORMATION,
+        )
+
+    def _download_episode_at(self, idx: int, show_confirmation: bool) -> bool:
+        """Queues the episode at ``idx`` for download. Returns whether it
+        was actually queued (False for an episode with no audio URL --
+        Download All keeps going past those instead of aborting the
+        whole batch).
 
         Lands in its own <Podcast Download Location>/<Feed Name>/ folder
         (not the shared Downloads folder YouTube uses) alongside a plain
         -text show-notes file sharing the exact same base filename --
         see _write_show_notes() and DownloadManager.add_download()'s
         filename_base parameter for why that pairing is guaranteed."""
-        idx = self._episode_list.GetFirstSelected()
-        if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
-            wx.MessageBox("Please select an episode first.", "No Selection", wx.OK | wx.ICON_WARNING)
-            return
         ep = self._episode_data[idx]
         url = ep.get("audio_url", "")
         if not url:
-            wx.MessageBox("This episode has no audio URL.", "Cannot Download", wx.OK | wx.ICON_WARNING)
-            return
+            if show_confirmation:
+                wx.MessageBox("This episode has no audio URL.", "Cannot Download", wx.OK | wx.ICON_WARNING)
+            return False
         from radiomaster.database.repository import DownloadRepository
         from radiomaster.utils.helpers import sanitize_filename
         from radiomaster.utils.paths import get_podcasts_dir
@@ -542,8 +574,53 @@ class PodcastPanel(wx.Panel):
                 extract_audio=True, format="mp3", filename_base=filename_base,
             )
         self._write_show_notes(feed_dir, filename_base, podcast_title, ep)
-        wx.MessageBox(f"Download added to queue: {title}", "Download Added",
-                     wx.OK | wx.ICON_INFORMATION)
+        if show_confirmation:
+            wx.MessageBox(f"Download added to queue: {title}", "Download Added",
+                         wx.OK | wx.ICON_INFORMATION)
+        return True
+
+    def _on_episode_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        """Right-click (or Shift+F10/Menu key) on an episode -- follows
+        the same Play/Pause/Stop template as RadioPanel's station context
+        menu (see radio_panel.py's _on_station_context_menu, written as
+        "the template other panels' context menus will follow"), plus
+        Download/Download All for offline playback."""
+        idx = self._episode_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or not hasattr(self, "_episode_data") or idx >= len(self._episode_data):
+            event.Skip()
+            return
+        ep = self._episode_data[idx]
+        url = ep.get("audio_url", "")
+
+        menu = wx.Menu()
+
+        same_episode = bool(url) and self._engine.current_url == url
+        if same_episode and self._engine.state == "paused":
+            play_item = menu.Append(wx.ID_ANY, "&Resume")
+            self.Bind(wx.EVT_MENU, lambda e: self._engine.resume(), play_item)
+        elif same_episode and self._engine.state in ("playing", "buffering"):
+            play_item = menu.Append(wx.ID_ANY, "&Pause")
+            self.Bind(wx.EVT_MENU, lambda e: self._engine.pause(), play_item)
+        else:
+            play_item = menu.Append(wx.ID_ANY, "&Play")
+            play_item.Enable(bool(url))
+            self.Bind(wx.EVT_MENU, lambda e, i=idx: self._play_episode_at(i, offer_resume=True), play_item)
+
+        stop_item = menu.Append(wx.ID_ANY, "&Stop")
+        stop_item.Enable(same_episode and self._engine.state != "stopped")
+        self.Bind(wx.EVT_MENU, lambda e: self._engine.stop(), stop_item)
+
+        menu.AppendSeparator()
+
+        download_item = menu.Append(wx.ID_ANY, "&Download")
+        download_item.Enable(bool(url))
+        self.Bind(wx.EVT_MENU, lambda e, i=idx: self._download_episode_at(i, show_confirmation=True), download_item)
+
+        download_all_item = menu.Append(wx.ID_ANY, "Download &All")
+        self.Bind(wx.EVT_MENU, lambda e: self._on_download_all(), download_all_item)
+
+        self._episode_list.PopupMenu(menu, context_menu_pos(self._episode_list, event))
+        menu.Destroy()
 
     @staticmethod
     def _write_show_notes(feed_dir: str, filename_base: str, podcast_title: str,
