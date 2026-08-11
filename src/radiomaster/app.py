@@ -110,6 +110,17 @@ class RadioMasterApp(wx.App):
         # no way to tell, and it never moved to History.
         from radiomaster.database.repository import DownloadRepository
         download_repo = DownloadRepository(self._db)
+        # DownloadManager's queue is in-memory only -- a download still
+        # 'queued'/'downloading' in the database at this point belongs to
+        # a process that died with the app last time (a clean exit or a
+        # crash, doesn't matter which) and has no live worker behind it
+        # anymore. Left alone, it sits in the Downloads tab's Active list
+        # at 0% forever with no way to tell it's actually dead -- this is
+        # what a report of "added a podcast episode, it's still sitting
+        # in the queue at 0%" turned out to actually be. Failing it here
+        # is honest about that instead of silently doing nothing; the
+        # user can just re-trigger the download.
+        download_repo.fail_orphaned()
         self._download_manager.on_progress(
             lambda did, pct: download_repo.update_progress(did, pct, status="downloading")
         )

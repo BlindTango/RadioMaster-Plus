@@ -155,8 +155,25 @@ class DownloadManager:
         # Also needed for audio extraction/transcoding (-x) and artwork
         # embedding, both of which shell out to ffmpeg too.
         cmd.extend(["--ffmpeg-location", get_ffmpeg()])
-        from radiomaster.utils.network import get_yt_dlp_proxy_args
+        from radiomaster.utils.network import get_timeout, get_yt_dlp_proxy_args
         cmd.extend(get_yt_dlp_proxy_args())
+        # Without a socket timeout, yt-dlp's default is to wait
+        # indefinitely on an unresponsive host -- a podcast episode
+        # served by a slow/dead/misbehaving host (unlike YouTube, a
+        # podcast enclosure can point at literally any server) then sits
+        # in the queue at 0% forever: no progress, no error, nothing for
+        # the user to act on. Bounding each connection attempt means a
+        # genuinely dead host fails (and reports on_error) within a
+        # reasonable ceiling instead of hanging the download -- and the
+        # worker slot it was occupying -- forever. --retries/--fragment-
+        # retries capped too, so retrying a truly dead host doesn't just
+        # replace "hangs forever" with "retries forever" instead.
+        timeout = get_timeout(default=10.0)
+        cmd.extend([
+            "--socket-timeout", str(int(timeout)),
+            "--retries", "5",
+            "--fragment-retries", "5",
+        ])
         if extract_audio:
             audio_format = item.get("format") or "mp3"
             audio_quality = item.get("audio_quality") or "0"

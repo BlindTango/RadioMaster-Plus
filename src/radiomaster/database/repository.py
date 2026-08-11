@@ -295,6 +295,33 @@ class DownloadRepository:
             "SELECT * FROM downloads WHERE status IN ('queued', 'downloading') ORDER BY id"
         )
 
+    def fail_orphaned(self) -> int:
+        """Mark any download left 'queued'/'downloading' from a previous
+        session as failed. DownloadManager's queue (services/
+        download_manager.py) is in-memory only and nothing re-populates
+        it from the database at startup -- and the downloads table has
+        no columns for output_dir/extract_audio/filename_base anyway, so
+        there isn't enough here to correctly resume one regardless. A
+        row left in that state has no live process behind it and would
+        otherwise sit at 0% forever with no way to tell it's actually
+        dead -- confirmed as the actual cause of a report that read
+        exactly like "added a podcast episode, it's still sitting in
+        the queue at 0%" (the app had been restarted since).
+
+        Excludes source_type='radio_recording': those rows belong to a
+        separate lifecycle (RadioPanel/SchedulerService's RecordingSession),
+        not DownloadManager, and this method knows nothing about whether
+        a recording is still genuinely running.
+
+        Returns the number of rows marked failed, so the caller can
+        surface it to the user rather than silently rewriting history."""
+        cursor = self._db.execute(
+            "UPDATE downloads SET status = 'failed' "
+            "WHERE status IN ('queued', 'downloading') AND source_type != 'radio_recording'"
+        )
+        self._db.commit()
+        return cursor.rowcount
+
     def update_progress(self, download_id: int, progress: float, status: str = "") -> None:
         if status:
             self._db.execute(
