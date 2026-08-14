@@ -39,6 +39,18 @@ class YouTubePanel(wx.Panel):
         # against the request it was given before actually calling
         # engine.play(); a stale one is silently dropped.
         self._play_request_seq = 0
+        # The *source* (page) URL/title/duration behind whatever's
+        # currently playing -- separate from the engine's own
+        # _current_url, which by the time playback starts is already the
+        # resolved (and, if rejected, now useless) googlevideo.com
+        # stream URL. A stream-rejection retry needs the original page
+        # URL to re-resolve from; nothing else in the panel keeps it
+        # around once _apply_play_result hands the resolved URL off.
+        self._current_source_url = ""
+        self._current_source_title = ""
+        self._current_source_duration = 0.0
+        self._stream_rejected_retried = False
+        self._engine.on_stream_rejected(self._on_stream_rejected)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -430,15 +442,20 @@ class YouTubePanel(wx.Panel):
                 self._set_status(f"Status: Resolving stream for '{url}'...")
                 self._play_request_seq += 1
                 seq = self._play_request_seq
+                self._current_source_url = url
+                self._stream_rejected_retried = False
 
                 def worker():
                     from radiomaster.services.youtube_dl import YouTubeService
                     service = YouTubeService()
-                    stream_url = service.get_stream_url(url)
-                    info = service.get_info(url) if stream_url else None
-                    title = (info or {}).get('title') or url
-                    duration = float((info or {}).get('duration') or 0.0)
-                    wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq)
+                    stream = service.get_stream_info(url)
+                    title = (stream or {}).get('title') or url
+                    duration = (stream or {}).get('duration', 0.0)
+                    headers = (stream or {}).get('http_headers')
+                    self._current_source_title = title
+                    self._current_source_duration = duration
+                    wx.CallAfter(self._apply_play_result, (stream or {}).get('url'),
+                                 title, duration, seq, headers)
 
                 import threading
                 threading.Thread(target=worker, daemon=True).start()
@@ -473,18 +490,31 @@ class YouTubePanel(wx.Panel):
         self._set_status(f"Status: Resolving stream for '{title}'...")
         self._play_request_seq += 1
         seq = self._play_request_seq
+        self._current_source_url = video_url
+        self._current_source_title = title
+        self._current_source_duration = duration
+        self._stream_rejected_retried = False
 
         def worker():
             from radiomaster.services.youtube_dl import YouTubeService
             service = YouTubeService()
-            stream_url = service.get_stream_url(video_url)
-            wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq)
+            # get_stream_info(), not the cheaper get_stream_url(): the
+            # HTTP headers it also returns (see its own docstring) are
+            # what let ffplay's request avoid a 403 that get_stream_url()
+            # alone had no way to prevent. title/duration already known
+            # from the search result are kept (this video's own listing
+            # is more reliable than re-deriving them from the resolve).
+            stream = service.get_stream_info(video_url)
+            headers = (stream or {}).get('http_headers')
+            wx.CallAfter(self._apply_play_result, (stream or {}).get('url'),
+                         title, duration, seq, headers)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_play_result(self, stream_url: str | None, title: str,
-                            duration: float = 0.0, seq: int = 0) -> None:
+                            duration: float = 0.0, seq: int = 0,
+                            http_headers: dict | None = None) -> None:
         if seq and seq != self._play_request_seq:
             # A newer play request has started (or finished) since this
             # one was kicked off -- e.g. two quick double-clicks each
@@ -500,8 +530,44 @@ class YouTubePanel(wx.Panel):
             wx.MessageBox("Unable to resolve a playable stream for the selected video.",
                          "Error", wx.OK | wx.ICON_ERROR)
             return
-        self._engine.play(stream_url, title=title, is_video=True, duration=duration)
+        self._engine.play(stream_url, title=title, is_video=True, duration=duration,
+                          http_headers=http_headers)
         self._set_status(f"Status: Playing '{title}'")
+
+    def _on_stream_rejected(self) -> None:
+        """PlaybackEngine detected YouTube rejected (HTTP 403) the
+        resolved stream URL for the video currently playing -- see its
+        own on_stream_rejected docstring for why that happens and why
+        this engine can't just retry itself. Fires from a background
+        thread, so marshal back to the UI thread before touching
+        anything wx."""
+        wx.CallAfter(self._retry_after_stream_rejection)
+
+    def _retry_after_stream_rejection(self) -> None:
+        if not self._current_source_url or self._stream_rejected_retried:
+            if self._stream_rejected_retried:
+                wx.MessageBox(
+                    "YouTube rejected this video's stream again after retrying once. "
+                    "Try again in a moment.", "Playback Error", wx.OK | wx.ICON_ERROR)
+            return
+        self._stream_rejected_retried = True
+        url, title, duration = (
+            self._current_source_url, self._current_source_title, self._current_source_duration
+        )
+        self._set_status(f"Status: Retrying '{title}'...")
+        self._play_request_seq += 1
+        seq = self._play_request_seq
+
+        def worker():
+            from radiomaster.services.youtube_dl import YouTubeService
+            service = YouTubeService()
+            stream = service.get_stream_info(url)
+            headers = (stream or {}).get('http_headers')
+            wx.CallAfter(self._apply_play_result, (stream or {}).get('url'),
+                         title, duration, seq, headers)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_load_playlist(self, event: wx.CommandEvent) -> None:
         """Load a YouTube playlist and show its entries, off the UI

@@ -1,5 +1,6 @@
 """Tests for the playback engine."""
 
+import os
 import sys
 import time
 
@@ -146,6 +147,63 @@ class TestPlaybackEngine:
                 "ffplay was relaunched on its own after the process exited -- "
                 "video must never auto-reconnect"
             )
+
+    def test_video_stream_rejection_triggers_retry_callback(self) -> None:
+        """Confirmed live: a googlevideo.com URL resolved for one video
+        can come back "HTTP error 403 Forbidden" from ffplay's own
+        request, and ffplay never exits on its own afterward (-autoexit
+        only fires at a real EOF, which a rejected connection never
+        reaches) -- so without detecting this, the video window just
+        sits there showing nothing forever. This engine only has the
+        already-resolved (and now useless) stream URL, not the original
+        page URL a retry needs, so on detecting the 403 in ffplay's own
+        stderr log it stops the attempt and hands off via
+        on_stream_rejected instead of trying to recover itself."""
+
+        class FakeProc:
+            def __init__(self):
+                self.stdin = MagicMock()
+                self.returncode = None
+                self._alive = True
+
+            def poll(self):
+                return None if self._alive else 1
+
+            def terminate(self):
+                self._alive = False
+
+            def wait(self, timeout=None):
+                pass
+
+            def kill(self):
+                self._alive = False
+
+        from radiomaster.utils.paths import get_paths
+        log_path = os.path.join(get_paths()["logs"], "ffplay_last_run.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+        with patch("radiomaster.engine.playback_engine.subprocess.Popen") as popen, \
+             patch("radiomaster.engine.playback_engine.get_ffplay", return_value="ffplay"):
+            popen.return_value = FakeProc()
+
+            engine = PlaybackEngine()
+            rejected = []
+            engine.on_stream_rejected(lambda: rejected.append(True))
+            engine.play("http://example.invalid/stream", is_video=True, duration=120.0)
+
+            # Simulate ffplay's own stderr writing a 403 shortly after launch
+            # -- the real Popen is mocked out, so nothing writes this file
+            # on its own.
+            time.sleep(0.2)
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("[https @ 0x0] HTTP error 403 Forbidden\n")
+
+            deadline = time.time() + 5
+            while not rejected and time.time() < deadline:
+                time.sleep(0.1)
+
+            assert rejected, "on_stream_rejected was never fired"
+            assert engine.state == "stopped"
 
     def test_set_volume_does_not_restart_process(self) -> None:
         """Volume changes must apply live via WASAPI, not by killing and

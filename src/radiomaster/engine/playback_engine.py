@@ -78,6 +78,10 @@ class PlaybackEngine:
         self._reconnect_interval: float = 2.0
         self._is_video: bool = False
         self._is_video_active: bool = False  # which backend owns the *current* session
+        # HTTP headers (User-Agent above all) to replay on the ffplay
+        # request for the current video -- see play()'s http_headers
+        # param for why this matters.
+        self._http_headers: dict[str, str] = {}
 
         self._effects: dict[str, dict[str, Any]] = {
             "echo": {"enabled": False, "preset": "Medium Delay", "params": {}},
@@ -99,6 +103,15 @@ class PlaybackEngine:
         self._on_track_change: Callable[[str, str], None] | None = None
         self._on_buffering: Callable[[int], None] | None = None
         self._on_error: Callable[[str], None] | None = None
+        # Fired when ffplay's own request for the current video was
+        # rejected (HTTP 403) shortly after launch -- see
+        # _watch_for_stream_rejection. This engine only ever sees an
+        # already-resolved stream URL, not the original video page URL,
+        # so it can't re-resolve and retry itself the way
+        # _watch_for_audio_device_failure does for a bad output device;
+        # the caller (YouTubePanel, which does have the page URL) is
+        # expected to re-resolve a fresh stream and call play() again.
+        self._on_stream_rejected: Callable[[], None] | None = None
         self._on_track_finished: Callable[[], None] | None = None
         self._on_effects_changed: Callable[[str, dict[str, Any]], None] | None = None
 
@@ -127,8 +140,17 @@ class PlaybackEngine:
         return self._state if self._is_video_active else self._live.state
 
     def play(self, url: str, title: str = "", artist: str = "",
-              is_video: bool = False, duration: float = 0.0) -> None:
-        """Start playback of a URL or file."""
+              is_video: bool = False, duration: float = 0.0,
+              http_headers: dict[str, str] | None = None) -> None:
+        """Start playback of a URL or file.
+
+        http_headers (video only): HTTP headers -- User-Agent above all --
+        to replay on ffplay's own request for *url*. A googlevideo.com
+        playback URL is bound to the request context it was resolved
+        under; handing the bare URL to ffplay with ffplay's own default
+        User-Agent got a flat 403 for some videos (confirmed live) while
+        others played fine with no visible pattern. See youtube_dl.py's
+        get_stream_info() for where these come from."""
         self.stop()
         self._current_url = url
         self._current_title = title
@@ -136,6 +158,7 @@ class PlaybackEngine:
         self._is_video = is_video
         self._is_video_active = is_video
         self._duration = duration
+        self._http_headers = http_headers or {}
         self._reconnect_attempts = 0
         self._replaygain_db = self._compute_replaygain(url)
 
@@ -576,6 +599,12 @@ class PlaybackEngine:
                     args=(self._process, self._ffplay_log_path, url, is_video),
                     daemon=True,
                 ).start()
+            if is_video:
+                threading.Thread(
+                    target=self._watch_for_stream_rejection,
+                    args=(self._process, self._ffplay_log_path),
+                    daemon=True,
+                ).start()
         except FileNotFoundError:
             self._notify_error("FFplay not found. Ensure ffplay.exe is in the tools/ folder.")
         except Exception as e:
@@ -638,6 +667,61 @@ class PlaybackEngine:
             self._close_ffplay_log()
             self._start_process(url, is_video, force_default_device=True)
 
+    def _watch_for_stream_rejection(self, process: "subprocess.Popen[bytes]", log_path: str) -> None:
+        """A googlevideo.com playback URL is bound to the request context
+        it was resolved under (User-Agent above all -- see play()'s
+        http_headers docstring); even with that replayed correctly, a
+        freshly-resolved URL can still come back "HTTP error 403
+        Forbidden" moments later for reasons outside this app's control
+        (YouTube-side throttling/anti-bot checks on the resolving
+        client/IP) -- confirmed live as an intermittent, not-per-video
+        failure: the exact same URL that 403'd could succeed on a later,
+        independent re-resolve. ffplay carries on decoding nothing after
+        a 403 and never exits on its own (-autoexit only fires at a real
+        EOF, and a rejected connection never gets one), so without this
+        the video window just sits there indefinitely showing nothing --
+        indistinguishable from "doesn't play" to anyone watching it.
+
+        This polls the log for the failure signature for a few seconds
+        after launch and, if seen, stops this attempt and tells the
+        caller (on_stream_rejected) to re-resolve and retry -- this
+        engine only has the already-resolved (and now known-bad) stream
+        URL, not the original page URL a retry needs."""
+        deadline = time.time() + 4
+        text = ""
+        found = False
+        while time.time() < deadline:
+            if self._process is not process:
+                return  # superseded by a stop/new play since this attempt started
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                pass
+            if "403 Forbidden" in text:
+                found = True
+                break
+            time.sleep(0.5)
+        if not found or self._process is not process:
+            return
+        log.warning("YouTube rejected the resolved stream URL (403); asking caller to retry")
+        self._monitor_running = False
+        try:
+            process.terminate()
+            process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        if self._process is process:
+            self._process = None
+            self._close_ffplay_log()
+            self._state = self.STATE_STOPPED
+            self._notify_state()
+        if self._on_stream_rejected:
+            self._on_stream_rejected()
+
     def _close_ffplay_log(self) -> None:
         if self._ffplay_log_file is not None:
             try:
@@ -698,6 +782,30 @@ class PlaybackEngine:
                 "-reconnect_streamed", "1",
                 "-reconnect_delay_max", "5",
             ])
+
+        # Replays yt-dlp's own HTTP headers (User-Agent above all) on
+        # ffplay's request -- a googlevideo.com URL is bound to the
+        # request context it was resolved under, and ffplay's own
+        # default User-Agent got a flat 403 on some videos with no
+        # visible pattern until this was added (see play()'s
+        # http_headers docstring). Both are demuxer/input options like
+        # -reconnect above, so they also have to come before the URL.
+        #
+        # User-Agent specifically goes through ffmpeg's own dedicated
+        # -user_agent option, NOT as a "User-Agent: ..." line inside
+        # -headers -- confirmed live that -headers alone left the 403
+        # completely unfixed (ffmpeg's HTTP protocol handler doesn't
+        # treat a User-Agent line inside -headers as authoritative the
+        # way -user_agent is), while -user_agent alone reliably fixed
+        # the exact same URL every time.
+        if is_video and self._http_headers:
+            headers = dict(self._http_headers)
+            user_agent = headers.pop("User-Agent", None)
+            if user_agent:
+                cmd.extend(["-user_agent", user_agent])
+            if headers:
+                header_lines = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+                cmd.extend(["-headers", header_lines])
 
         cmd.append(url)
         return cmd
@@ -808,6 +916,9 @@ class PlaybackEngine:
 
     def on_error(self, cb: Callable[[str], None]) -> None:
         self._on_error = cb
+
+    def on_stream_rejected(self, cb: Callable[[], None]) -> None:
+        self._on_stream_rejected = cb
 
     def on_track_finished(self, cb: Callable[[], None]) -> None:
         """Fired only when the current track reaches its own natural end

@@ -84,6 +84,44 @@ class YouTubeService:
             logger.error(f"Failed to get stream URL: {e}")
         return None
 
+    def get_stream_info(self, url: str) -> dict[str, Any] | None:
+        """Resolve a playable stream URL the same way get_stream_url()
+        does, but also returns the HTTP headers (User-Agent above all)
+        yt-dlp itself would have sent for that specific format, plus the
+        title/duration -- all from the one -j call instead of get_stream_url()
+        + a separate get_info() round trip.
+
+        The headers matter, not just the URL: a googlevideo.com playback
+        URL is bound to the request context yt-dlp resolved it under
+        (confirmed live -- itag 18 resolved via the "ANDROID_VR" player
+        client) and handing the bare URL to ffplay with ffplay's own
+        default User-Agent got a flat "HTTP error 403 Forbidden" for some
+        videos while others played fine, with no pattern visible from the
+        app alone -- reproduced directly: the exact same URL 403'd
+        without a User-Agent header and played immediately with one.
+        Replaying yt-dlp's own headers on the actual playback request is
+        what get_stream_url() alone could never do."""
+        try:
+            result = subprocess.run(
+                [get_ytdlp(), *get_yt_dlp_proxy_args(), "-j", "--no-playlist",
+                 "-f", "best[ext=mp4]/best", url],
+                capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                info = json.loads(result.stdout.strip().splitlines()[0])
+                stream_url = info.get("url")
+                if not stream_url:
+                    return None
+                return {
+                    "url": stream_url,
+                    "http_headers": info.get("http_headers") or {},
+                    "title": info.get("title", ""),
+                    "duration": float(info.get("duration") or 0.0),
+                }
+        except Exception as e:
+            logger.error(f"Failed to get stream info: {e}")
+        return None
+
     def get_info(self, url: str) -> dict[str, Any] | None:
         """Get video metadata."""
         try:
