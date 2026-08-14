@@ -751,28 +751,34 @@ class PlaybackEngine:
                 # Check if process is still running
                 if self._process.poll() is not None:
                     self._monitor_running = False
-                    # duration == 0 is this engine's existing signal for a
-                    # live/unbounded stream (radio.play() never sets one);
-                    # only those are worth auto-reconnecting -- a finite
-                    # file/track hitting this point just reached its end.
-                    if (self._auto_reconnect and self._duration == 0.0
-                            and self._current_url
-                            and self._reconnect_attempts < self._MAX_RECONNECT_ATTEMPTS):
-                        self._reconnect_attempts += 1
-                        self._state = self.STATE_BUFFERING
-                        self._notify_state()
-                        url, is_video = self._current_url, self._is_video
-                        with self._restart_lock:
-                            self._reconnect_timer = threading.Timer(
-                                self._reconnect_interval, lambda: self._start_process(url, is_video)
-                            )
-                            self._reconnect_timer.daemon = True
-                            self._reconnect_timer.start()
-                    else:
-                        if self._auto_reconnect and self._reconnect_attempts >= self._MAX_RECONNECT_ATTEMPTS:
-                            self._notify_error("Lost connection to the stream and could not reconnect.")
-                        self._state = self.STATE_STOPPED
-                        self._notify_state()
+                    # This used to auto-reconnect (relaunch a fresh ffplay)
+                    # for any duration == 0 (live/unbounded) video the same
+                    # way radio does -- but unlike radio (LiveAudioEngine,
+                    # no window, no user-facing way to stop it except this
+                    # engine's own stop()), a video plays in a real ffplay
+                    # window the user can close directly: a click anywhere
+                    # (-exitonmousedown, below), the window's own X button,
+                    # or Alt+F4 -- none of which go through stop(), so
+                    # _monitor_running was never told to give up. For a
+                    # live video that genuinely just ended or errored,
+                    # reconnecting made sense; for the far more common case
+                    # of the user closing the window themselves, it meant a
+                    # second ffplay window silently reopened right after --
+                    # confirmed live as "some videos don't play" (the
+                    # reopened window playing a since-ended/errored stream)
+                    # and "have to press Alt+F4 twice, two windows show
+                    # up". ffplay's own -reconnect/-reconnect_at_eof/
+                    # -reconnect_streamed flags (see _build_ffplay_command)
+                    # already recover a genuine transient network drop
+                    # *without* the process ever exiting, so by the time
+                    # this process has actually terminated there's no
+                    # reliable way left to tell "the stream really died"
+                    # apart from "the user just closed it" -- so this no
+                    # longer guesses. Radio's own auto-reconnect (Settings
+                    # > Radio > Auto-reconnect, LiveAudioEngine) is a
+                    # completely separate code path and is unaffected.
+                    self._state = self.STATE_STOPPED
+                    self._notify_state()
                     break
             time.sleep(0.25)
 

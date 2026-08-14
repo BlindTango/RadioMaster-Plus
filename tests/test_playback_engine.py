@@ -87,12 +87,23 @@ class TestPlaybackEngine:
         engine.toggle_effect("equalizer", False)
         assert engine._effects["equalizer"]["enabled"] is False
 
-    def test_stop_cancels_pending_auto_reconnect(self) -> None:
-        """A dropped stream schedules a threading.Timer to relaunch ffplay
-        2s later. If stop() doesn't cancel that timer, pressing Stop looks
-        like it worked (process dies, state -> stopped) but playback comes
-        back on its own moments later -- the exact bug reported live: Stop
-        appeared to do nothing until the whole app was killed."""
+    def test_video_process_exit_never_auto_reconnects(self) -> None:
+        """Video plays in a real ffplay window the user can close directly
+        (a click -- see -exitonmousedown -- the window's own X button, or
+        Alt+F4), none of which go through this engine's own stop(). This
+        used to auto-relaunch ffplay for any duration == 0 ("live") video
+        whenever the process exited, with no way to tell "the user closed
+        it" apart from "the stream actually dropped" -- confirmed live as
+        a second ffplay window silently reopening right after the user
+        closed the first one (reported as "some videos don't play" /
+        "have to press Alt+F4 twice, two windows show up"). Video's own
+        -reconnect/-reconnect_at_eof/-reconnect_streamed ffmpeg flags
+        already recover a genuine transient network drop without the
+        process ever exiting, so a real process exit no longer schedules
+        a relaunch at all -- it just goes to stopped, exactly like a
+        finite-duration video reaching its end. Radio's own auto-reconnect
+        (LiveAudioEngine) is a separate code path and isn't exercised
+        here."""
 
         class FakeProc:
             def __init__(self):
@@ -118,32 +129,23 @@ class TestPlaybackEngine:
 
             engine = PlaybackEngine()
             engine.set_auto_reconnect(True)
-            # is_video=True: this test exercises the ffplay-subprocess
-            # backend's own reconnect-timer bookkeeping specifically.
-            # Audio-only playback (the default) now goes through
-            # LiveAudioEngine instead, which has its own reconnect logic
-            # covered separately.
             engine.play("http://example.invalid/stream", is_video=True)  # duration=0.0 -> "live"
 
-            # Let the monitor thread notice the instant "exit" and schedule
-            # its 2s reconnect timer.
+            # Let the monitor thread notice the instant "exit".
             deadline = time.time() + 2.0
-            while engine._reconnect_timer is None and time.time() < deadline:
+            while engine.state != "stopped" and time.time() < deadline:
                 time.sleep(0.05)
-            assert engine._reconnect_timer is not None, "reconnect wasn't scheduled"
 
-            calls_before_stop = popen.call_count
-            engine.stop()
-            assert engine._reconnect_timer is None
-
-            # Wait past the 2s window the reconnect timer would have fired in.
-            time.sleep(2.3)
-
-            assert popen.call_count == calls_before_stop, (
-                "stop() did not cancel the pending auto-reconnect -- "
-                "ffplay was relaunched after the user pressed Stop"
-            )
             assert engine.state == "stopped"
+            assert engine._reconnect_timer is None, "video should never schedule an auto-reconnect"
+
+            calls_after_exit = popen.call_count
+            # Wait past where the old 2s reconnect timer would have fired.
+            time.sleep(2.3)
+            assert popen.call_count == calls_after_exit, (
+                "ffplay was relaunched on its own after the process exited -- "
+                "video must never auto-reconnect"
+            )
 
     def test_set_volume_does_not_restart_process(self) -> None:
         """Volume changes must apply live via WASAPI, not by killing and
