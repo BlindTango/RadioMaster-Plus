@@ -16,6 +16,15 @@ class YouTubePanel(wx.Panel):
         self._engine = engine
         # Store the latest search results so we can retrieve URLs later
         self._search_results: list[dict] = []
+        # Which kind of entry _search_results currently holds -- "video",
+        # "channel", or "playlist". Drives both how the results list's
+        # columns are labeled/filled and what Enter/double-click does
+        # (play a video vs. drill into a channel's videos vs. load a
+        # playlist's entries) -- and guards Download/Download Audio/Play
+        # from being handed a channel or playlist URL by mistake (yt-dlp
+        # would happily try to download an entire channel's uploads).
+        self._result_type = "video"
+        self._channel_data: list[dict] = []
         # Enter and double-click both fire EVT_LIST_ITEM_ACTIVATED for
         # what a user experiences as one action, but a fast double-click
         # can still land two separate activations (or Enter + a
@@ -43,6 +52,12 @@ class YouTubePanel(wx.Panel):
         self._search_ctrl.ShowSearchButton(True)
         search_sizer.Add(self._search_ctrl, 0, wx.ALL, 4)
 
+        search_sizer.Add(wx.StaticText(self, label="&Type:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
+        self._search_type_choice = wx.Choice(self, choices=["Videos", "Channels", "Playlists"])
+        self._search_type_choice.SetSelection(0)
+        set_accessible_name(self._search_type_choice, "Search Type")
+        search_sizer.Add(self._search_type_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 4)
+
         self._btn_search = wx.Button(self, label="Search")
         set_accessible_name(self._btn_search, "Search YouTube")
         search_sizer.Add(self._btn_search, 0, wx.ALL, 4)
@@ -53,13 +68,42 @@ class YouTubePanel(wx.Panel):
 
         main_sizer.Add(search_sizer, 0, wx.EXPAND)
 
-        # Results list
-        self._results_list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        # --- Content row: subscribed channels (left) + results (right) --
+        # mirrors PodcastPanel's Podcasts/Episodes column pair: a
+        # subscribed channel is browsed by opening it (Enter/double-
+        # click/View Videos), the same way a subscribed podcast's
+        # episode list is loaded.
+        content_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        col_channels = wx.Panel(self)
+        col_channels_sizer = wx.BoxSizer(wx.VERTICAL)
+        col_channels_sizer.Add(wx.StaticText(col_channels, label="My Channels"), 0, wx.ALL, 4)
+        self._channels_list = wx.ListCtrl(col_channels, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self._channels_list.AppendColumn("Title", width=180)
+        set_accessible_name(self._channels_list, "My Channels")
+        col_channels_sizer.Add(self._channels_list, 1, wx.EXPAND | wx.ALL, 4)
+        self._btn_unsubscribe = wx.Button(col_channels, label="&Unsubscribe")
+        set_accessible_name(self._btn_unsubscribe, "Unsubscribe from selected channel")
+        col_channels_sizer.Add(self._btn_unsubscribe, 0, wx.EXPAND | wx.ALL, 4)
+        col_channels.SetSizer(col_channels_sizer)
+        content_sizer.Add(col_channels, 1, wx.EXPAND | wx.RIGHT, 4)
+
+        col_results = wx.Panel(self)
+        col_results_sizer = wx.BoxSizer(wx.VERTICAL)
+        col_results_sizer.Add(wx.StaticText(col_results, label="Results"), 0, wx.ALL, 4)
+        self._results_list = wx.ListCtrl(col_results, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         set_accessible_name(self._results_list, "YouTube Results")
         self._results_list.AppendColumn("Title", width=350)
         self._results_list.AppendColumn("Duration", width=70)
         self._results_list.AppendColumn("Channel", width=150)
-        main_sizer.Add(self._results_list, 1, wx.EXPAND | wx.ALL, 4)
+        col_results_sizer.Add(self._results_list, 1, wx.EXPAND | wx.ALL, 4)
+        self._btn_subscribe = wx.Button(col_results, label="Su&bscribe to Channel")
+        set_accessible_name(self._btn_subscribe, "Subscribe to selected item's channel")
+        col_results_sizer.Add(self._btn_subscribe, 0, wx.EXPAND | wx.ALL, 4)
+        col_results.SetSizer(col_results_sizer)
+        content_sizer.Add(col_results, 3, wx.EXPAND)
+
+        main_sizer.Add(content_sizer, 1, wx.EXPAND)
 
         # Controls -- no inline Play button here: matches RadioPanel and
         # PodcastPanel, neither of which has one either. Enter/double-
@@ -112,13 +156,21 @@ class YouTubePanel(wx.Panel):
         self._btn_playlist.Bind(wx.EVT_BUTTON, self._on_load_playlist)
         self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
         self._btn_download_audio.Bind(wx.EVT_BUTTON, self._on_download_audio)
+        self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
+        self._btn_unsubscribe.Bind(wx.EVT_BUTTON, self._on_unsubscribe)
         self._search_ctrl.Bind(wx.EVT_SEARCHCTRL_SEARCH_BTN, self._on_search)
         self._search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
         # Enter/double-click plays the selected result directly -- every
         # other list in the app already works this way (Radio stations,
         # Podcast episodes, Downloads History); this list never had it,
         # so "Play Video" was the only way in, unlike everywhere else.
-        self._results_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
+        # For a channel/playlist result, activating drills into it (its
+        # videos, or its entries) instead of trying to play it directly --
+        # see _on_result_activated.
+        self._results_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_result_activated)
+        self._channels_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_channel_activated)
+
+        self._load_channels()
 
     def _on_search(self, event: wx.Event) -> None:
         """Search YouTube using yt-dlp, off the UI thread.
@@ -134,6 +186,7 @@ class YouTubePanel(wx.Panel):
         query = self._search_ctrl.GetValue().strip()
         if not query:
             return
+        search_type = self._selected_search_type()
 
         self._results_list.DeleteAllItems()
         self._search_results = []
@@ -144,14 +197,19 @@ class YouTubePanel(wx.Panel):
             from radiomaster.services.youtube_dl import YouTubeService
             try:
                 service = YouTubeService()
-                results = service.search(query, max_results=20)
+                results = service.search(query, max_results=20, search_type=search_type)
             except Exception as e:
                 wx.CallAfter(self._on_search_failed, str(e))
                 return
-            wx.CallAfter(self._apply_search_results, results, query)
+            wx.CallAfter(self._apply_search_results, results, query, search_type)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
+
+    def _selected_search_type(self) -> str:
+        return {0: "video", 1: "channel", 2: "playlist"}.get(
+            self._search_type_choice.GetSelection(), "video"
+        )
 
     def _set_status(self, text: str) -> None:
         top = wx.GetTopLevelParent(self)
@@ -162,16 +220,60 @@ class YouTubePanel(wx.Panel):
         self._btn_search.Enable()
         wx.MessageBox(f"Search failed: {message}", "Search Error", wx.OK | wx.ICON_ERROR)
 
-    def _apply_search_results(self, results: list[dict], query: str) -> None:
+    def _set_results_columns_for_type(self, search_type: str) -> None:
+        """Relabels the results list's 3 columns for what search_type
+        actually fills them with -- NVDA reads column headers, so a
+        subscriber count sitting under a header that still says
+        "Duration" would be actively misleading, not just cosmetic."""
+        headers = {
+            "video": ("Title", "Duration", "Channel"),
+            "channel": ("Channel", "Subscribers", "Status"),
+            "playlist": ("Title", "Videos", "Channel"),
+        }.get(search_type, ("Title", "Duration", "Channel"))
+        for col, text in enumerate(headers):
+            item = self._results_list.GetColumn(col)
+            item.SetText(text)
+            self._results_list.SetColumn(col, item)
+
+    def _apply_search_results(self, results: list[dict], query: str,
+                               search_type: str = "video") -> None:
         self._btn_search.Enable()
+        self._result_type = search_type
+        self._set_results_columns_for_type(search_type)
+        self._results_list.DeleteAllItems()
+        from radiomaster.database.repository import YouTubeChannelRepository
+        channel_repo = YouTubeChannelRepository(self._db)
         for i, result in enumerate(results):
             idx = self._results_list.InsertItem(i, result.get('title', 'Unknown')[:100])
-            self._results_list.SetItem(idx, 1, self._format_duration(result.get('duration', 0)))
-            self._results_list.SetItem(idx, 2, result.get('channel', 'Unknown'))
+            if search_type == "channel":
+                self._results_list.SetItem(idx, 1, self._format_count(result.get('channel_follower_count')))
+                channel_id = result.get('channel_id') or result.get('id') or ''
+                self._results_list.SetItem(idx, 2, "Subscribed" if channel_repo.is_subscribed(channel_id) else "")
+            elif search_type == "playlist":
+                count = result.get('playlist_count')
+                self._results_list.SetItem(idx, 1, str(count) if count else "")
+                self._results_list.SetItem(idx, 2, result.get('channel', result.get('uploader', 'Unknown')))
+            else:
+                self._results_list.SetItem(idx, 1, self._format_duration(result.get('duration', 0)))
+                self._results_list.SetItem(idx, 2, result.get('channel', result.get('uploader', 'Unknown')))
             self._results_list.SetItemData(idx, i)  # Store index for retrieval
         self._search_results = results
         self._set_status(f"Status: {len(results)} result(s) for '{query}'")
-    
+
+    @staticmethod
+    def _format_count(count: int | None) -> str:
+        """Formats a subscriber count the way YouTube itself abbreviates
+        it (1.2M, 340K) -- a raw 7+ digit number is a lot to have read
+        out by a screen reader for what's meant to be a rough sense of
+        channel size, not an exact figure."""
+        if not count:
+            return "Unknown"
+        if count >= 1_000_000:
+            return f"{count / 1_000_000:.1f}M subscribers"
+        if count >= 1_000:
+            return f"{count / 1_000:.1f}K subscribers"
+        return f"{count} subscribers"
+
     def _format_duration(self, seconds: int) -> str:
         """Format duration in seconds to MM:SS or HH:MM:SS."""
         if not seconds:
@@ -195,6 +297,119 @@ class YouTubePanel(wx.Panel):
         # Fallback – return minimal info
         title = self._results_list.GetItemText(idx)
         return {'title': title, 'url': ''}
+
+    def _on_result_activated(self, event: wx.CommandEvent) -> None:
+        """Enter/double-click on a results-list row: plays a video result
+        directly (unchanged), but drills into a channel's videos or a
+        playlist's entries instead of trying to play a channel/playlist
+        URL as if it were a stream."""
+        if self._result_type == "channel":
+            self._open_selected_channel()
+        elif self._result_type == "playlist":
+            self._open_selected_playlist()
+        else:
+            self._on_play(event)
+
+    def _open_selected_channel(self) -> None:
+        channel = self._get_selected_video()
+        if not channel:
+            return
+        channel_url = channel.get('channel_url') or channel.get('url') or ""
+        title = channel.get('title') or channel.get('channel') or "Channel"
+        if not channel_url:
+            wx.MessageBox("Could not determine this channel's URL.", "Error", wx.OK | wx.ICON_ERROR)
+            return
+        self._load_channel_videos(channel_url, title)
+
+    def _open_selected_playlist(self) -> None:
+        playlist = self._get_selected_video()
+        if not playlist:
+            return
+        playlist_url = playlist.get('url') or playlist.get('webpage_url') or ""
+        if not playlist_url:
+            wx.MessageBox("Could not determine this playlist's URL.", "Error", wx.OK | wx.ICON_ERROR)
+            return
+        self._set_status(f"Status: Loading playlist '{playlist.get('title', '')}'...")
+
+        def worker():
+            from radiomaster.services.youtube_dl import YouTubeService
+            service = YouTubeService()
+            entries = service.get_playlist_entries(playlist_url)
+            wx.CallAfter(self._apply_playlist_entries, entries)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _load_channel_videos(self, channel_url: str, title: str) -> None:
+        self._set_status(f"Status: Loading videos for '{title}'...")
+
+        def worker():
+            from radiomaster.services.youtube_dl import YouTubeService
+            service = YouTubeService()
+            entries = service.get_channel_videos(channel_url)
+            wx.CallAfter(self._apply_search_results, entries, title, "video")
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Channel subscriptions -- mirrors PodcastPanel's Subscribe/
+    # Unsubscribe pattern. Any result (video, channel, or playlist) can
+    # be subscribed from, not only a Channels-type search result: every
+    # yt-dlp entry already carries its channel_id/channel_url/channel
+    # regardless of which of the three it itself is.
+    # ------------------------------------------------------------------
+    def _load_channels(self) -> None:
+        from radiomaster.database.repository import YouTubeChannelRepository
+        self._channels_list.DeleteAllItems()
+        self._channel_data = YouTubeChannelRepository(self._db).get_all()
+        for i, channel in enumerate(self._channel_data):
+            self._channels_list.InsertItem(i, channel.get('title', 'Unknown'))
+
+    def _on_channel_activated(self, event: wx.CommandEvent) -> None:
+        idx = self._channels_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._channel_data):
+            return
+        channel = self._channel_data[idx]
+        url = channel.get('url', '')
+        if not url:
+            return
+        self._load_channel_videos(url, channel.get('title', 'Channel'))
+
+    def _on_subscribe(self, event: wx.CommandEvent) -> None:
+        item = self._get_selected_video()
+        if not item:
+            wx.MessageBox("Select a video, channel, or playlist first.", "No Selection",
+                         wx.OK | wx.ICON_WARNING)
+            return
+        channel_id = item.get('channel_id') or (item.get('id') if self._result_type == "channel" else None)
+        channel_url = item.get('channel_url') or item.get('uploader_url') or ""
+        channel_title = item.get('channel') or item.get('uploader') or (
+            item.get('title') if self._result_type == "channel" else "Unknown Channel"
+        )
+        if not channel_id or not channel_url:
+            wx.MessageBox("Could not determine the channel for this item.", "Subscribe",
+                         wx.OK | wx.ICON_WARNING)
+            return
+        from radiomaster.database.repository import YouTubeChannelRepository
+        YouTubeChannelRepository(self._db).add(channel_id, channel_title, channel_url)
+        self._load_channels()
+        wx.MessageBox(f"Subscribed to '{channel_title}'.", "Subscribed", wx.OK | wx.ICON_INFORMATION)
+
+    def _on_unsubscribe(self, event: wx.CommandEvent) -> None:
+        idx = self._channels_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._channel_data):
+            wx.MessageBox("Select a subscribed channel first.", "No Selection", wx.OK | wx.ICON_WARNING)
+            return
+        channel = self._channel_data[idx]
+        if wx.MessageBox(
+            f"Unsubscribe from '{channel.get('title', 'this channel')}'?",
+            "Unsubscribe", wx.YES_NO | wx.ICON_QUESTION,
+        ) != wx.YES:
+            return
+        from radiomaster.database.repository import YouTubeChannelRepository
+        YouTubeChannelRepository(self._db).remove(channel['channel_id'])
+        self._load_channels()
 
     def _on_play_url(self, event: wx.CommandEvent) -> None:
         """Play a YouTube URL.
@@ -314,6 +529,8 @@ class YouTubePanel(wx.Panel):
         if not entries:
             wx.MessageBox("No entries found in playlist.", "Playlist Empty", wx.OK | wx.ICON_WARNING)
             return
+        self._result_type = "video"
+        self._set_results_columns_for_type("video")
         self._results_list.DeleteAllItems()
         self._search_results = []
         for i, entry in enumerate(entries):
@@ -326,6 +543,11 @@ class YouTubePanel(wx.Panel):
 
     def _on_download(self, event: wx.CommandEvent) -> None:
         """Download the selected video."""
+        if self._result_type != "video":
+            wx.MessageBox(
+                "Open this channel or playlist first (Enter/double-click), then select "
+                "an actual video to download.", "Cannot Download", wx.OK | wx.ICON_WARNING)
+            return
         video = self._get_selected_video()
         if not video:
             wx.MessageBox("Please select a video first.", "No Selection", wx.OK | wx.ICON_WARNING)
@@ -366,6 +588,11 @@ class YouTubePanel(wx.Panel):
 
     def _on_download_audio(self, event: wx.CommandEvent) -> None:
         """Download audio only."""
+        if self._result_type != "video":
+            wx.MessageBox(
+                "Open this channel or playlist first (Enter/double-click), then select "
+                "an actual video to download.", "Cannot Download", wx.OK | wx.ICON_WARNING)
+            return
         video = self._get_selected_video()
         if not video:
             wx.MessageBox("Please select a video first.", "No Selection", wx.OK | wx.ICON_WARNING)

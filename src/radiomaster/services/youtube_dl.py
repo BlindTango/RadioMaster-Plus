@@ -97,8 +97,23 @@ class YouTubeService:
             logger.error(f"Failed to get video info: {e}")
         return None
 
-    def search(self, query: str, max_results: int = 20) -> list[dict[str, Any]]:
-        """Search YouTube using yt-dlp.
+    # YouTube's own search-results page filters results by type via an
+    # "sp" query param (an opaque base64-encoded protobuf blob, not
+    # something yt-dlp exposes a friendlier flag for) -- these three are
+    # YouTube's own well-known values for "Type: Video/Channel/Playlist"
+    # confirmed live against a real search (channel search correctly
+    # returned channel entries with channel_id/subscriber counts, no
+    # videos; playlist search returned playlist entries, no videos).
+    _SEARCH_TYPE_FILTERS = {
+        "video": None,  # no filter needed -- ytsearch: already means videos only
+        "channel": "EgIQAg%253D%253D",
+        "playlist": "EgIQAw%253D%253D",
+    }
+
+    def search(self, query: str, max_results: int = 20,
+               search_type: str = "video") -> list[dict[str, Any]]:
+        """Search YouTube using yt-dlp, filtered to videos, channels, or
+        playlists (search_type).
 
         --flat-playlist is what makes a 20-result search actually fast:
         without it, yt-dlp does a FULL metadata extraction for every
@@ -115,11 +130,28 @@ class YouTubeService:
         one bad video among 20 discarded all 19 good ones that had
         already been fetched and printed. Every line of stdout that
         parses as JSON is kept regardless of the overall exit code.
+
+        Channel/playlist search goes through the search-results-page URL
+        directly (with the "sp" type filter) rather than the "ytsearchN:"
+        shorthand -- that shorthand always means video search specifically
+        and has no type-filtered equivalent. --playlist-end caps results
+        there instead, since the URL form doesn't take a result count.
         """
+        import urllib.parse
+        if search_type == "video" or search_type not in self._SEARCH_TYPE_FILTERS:
+            target = f"ytsearch{max_results}:{query}"
+            extra_args = ["--no-playlist"]
+        else:
+            search_url = (
+                "https://www.youtube.com/results?search_query="
+                f"{urllib.parse.quote(query)}&sp={self._SEARCH_TYPE_FILTERS[search_type]}"
+            )
+            target = search_url
+            extra_args = ["--playlist-end", str(max_results)]
         try:
             result = subprocess.run(
-                [get_ytdlp(), *get_yt_dlp_proxy_args(), f"ytsearch{max_results}:{query}",
-                 "-j", "--no-playlist", "--flat-playlist"],
+                [get_ytdlp(), *get_yt_dlp_proxy_args(), target,
+                 "-j", *extra_args, "--flat-playlist"],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
             results = []
@@ -135,6 +167,35 @@ class YouTubeService:
             return results
         except Exception as e:
             logger.error(f"Failed to search YouTube: {e}")
+        return []
+
+    def get_channel_videos(self, channel_url: str, max_results: int = 30) -> list[dict[str, Any]]:
+        """List a subscribed channel's most recent videos -- appending
+        "/videos" is what points yt-dlp at the channel's uploads tab
+        specifically instead of its (much slower to enumerate, and not
+        what "browse this channel's videos" means) full tab set."""
+        url = channel_url.rstrip("/")
+        if not url.endswith("/videos"):
+            url += "/videos"
+        try:
+            result = subprocess.run(
+                [get_ytdlp(), *get_yt_dlp_proxy_args(), url,
+                 "-j", "--flat-playlist", "--playlist-end", str(max_results)],
+                capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
+            )
+            entries = []
+            for line in result.stdout.strip().split("\n"):
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            if not entries and result.returncode != 0:
+                logger.error(f"Channel video listing failed (exit {result.returncode}): "
+                             f"{result.stderr.strip()[-300:]}")
+            return entries
+        except Exception as e:
+            logger.error(f"Failed to list channel videos: {e}")
         return []
 
     def download(self, url: str, output_dir: str, format: str = "best",

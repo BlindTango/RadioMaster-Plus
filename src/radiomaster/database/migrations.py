@@ -282,6 +282,15 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE downloads ADD COLUMN extract_audio INTEGER DEFAULT 0;
         ALTER TABLE downloads ADD COLUMN filename_base TEXT DEFAULT '';
     """),
+    (23, """
+        CREATE TABLE IF NOT EXISTS youtube_channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id TEXT UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            url TEXT NOT NULL,
+            subscribed_at TEXT DEFAULT (datetime('now'))
+        );
+    """),
 ]
 
 

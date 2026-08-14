@@ -33,7 +33,7 @@ class TestDatabase:
         """Test that all migrations run successfully."""
         version = db.fetchone("SELECT MAX(version) as v FROM schema_version")
         assert version is not None
-        assert version["v"] == 22  # 22 migrations
+        assert version["v"] == 23  # 23 migrations
 
     def test_insert_station(self, db: DatabaseManager) -> None:
         """Test inserting a station."""

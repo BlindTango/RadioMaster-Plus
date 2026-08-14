@@ -359,6 +359,39 @@ class DownloadRepository:
         self._db.commit()
 
 
+class YouTubeChannelRepository:
+    """CRUD operations for subscribed YouTube channels.
+
+    Deliberately not modeled on PodcastRepository's episodes table --
+    a channel's videos aren't synced/stored locally (there's no feed to
+    poll), just fetched live from yt-dlp each time a subscribed channel
+    is opened. This table only remembers *which* channels are
+    subscribed."""
+
+    def __init__(self, db: DatabaseManager) -> None:
+        self._db = db
+
+    def add(self, channel_id: str, title: str, url: str) -> int:
+        cursor = self._db.execute(
+            "INSERT OR REPLACE INTO youtube_channels (channel_id, title, url) VALUES (?, ?, ?)",
+            (channel_id, title, url),
+        )
+        self._db.commit()
+        return cursor.lastrowid
+
+    def get_all(self) -> list[dict[str, Any]]:
+        return self._db.fetchall("SELECT * FROM youtube_channels ORDER BY title")
+
+    def is_subscribed(self, channel_id: str) -> bool:
+        return self._db.fetchone(
+            "SELECT 1 FROM youtube_channels WHERE channel_id = ?", (channel_id,)
+        ) is not None
+
+    def remove(self, channel_id: str) -> None:
+        self._db.execute("DELETE FROM youtube_channels WHERE channel_id = ?", (channel_id,))
+        self._db.commit()
+
+
 class ScheduleRepository:
     """CRUD operations for recording schedules."""
 
