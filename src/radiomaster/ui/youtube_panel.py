@@ -366,7 +366,18 @@ class YouTubePanel(wx.Panel):
         """Enter/double-click on a results-list row: plays a video result
         directly (unchanged), but drills into a channel's videos or a
         playlist's entries instead of trying to play a channel/playlist
-        URL as if it were a stream."""
+        URL as if it were a stream.
+
+        The activated row may only be *focused*, not *selected* -- e.g.
+        when navigating with arrow keys and pressing Enter, or when a
+        double-click lands on a row that was never clicked to select it.
+        GetFirstSelected() then returns -1 (or a stale earlier row), so
+        the handlers below would act on nothing or on the wrong video.
+        Select the activated row first so they operate on the row the
+        user actually activated."""
+        idx = event.GetIndex()
+        if idx != wx.NOT_FOUND:
+            self._results_list.Select(idx)
         if self._result_type == "channel":
             self._open_selected_channel()
         elif self._result_type == "playlist":

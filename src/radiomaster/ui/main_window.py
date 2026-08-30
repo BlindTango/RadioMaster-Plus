@@ -17,7 +17,6 @@ from radiomaster.ui.youtube_panel import YouTubePanel
 from radiomaster.ui.downloads_panel import DownloadsPanel
 from radiomaster.ui.scheduler_panel import SchedulerPanel
 from radiomaster.ui.search_bar import SearchBar
-from radiomaster.ui.video_frame import VideoFrame
 from radiomaster.ui.equalizer_dialog import EqualizerDialog
 from radiomaster.ui.tray_icon import TrayIcon
 from radiomaster.engine.playback_engine import PlaybackEngine
@@ -73,7 +72,6 @@ class MainWindow(wx.Frame):
         # are all applied together at the end of __init__ via
         # _apply_settings_changes(), once the UI it needs to touch exists.
         self._sleep_timer = SleepTimer()
-        self._video_frame: VideoFrame | None = None
         self._station_api = StationAPI()
         self._station_db = StationDB()
         self._station_updater = StationUpdater(self._station_api, self._station_db)
@@ -1045,8 +1043,13 @@ class MainWindow(wx.Frame):
             self._status_bar.set_buffering(100)
         self._now_playing.set_playing(state == "playing")
         self._update_transport_button_states()
-        if state == "playing" and self._engine.is_video and not self._video_frame:
-            self._show_video_frame()
+        # Video is rendered by ffplay's own native window (the engine
+        # launches ffplay without -nodisp for video), so there is no
+        # separate in-app video frame to show -- showing a redundant
+        # frame on top of ffplay's window is what produced the "two
+        # windows" the user had to Alt+F4 twice to dismiss. ffplay's
+        # window is the video window; the transport bar in the main
+        # window is the control surface.
 
         # Save play progress when stopping
         if state == "stopped" and self._engine._current_url:
@@ -1172,8 +1175,6 @@ class MainWindow(wx.Frame):
     def _on_engine_position(self, position: float, duration: float) -> None:
         """Handle playback position updates."""
         self._now_playing.set_time(position, duration)
-        if self._video_frame:
-            self._video_frame.set_time(position, duration)
         # duration > 0 (a finite podcast episode) shows elapsed/total/
         # remaining; duration == 0 (an unbounded radio stream) shows just
         # elapsed -- how long the current connection has been playing.
@@ -1200,16 +1201,6 @@ class MainWindow(wx.Frame):
             results = repo.search(query)
             if results:
                 self._listbook.SetSelection(3)  # Switch to Media tab
-
-    def _show_video_frame(self) -> None:
-        """Show the video playback frame."""
-        self._video_frame = VideoFrame(self, title=self._engine.current_title)
-        self._video_frame.on_close(self._on_video_frame_close)
-        self._video_frame.Show()
-
-    def _on_video_frame_close(self) -> None:
-        """Handle video frame close."""
-        self._video_frame = None
 
     def _show_equalizer(self) -> None:
         """Show the equalizer dialog."""
