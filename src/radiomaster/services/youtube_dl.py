@@ -285,15 +285,13 @@ class YouTubeService:
         return ""
 
     def download_to_temp(self, url: str, progress_cb=None) -> str | None:
-        """Download a video to a temporary file and return its local path.
+        """Prepare best-quality video/audio in a temporary playback file.
 
-        Modern YouTube no longer serves a single muxed (video+audio)
-        stream for most videos -- it splits them into separate video-only
-        and audio-only adaptive streams, so there is no one URL ffplay
-        can stream directly (get_stream_info() returns None for those).
-        yt-dlp's own downloader merges the two into one file, which is
-        the reliable way to play such videos. Used as a fallback when
-        direct streaming isn't possible.
+        Modern YouTube serves its highest-quality video and audio as
+        separate adaptive streams. yt-dlp downloads the best of each and
+        FFmpeg merges them without re-encoding, preserving the source
+        resolution and audio bitrate. This is the primary YouTube playback
+        path; a lower-quality pre-muxed stream is used only if this fails.
 
         Returns the temp file path on success, or None on failure. The
         caller owns the file and should delete it when playback ends.
@@ -305,6 +303,7 @@ class YouTubeService:
         cmd = [
             get_ytdlp(), *get_yt_dlp_proxy_args(),
             "-f", "bestvideo+bestaudio/best",
+            "--concurrent-fragments", "4",
             "--merge-output-format", "mp4",
             "--no-playlist", "-o", tmp_path, url,
         ]

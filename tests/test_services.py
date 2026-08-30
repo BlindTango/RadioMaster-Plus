@@ -1,9 +1,12 @@
 """Tests for services."""
 
+import os
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from radiomaster.services.podcast_manager import PodcastManager
+
 from radiomaster.services.lyrics_service import LyricsService
+from radiomaster.services.podcast_manager import PodcastManager
 from radiomaster.services.radio_browser import RadioBrowserClient
 from radiomaster.services.update_checker import UpdateChecker, UpdateCheckError
 
@@ -33,6 +36,36 @@ class TestPodcastManager:
         assert "opml" in opml
         assert "http://test/feed.xml" in opml
 
+
+class TestYouTubePlaybackQuality:
+    """YouTube playback must select separate adaptive streams; the best
+    combined stream is commonly limited to low resolution and bitrate."""
+
+    def test_temp_playback_downloads_and_merges_best_video_and_audio(self, tmp_path) -> None:
+        from radiomaster.services.youtube_dl import YouTubeService
+
+        completed = MagicMock()
+
+        def fake_run(cmd, **kwargs):
+            output_path = cmd[cmd.index("-o") + 1]
+            with open(output_path, "wb") as output:
+                output.write(b"merged media")
+            return completed
+
+        with patch.object(YouTubeService, "_check_available"), \
+             patch("tempfile.mkstemp") as mkstemp, \
+             patch("radiomaster.services.youtube_dl.subprocess.run", side_effect=fake_run) as run:
+            target = tmp_path / "playback.mp4"
+            fd = os.open(target, os.O_CREAT | os.O_RDWR)
+            mkstemp.return_value = (fd, str(target))
+
+            result = YouTubeService().download_to_temp("https://youtube.test/watch?v=1")
+
+        assert result == str(target)
+        command = run.call_args.args[0]
+        assert command[command.index("-f") + 1] == "bestvideo+bestaudio/best"
+        assert command[command.index("--concurrent-fragments") + 1] == "4"
+        assert "--merge-output-format" in command
 
 class TestLyricsService:
     """Test lyrics service."""

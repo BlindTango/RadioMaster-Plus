@@ -78,32 +78,36 @@ class YouTubePanel(wx.Panel):
                           stream: dict | None = None) -> None:
         """Resolve a playable stream for *url* and start playback.
 
-        Runs on a worker thread. First tries to resolve a single muxed
-        stream URL (the fast path -- ffplay streams it directly). Modern
-        YouTube no longer serves a single muxed stream for most videos
-        (it splits video-only and audio-only adaptive streams), so when
-        that returns nothing, falls back to downloading the video to a
-        temp file via yt-dlp (which merges the two) and plays the local
-        file instead. The temp file is tracked in _temp_playback_file so
-        it can be cleaned up later.
+        Runs on a worker thread. Modern YouTube puts its highest-quality
+        video and audio in separate adaptive streams. A single stream URL
+        therefore normally means accepting a much lower-quality pre-muxed
+        format (often itag 18/360p). Prepare and merge ``bestvideo`` plus
+        ``bestaudio`` first so normal playback uses the best source quality.
+
+        The old single-URL route remains as a resilience fallback if the
+        high-quality download/merge fails. The temp file is tracked in
+        _temp_playback_file so it can be cleaned up later.
 
         *stream*, when given, is an already-resolved get_stream_info()
-        result (e.g. from _on_play_url, which needs it for the title/
-        duration) -- avoids a second redundant yt-dlp call."""
+        result (e.g. from _on_play_url, which needs it for the title and
+        duration). It is retained for the fallback without another yt-dlp
+        round trip."""
         from radiomaster.services.youtube_dl import YouTubeService
         service = YouTubeService()
+        self._set_status(f"Status: Preparing best-quality playback for '{title}'...")
+        tmp_path = service.download_to_temp(url)
+        if tmp_path:
+            wx.CallAfter(self._apply_play_result, tmp_path, title, duration, seq, None,
+                         is_temp_file=True)
+            return
+
+        # High-quality adaptive playback could not be prepared. Preserve
+        # the former direct-stream behavior rather than failing outright.
         if stream is None:
             stream = service.get_stream_info(url)
         stream_url = (stream or {}).get('url')
         headers = (stream or {}).get('http_headers')
-        if stream_url:
-            wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq, headers)
-            return
-        # No single muxed stream -- download to a temp file and play that.
-        self._set_status(f"Status: Downloading '{title}' for playback...")
-        tmp_path = service.download_to_temp(url)
-        wx.CallAfter(self._apply_play_result, tmp_path, title, duration, seq, None,
-                     is_temp_file=True)
+        wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq, headers)
 
     def _setup_ui(self) -> None:
         """Create the YouTube panel layout."""
