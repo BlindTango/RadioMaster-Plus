@@ -1,7 +1,9 @@
 """Tests for utility functions."""
 
+import os
 import pytest
 from radiomaster.utils.helpers import format_time, parse_time, sanitize_filename, truncate
+from radiomaster.utils import paths
 
 
 class TestFormatTime:
@@ -57,3 +59,31 @@ class TestTruncate:
         result = truncate(text, 20)
         assert len(result) <= 20
         assert result.endswith("...")
+
+
+class TestPortablePaths:
+    """Portable locations survive an application drive-letter change."""
+
+    def test_app_path_is_stored_relative(self, monkeypatch) -> None:
+        monkeypatch.setattr(paths, "_app_dir", lambda: r"F:\RadioMaster+")
+        monkeypatch.setattr(paths, "is_portable_mode", lambda: True)
+        stored = paths.path_for_storage(r"F:\RadioMaster+\data\downloads")
+        assert stored == os.path.join(".", "data", "downloads")
+
+    def test_external_path_remains_absolute(self, monkeypatch) -> None:
+        monkeypatch.setattr(paths, "_app_dir", lambda: r"F:\RadioMaster+")
+        monkeypatch.setattr(paths, "is_portable_mode", lambda: True)
+        assert paths.path_for_storage(r"C:\My Music") == r"C:\My Music"
+
+    def test_relative_path_uses_current_app_drive(self, monkeypatch) -> None:
+        monkeypatch.setattr(paths, "_app_dir", lambda: r"F:\RadioMaster+")
+        monkeypatch.setattr(paths, "is_portable_mode", lambda: True)
+        assert paths.resolve_stored_path(r".\data\recordings") == \
+            os.path.normpath(r"F:\RadioMaster+\data\recordings")
+
+    def test_legacy_portable_path_moves_to_current_drive(self, monkeypatch) -> None:
+        monkeypatch.setattr(paths, "_app_dir", lambda: r"F:\RadioMaster+")
+        monkeypatch.setattr(paths, "is_portable_mode", lambda: True)
+        monkeypatch.setattr(paths.os.path, "exists", lambda _path: False)
+        assert paths.resolve_stored_path(r"E:\RadioMaster+\data\downloads\Podcasts") == \
+            os.path.normpath(r"F:\RadioMaster+\data\downloads\Podcasts")

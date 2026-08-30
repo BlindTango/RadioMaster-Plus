@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, Type
 import json
 
 from ..utils.config import ConfigManager as Config
-from ..utils.paths import get_paths
+from ..utils.paths import get_paths, path_for_storage
 from ..utils.accessibility import set_accessible_name
 
 
@@ -394,7 +394,7 @@ class PodcastsPanel(SettingsPanel):
         dlg.Destroy()
 
     def onSave(self) -> None:
-        self.config.set("podcasts.download_path", value=self.podcast_path_txt.GetValue())
+        self.config.set("podcasts.download_path", value=path_for_storage(self.podcast_path_txt.GetValue()))
         self.config.set("podcasts.auto_download", value=self.auto_download_chk.IsChecked())
         self.config.set("podcasts.download_limit", value=self.download_limit_spin.GetValue())
         self.config.set("podcasts.keep_episodes", value=self.keep_episodes_spin.GetValue())
@@ -468,7 +468,7 @@ class DownloadsPanel(SettingsPanel):
         dlg.Destroy()
 
     def onSave(self) -> None:
-        self.config.set("downloads.download_path", value=self.download_path_txt.GetValue())
+        self.config.set("downloads.download_path", value=path_for_storage(self.download_path_txt.GetValue()))
         self.config.set("downloads.max_concurrent", value=self.max_concurrent_spin.GetValue())
         self.config.set("downloads.audio_format", value=self.format_combo.GetStringSelection().lower())
         self.config.set("downloads.audio_quality", value=self.quality_combo.GetStringSelection())
@@ -548,7 +548,7 @@ class RecordingsPanel(SettingsPanel):
         dlg.Destroy()
 
     def onSave(self) -> None:
-        self.config.set("recordings.recording_path", value=self.recording_path_txt.GetValue())
+        self.config.set("recordings.recording_path", value=path_for_storage(self.recording_path_txt.GetValue()))
         self.config.set("recordings.match_source_format", value=self.match_source_chk.IsChecked())
         self.config.set("recordings.recording_format", value=self.rec_format_combo.GetStringSelection().lower())
         self.config.set("recordings.recording_quality", value=self.rec_quality_combo.GetStringSelection())

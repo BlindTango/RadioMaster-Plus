@@ -71,6 +71,59 @@ def _is_writable(path: str) -> bool:
         return False
 
 
+def is_portable_mode() -> bool:
+    """Return whether application-owned data should travel with the app."""
+    return "--portable" in sys.argv or _is_writable(_app_dir())
+
+
+def path_for_storage(path: str) -> str:
+    r"""Make an app-contained path portable before saving it.
+
+    Paths outside the application directory remain absolute because they are
+    deliberate user locations.  Paths inside a portable copy are saved as
+    ``.\data\...`` so a changed removable-drive letter cannot invalidate
+    them.
+    """
+    value = path.strip()
+    if not value:
+        return ""
+    absolute = os.path.abspath(os.path.expandvars(os.path.expanduser(value)))
+    if not is_portable_mode():
+        return absolute
+    try:
+        relative = os.path.relpath(absolute, os.path.abspath(_app_dir()))
+    except ValueError:  # Different Windows drives.
+        return absolute
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return absolute
+    return "." if relative == "." else os.path.join(".", relative)
+
+
+def resolve_stored_path(path: str) -> str:
+    """Resolve a persisted relative path against the app's current folder."""
+    value = path.strip()
+    if not value:
+        return ""
+    value = os.path.expandvars(os.path.expanduser(value))
+    if not os.path.isabs(value):
+        value = os.path.join(_app_dir(), value)
+    return _relocate_legacy_portable_path(os.path.normpath(os.path.abspath(value)))
+
+
+def _relocate_legacy_portable_path(path: str) -> str:
+    r"""Repair an old absolute ``...\data\...`` path after a drive move."""
+    if not is_portable_mode() or not os.path.isabs(path) or os.path.exists(path):
+        return path
+    drive, tail = os.path.splitdrive(os.path.normpath(path))
+    current_drive = os.path.splitdrive(os.path.abspath(_app_dir()))[0]
+    parts = [part for part in tail.split(os.sep) if part]
+    data_indexes = [i for i, part in enumerate(parts) if part.casefold() == "data"]
+    if not drive or drive.casefold() == current_drive.casefold() or not data_indexes:
+        return path
+    # Portable application data always begins at the final "data" component.
+    return os.path.join(_app_dir(), *parts[data_indexes[-1]:])
+
+
 def get_paths() -> dict[str, str]:
     """Get platform-appropriate paths for config, data, and cache.
 
@@ -81,7 +134,7 @@ def get_paths() -> dict[str, str]:
     app_name = __app_name__.replace("+", "Plus")
 
     app_dir = _app_dir()
-    portable = "--portable" in sys.argv or _is_writable(app_dir)
+    portable = is_portable_mode()
 
     if portable:
         base = os.path.join(app_dir, "data")
@@ -123,15 +176,22 @@ def _self_healing_dir(config_section: str, config_key: str, current_default: str
     """
     from radiomaster.utils.config import ConfigManager
     config = ConfigManager.get_instance()
-    saved = config.get(config_section, config_key, default="").strip()
-    if not saved:
+    stored_value = config.get(config_section, config_key, default="").strip()
+    if not stored_value:
         return current_default
+
+    saved = resolve_stored_path(stored_value)
 
     stale_defaults = {os.path.normcase(os.path.normpath(current_default)),
                        os.path.normcase(os.path.normpath(music_default))}
     if os.path.normcase(os.path.normpath(saved)) in stale_defaults \
             and os.path.normpath(saved) != os.path.normpath(current_default):
-        return current_default
+        saved = current_default
+    portable_value = path_for_storage(saved)
+    if portable_value != stored_value:
+        # ConfigManager is saved on normal shutdown (and when Settings is
+        # accepted), so old absolute portable values migrate automatically.
+        config.set(config_section, config_key, value=portable_value)
     return saved
 
 

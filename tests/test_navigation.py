@@ -90,7 +90,7 @@ class TestHelpSystem:
             "Troubleshooting",
         } <= titles
         assert len(QUICK_START_TOPICS) >= 5
-        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.63"
+        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.64"
 
 
 class TestTabOrder:

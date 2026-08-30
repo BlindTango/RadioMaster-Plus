@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.utils.accessibility import context_menu_pos, set_accessible_name
+from radiomaster.utils.paths import resolve_stored_path
 
 
 class DownloadsPanel(wx.Panel):
@@ -360,7 +361,7 @@ class DownloadsPanel(wx.Panel):
         audio_quality = "0" if quality.lower() == "best" else (quality.upper() if quality else "0")
         app.download_manager.add_download(
             row["id"], row["url"],
-            output_dir=row.get("output_dir") or "",
+            output_dir=resolve_stored_path(row.get("output_dir") or ""),
             title=row.get("title", ""),
             format=row.get("format") or "",
             extract_audio=bool(row.get("extract_audio")),
@@ -404,7 +405,7 @@ class DownloadsPanel(wx.Panel):
         if idx < 0 or idx >= len(self._history_rows):
             return False
         row = self._history_rows[idx]
-        path = row.get("file_path") or ""
+        path = resolve_stored_path(row.get("file_path") or "")
         if not path or not os.path.isfile(path):
             wx.MessageBox(
                 "This download's file could not be found on disk -- it may have been "

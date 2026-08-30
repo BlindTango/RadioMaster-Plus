@@ -444,6 +444,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.64", (
+        "Fixed portable installations losing their configured downloads, "
+        "recordings, and podcast folders when a removable drive receives a "
+        "different drive letter. Application-owned locations are now stored "
+        "relative to the RadioMaster+ folder and resolved against its current "
+        "location at runtime.\n\n"
+        "Existing absolute portable paths are migrated automatically, including "
+        "completed-download file locations and retry folders, while deliberately "
+        "selected folders outside RadioMaster+ remain absolute."
+    )),
     ("Version 1.1.63", (
         "Expanded the Keyboard Shortcuts main-key catalogue with multimedia "
         "playback and volume keys, browser controls, application-launch keys, "

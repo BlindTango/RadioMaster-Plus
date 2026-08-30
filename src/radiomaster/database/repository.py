@@ -256,7 +256,7 @@ class DownloadRepository:
             """INSERT INTO downloads
             (url, title, source_type, format, quality, output_dir, extract_audio, filename_base)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (url, title, source_type, format, quality, output_dir, int(extract_audio), filename_base),
+            (url, title, source_type, format, quality, self._stored_path(output_dir), int(extract_audio), filename_base),
         )
         self._db.commit()
         return cursor.lastrowid
@@ -287,7 +287,7 @@ class DownloadRepository:
         cursor = self._db.execute(
             """INSERT INTO downloads (url, title, source_type, status, progress, file_path)
             VALUES (?, ?, ?, 'completed', 100, ?)""",
-            (url, title, source_type, file_path),
+            (url, title, source_type, self._stored_path(file_path)),
         )
         self._db.commit()
         return cursor.lastrowid
@@ -305,13 +305,18 @@ class DownloadRepository:
         which file on disk it actually corresponded to."""
         self._db.execute(
             "UPDATE downloads SET progress = 100, status = 'completed', file_path = ? WHERE id = ?",
-            (file_path, download_id),
+            (self._stored_path(file_path), download_id),
         )
         self._db.commit()
 
     def set_file_path(self, download_id: int, file_path: str) -> None:
-        self._db.execute("UPDATE downloads SET file_path = ? WHERE id = ?", (file_path, download_id))
+        self._db.execute("UPDATE downloads SET file_path = ? WHERE id = ?", (self._stored_path(file_path), download_id))
         self._db.commit()
+
+    @staticmethod
+    def _stored_path(path: str) -> str:
+        from radiomaster.utils.paths import path_for_storage
+        return path_for_storage(path)
 
     def get_queued(self) -> list[dict[str, Any]]:
         return self._db.fetchall(

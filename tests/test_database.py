@@ -141,6 +141,18 @@ class TestDownload:
         assert dl["progress"] == 50.0
         assert dl["status"] == "downloading"
 
+    def test_portable_download_paths_are_stored_relative(
+            self, db: DatabaseManager, monkeypatch) -> None:
+        from radiomaster.utils import paths
+        monkeypatch.setattr(paths, "_app_dir", lambda: r"F:\RadioMaster+")
+        monkeypatch.setattr(paths, "is_portable_mode", lambda: True)
+        repo = DownloadRepository(db)
+        dl_id = repo.add("https://example.test/video", output_dir=r"F:\RadioMaster+\data\downloads")
+        repo.mark_completed(dl_id, r"F:\RadioMaster+\data\downloads\video.webm")
+        row = db.fetchone("SELECT output_dir, file_path FROM downloads WHERE id = ?", (dl_id,))
+        assert row["output_dir"] == os.path.join(".", "data", "downloads")
+        assert row["file_path"] == os.path.join(".", "data", "downloads", "video.webm")
+
 
 class TestSchedule:
     """Test schedule operations."""
