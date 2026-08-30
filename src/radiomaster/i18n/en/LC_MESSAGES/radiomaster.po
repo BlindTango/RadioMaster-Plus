@@ -299,25 +299,6 @@ msgstr "Search Scope"
 msgid "All"
 msgstr "All"
 
-#: playlist_widget.py
-msgid "Playlist Selector"
-msgstr "Playlist Selector"
-
-msgid "New Playlist"
-msgstr "New Playlist"
-
-msgid "Delete Playlist"
-msgstr "Delete Playlist"
-
-msgid "Play Item"
-msgstr "Play Item"
-
-msgid "Remove Item"
-msgstr "Remove Item"
-
-msgid "Shuffle"
-msgstr "Shuffle"
-
 #: about dialog
 msgid "About RadioMaster+"
 msgstr "About RadioMaster+"
