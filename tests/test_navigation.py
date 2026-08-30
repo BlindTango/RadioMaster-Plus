@@ -14,11 +14,18 @@ real Tab press, without needing a running MainLoop or OS-level input.
 """
 
 import time
-import wx
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+import wx
+
 from radiomaster.app import RadioMasterApp
 from radiomaster.services.station_api import Station
+from radiomaster.ui.help_dialog import (
+    QUICK_START_TOPICS,
+    RELEASE_NOTES_TOPICS,
+    USER_MANUAL_TOPICS,
+)
 
 
 @pytest.fixture
@@ -46,6 +53,44 @@ def _nav(win: wx.Window, forward: bool) -> wx.Window:
     f = win.FindFocus()
     f.Navigate(wx.NavigationKeyEvent.IsForward if forward else wx.NavigationKeyEvent.IsBackward)
     return win.FindFocus()
+
+
+class TestHelpSystem:
+    def test_help_menu_has_requested_order(self, app_and_window) -> None:
+        """Manual is first, update check is second-last, and About is last."""
+        _app, win = app_and_window
+        menu_bar = win.GetMenuBar()
+        help_menu = menu_bar.GetMenu(menu_bar.FindMenu("Help"))
+        labels = [
+            item.GetItemLabelText()
+            for item in help_menu.GetMenuItems()
+            if not item.IsSeparator()
+        ]
+        assert labels == [
+            "User Manual",
+            "Quick Start Guide",
+            "Release Notes",
+            "Update YouTube Library...",
+            "Check for Updates...",
+            "About RadioMaster+",
+        ]
+
+    def test_manual_covers_every_main_tab_and_core_reference_area(self) -> None:
+        titles = {title for title, _body in USER_MANUAL_TOPICS}
+        assert {
+            "Radio Tab",
+            "Podcasts Tab",
+            "Audiobooks Tab",
+            "Media Player Tab",
+            "YouTube Tab",
+            "Downloads Tab",
+            "Scheduler Tab",
+            "Settings",
+            "Accessibility Notes",
+            "Troubleshooting",
+        } <= titles
+        assert len(QUICK_START_TOPICS) >= 5
+        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.61"
 
 
 class TestTabOrder:

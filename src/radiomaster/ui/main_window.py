@@ -321,13 +321,18 @@ class MainWindow(wx.Frame):
 
         # Help menu
         help_menu = wx.Menu()
-        help_menu.Append(wx.ID_ABOUT, "&About RadioMaster+")
-        self._menu_ids["check_updates"] = wx.NewIdRef()
-        help_menu.Append(self._menu_ids["check_updates"], "Check for &Updates...")
+        self._menu_ids["user_manual"] = wx.NewIdRef()
+        help_menu.Append(self._menu_ids["user_manual"], "&User Manual\tF1")
+        self._menu_ids["quick_start"] = wx.NewIdRef()
+        help_menu.Append(self._menu_ids["quick_start"], "&Quick Start Guide")
+        self._menu_ids["release_notes"] = wx.NewIdRef()
+        help_menu.Append(self._menu_ids["release_notes"], "&Release Notes")
         self._menu_ids["update_ytdlp"] = wx.NewIdRef()
         help_menu.Append(self._menu_ids["update_ytdlp"], "Update &YouTube Library...")
-        self._menu_ids["documentation"] = wx.NewIdRef()
-        help_menu.Append(self._menu_ids["documentation"], "&Documentation\tF1")
+        help_menu.AppendSeparator()
+        self._menu_ids["check_updates"] = wx.NewIdRef()
+        help_menu.Append(self._menu_ids["check_updates"], "Check for &Updates...")
+        help_menu.Append(wx.ID_ABOUT, "&About RadioMaster+")
         menubar.Append(help_menu, "&Help")
 
         self.SetMenuBar(menubar)
@@ -810,10 +815,12 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._show_settings(), id=wx.ID_PREFERENCES)
 
         # Help menu
-        self.Bind(wx.EVT_MENU, lambda e: self._show_about(), id=wx.ID_ABOUT)
-        self.Bind(wx.EVT_MENU, lambda e: self._check_updates(), id=self._menu_ids["check_updates"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_user_manual(), id=self._menu_ids["user_manual"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_quick_start(), id=self._menu_ids["quick_start"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_release_notes(), id=self._menu_ids["release_notes"])
         self.Bind(wx.EVT_MENU, lambda e: self._update_ytdlp(), id=self._menu_ids["update_ytdlp"])
-        self.Bind(wx.EVT_MENU, lambda e: self._show_documentation(), id=self._menu_ids["documentation"])
+        self.Bind(wx.EVT_MENU, lambda e: self._check_updates(), id=self._menu_ids["check_updates"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_about(), id=wx.ID_ABOUT)
 
     def _on_open_file(self) -> None:
         """Open a file dialog for media files."""
@@ -1699,12 +1706,31 @@ class MainWindow(wx.Frame):
         # guaranteed to actually terminate the process, tray setting or not.
         self.request_exit()
 
-    def _show_documentation(self) -> None:
-        """Show the in-app Help dialog (F1 / Help > Documentation)."""
+    def _show_help_topics(self, title: str, topics: list[tuple[str, str]]) -> None:
+        """Show one of the accessible topic-based Help documents."""
         from radiomaster.ui.help_dialog import HelpDialog
-        dlg = HelpDialog(self)
+        dlg = HelpDialog(self, title=title, topics=topics)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _show_user_manual(self) -> None:
+        """Show the complete in-app user manual (F1)."""
+        from radiomaster.ui.help_dialog import USER_MANUAL_TOPICS
+        self._show_help_topics("RadioMaster+ User Manual", USER_MANUAL_TOPICS)
+
+    def _show_documentation(self) -> None:
+        """Compatibility alias used by the global Open Help action."""
+        self._show_user_manual()
+
+    def _show_quick_start(self) -> None:
+        """Show the short task-oriented getting-started guide."""
+        from radiomaster.ui.help_dialog import QUICK_START_TOPICS
+        self._show_help_topics("RadioMaster+ Quick Start Guide", QUICK_START_TOPICS)
+
+    def _show_release_notes(self) -> None:
+        """Show release notes bundled with this installed version."""
+        from radiomaster.ui.help_dialog import RELEASE_NOTES_TOPICS
+        self._show_help_topics("RadioMaster+ Release Notes", RELEASE_NOTES_TOPICS)
 
     # Listbook page indices for the tabs with their own Previous/Next/
     # First/Last behavior (see AddPage order in _setup_ui) -- everything
