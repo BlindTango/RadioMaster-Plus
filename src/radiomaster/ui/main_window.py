@@ -313,8 +313,6 @@ class MainWindow(wx.Frame):
         tools_menu.Append(self._menu_ids["track_splitter"], "Split &Track...")
         self._menu_ids["shortcut_editor"] = wx.NewIdRef()
         tools_menu.Append(self._menu_ids["shortcut_editor"], "&Keyboard Shortcuts...\tCtrl+K")
-        self._menu_ids["global_hotkeys"] = wx.NewIdRef()
-        tools_menu.Append(self._menu_ids["global_hotkeys"], "&Global Hotkeys...")
         tools_menu.AppendSeparator()
         tools_menu.Append(wx.ID_PREFERENCES, "&Settings...\tCtrl+,")
         menubar.Append(tools_menu, "&Tools")
@@ -561,82 +559,86 @@ class MainWindow(wx.Frame):
         self._now_playing.on_rewind(lambda: self._rewind())
 
     def _setup_accelerators(self) -> None:
-        """Set up global keyboard accelerators mapped to menu IDs.
+        """Build every live accelerator from the editor's command catalogue."""
+        from radiomaster.ui.shortcut_editor import load_shortcuts, shortcut_to_accel
 
-        Deliberately no bare (unmodified) Space/Left/Right/S entries here:
-        a wx.AcceleratorTable on the Frame intercepts those keystrokes
-        globally, before they ever reach a focused control -- so typing "s"
-        or a space anywhere (the search box, a dialog, a station-name field)
-        would vanish, swallowed as a Stop/Play-Pause/seek shortcut instead of
-        being typed. Play/Pause/Stop/Next/Prev are already reachable via the
-        transport buttons and Ctrl+P; that's enough without hijacking plain
-        text entry app-wide.
+        shortcuts = load_shortcuts(self._config)
+        self._active_shortcuts = shortcuts
 
-        A handful of these (play_pause, stop, search, toggle_equalizer,
-        toggle_sleep_timer, toggle_fullscreen, preferences, quit) overlap
-        with actions the Keyboard Shortcuts editor (ui/shortcut_editor.py)
-        lets the user rebind. Called again after that dialog saves, so
-        edits take effect immediately without restarting the app.
-        """
-        from radiomaster.ui.shortcut_editor import shortcut_to_accel
-        saved_shortcuts: dict = self._config.get('shortcuts', default={}) or {}
+        def toggle_effect(effect_id: str) -> None:
+            enabled = not self._engine._effects.get(effect_id, {}).get("enabled", False)
+            self._on_effect_toggle(effect_id, enabled)
+            self._effects_menu.set_enabled(effect_id, enabled)
 
-        def resolve(action_id: str, default_flags: int, default_key: int) -> tuple[int, int]:
-            accel = shortcut_to_accel(saved_shortcuts.get(action_id))
-            return accel if accel is not None else (default_flags, default_key)
+        handlers = {
+            "play_pause": self._on_play_pause_accel, "stop": self._on_stop_accel,
+            "volume_up": lambda: self._on_volume_step(0.05), "volume_down": lambda: self._on_volume_step(-0.05),
+            "mute": self._on_mute_toggle, "seek_forward": self._fast_forward, "seek_backward": self._rewind,
+            "rate_up": lambda: self._on_rate_step(0.1), "rate_down": lambda: self._on_rate_step(-0.1),
+            "speed_up": lambda: self._on_rate_step(0.1),
+            "speed_down": lambda: self._on_rate_step(-0.1),
+            "pan_left": lambda: self._on_pan_step(-0.1), "pan_right": lambda: self._on_pan_step(0.1),
+            "first_track": self._first_track, "previous_track": self._prev_track,
+            "next_track": self._next_track, "last_track": self._last_track,
+            "record": self._radio_panel._on_record, "search": self._on_search_focus,
+            "open_file": self._on_open_file, "open_url": self._on_open_url, "open_folder": self._on_open_folder,
+            "import_opml": self._on_import_opml, "export_opml": self._on_export_opml, "exit": self.request_exit,
+            "toggle_equalizer": self._show_equalizer, "toggle_lyrics": self._toggle_lyrics,
+            "toggle_fullscreen": self._toggle_fullscreen, "theme_light": lambda: self._apply_theme("default"),
+            "theme_dark": lambda: self._apply_theme("dark"), "theme_editor": self._show_theme_editor,
+            "language_english": lambda: self._set_language("en"), "sleep_timer": self._show_sleep_timer,
+            "download_manager": lambda: self._switch_tab(5), "recording_scheduler": lambda: self._switch_tab(6),
+            "track_identifier": self._show_track_identifier, "track_splitter": self._show_track_splitter,
+            "keyboard_shortcuts": self._show_shortcut_editor,
+            "settings": self._show_settings, "user_manual": self._show_user_manual,
+            "quick_start": self._show_quick_start, "release_notes": self._show_release_notes,
+            "update_ytdlp": self._update_ytdlp, "check_updates": self._check_updates, "about": self._show_about,
+        }
+        for index in range(7):
+            handlers[f"panel_{('radio', 'podcasts', 'audiobooks', 'media', 'youtube', 'downloads', 'scheduler')[index]}"] = (
+                lambda i=index: self._switch_tab(i)
+            )
+        for effect_id in ("echo", "equalizer", "reverb", "dynamic_range", "pitch_tempo", "chorus",
+                          "compressor", "distortion", "flanger", "gargle"):
+            handlers[f"effect_{effect_id}"] = lambda eid=effect_id: toggle_effect(eid)
+        self._shortcut_handlers = handlers
 
-        play_pause_id = wx.NewIdRef()
-        stop_id = wx.NewIdRef()
-        search_id = wx.NewIdRef()
-
-        entries = [
-            (*resolve('play_pause', wx.ACCEL_CTRL, ord('P')), play_pause_id),
-            (*resolve('stop', wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord('S')), stop_id),
-            (wx.ACCEL_CTRL, ord('O'), wx.ID_OPEN),
-            (*resolve('preferences', wx.ACCEL_CTRL, ord(',')), wx.ID_PREFERENCES),
-            (*resolve('toggle_fullscreen', wx.ACCEL_NORMAL, wx.WXK_F11), self._menu_ids["fullscreen"]),
-            (wx.ACCEL_CTRL, ord('L'), self._menu_ids["toggle_lyrics"]),
-            (*resolve('toggle_equalizer', wx.ACCEL_CTRL, ord('E')), self._menu_ids["toggle_equalizer"]),
-            (wx.ACCEL_CTRL, ord('D'), self._menu_ids["download_manager"]),
-            (wx.ACCEL_CTRL, ord('R'), self._menu_ids["scheduler"]),
-            (wx.ACCEL_CTRL, ord('I'), self._menu_ids["track_identifier"]),
-            (wx.ACCEL_CTRL, ord('K'), self._menu_ids["shortcut_editor"]),
-            (wx.ACCEL_CTRL, ord('U'), self._menu_ids["open_url"]),
-            (*resolve('search', wx.ACCEL_CTRL, ord('F')), search_id),
-            (*resolve('toggle_sleep_timer', wx.ACCEL_CTRL, ord('T')), self._menu_ids["sleep_timer"]),
-            (*resolve('quit', wx.ACCEL_CTRL, ord('Q')), wx.ID_EXIT),
-        ]
-        accel_table = wx.AcceleratorTable(entries)
-        self.SetAcceleratorTable(accel_table)
-
-        # Bind accelerator-only shortcuts
-        self.Bind(wx.EVT_MENU, lambda e: self._on_play_pause_accel(), id=play_pause_id)
-        self.Bind(wx.EVT_MENU, lambda e: self._on_stop_accel(), id=stop_id)
-        self.Bind(wx.EVT_MENU, lambda e: self._on_search_focus(), id=search_id)
-
-        # Tab switching shortcuts (Ctrl+1 through Ctrl+7)
-        for tab_idx in range(7):
-            id_ref = wx.NewIdRef()
-            entries.append((wx.ACCEL_CTRL, ord(str(tab_idx + 1)), id_ref))
-            self.Bind(wx.EVT_MENU, lambda e, i=tab_idx: self._switch_tab(i), id=id_ref)
-        # Rebuild the accelerator table with tab shortcuts included
+        entries = []
+        # Keep ID refs alive and reuse them when the table is rebuilt after Save.
+        if not hasattr(self, "_shortcut_command_ids"):
+            self._shortcut_command_ids = {action: wx.NewIdRef() for action in handlers}
+            for action, handler in handlers.items():
+                self.Bind(wx.EVT_MENU, lambda event, callback=handler: callback(), id=self._shortcut_command_ids[action])
+        for action, handler in handlers.items():
+            accel = shortcut_to_accel(shortcuts.get(action))
+            if accel and not shortcuts[action].get("global") and shortcuts[action].get("key") != "Tab":
+                entries.append((*accel, self._shortcut_command_ids[action]))
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
-
-        # Ctrl+Tab / Ctrl+Shift+Tab -- same pattern as SettingsDialog's own
-        # _on_char_hook. An AcceleratorTable entry can't express this: Tab
-        # has no ord() and wx reserves plain/Ctrl+Tab for its own focus
-        # navigation before an accelerator ever sees it, so it has to be
-        # caught earlier via EVT_CHAR_HOOK on the frame instead.
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        if not getattr(self, "_shortcut_char_hook_bound", False):
+            self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+            self._shortcut_char_hook_bound = True
+        self._register_global_hotkeys()
 
     def _on_char_hook(self, evt: wx.KeyEvent) -> None:
-        if evt.ControlDown() and evt.GetKeyCode() == wx.WXK_TAB:
+        from radiomaster.ui.shortcut_editor import shortcut_signature
+        modifiers = []
+        if evt.ControlDown(): modifiers.append("Ctrl")
+        if evt.ShiftDown(): modifiers.append("Shift")
+        if evt.AltDown(): modifiers.append("Alt")
+        signature = (tuple(sorted(modifiers)), "Tab")
+        next_shortcut = self._active_shortcuts.get("next_tab", {})
+        previous_shortcut = self._active_shortcuts.get("previous_tab", {})
+        next_signature = shortcut_signature(next_shortcut) if not next_shortcut.get("global") else ((), "")
+        previous_signature = (
+            shortcut_signature(previous_shortcut) if not previous_shortcut.get("global") else ((), "")
+        )
+        if evt.GetKeyCode() == wx.WXK_TAB and signature in (next_signature, previous_signature):
             count = self._listbook.GetPageCount()
             if count:
                 idx = self._listbook.GetSelection()
                 if idx == wx.NOT_FOUND:
                     idx = 0
-                new_idx = (idx - 1) if evt.ShiftDown() else (idx + 1)
+                new_idx = (idx - 1) if signature == previous_signature else (idx + 1)
                 new_idx %= count
                 self._switch_tab(new_idx)
         else:
@@ -811,7 +813,6 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_identifier(), id=self._menu_ids["track_identifier"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_splitter(), id=self._menu_ids["track_splitter"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_shortcut_editor(), id=self._menu_ids["shortcut_editor"])
-        self.Bind(wx.EVT_MENU, lambda e: self._show_global_hotkeys(), id=self._menu_ids["global_hotkeys"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_settings(), id=wx.ID_PREFERENCES)
 
         # Help menu
@@ -1241,39 +1242,16 @@ class MainWindow(wx.Frame):
             self._setup_accelerators()
         dlg.Destroy()
 
-    def _show_global_hotkeys(self) -> None:
-        """Show the global (system-wide) hotkeys dialog."""
-        from radiomaster.ui.hotkeys_dialog import GlobalHotkeysDialog
-        dlg = GlobalHotkeysDialog(self, self._config)
-        if dlg.ShowModal() == wx.ID_OK:
-            self._register_global_hotkeys()
-        dlg.Destroy()
-
     def _register_global_hotkeys(self) -> None:
-        """(Re)register every configured global hotkey. Safe to call
-        repeatedly -- GlobalHotkeyManager unregisters everything first."""
-        hotkeys = self._config.get("hotkeys", default={}) or {}
-        if not hotkeys:
-            return
-        handlers = {
-            "play_pause": lambda: self._on_transport_play_pause(),
-            "stop": lambda: self._on_stop_action(),
-            "next_track": lambda: self._next_track(),
-            "prev_track": lambda: self._prev_track(),
-            "volume_up": lambda: self._on_volume_change(min(1.0, self._engine._volume + 0.05)),
-            "volume_down": lambda: self._on_volume_change(max(0.0, self._engine._volume - 0.05)),
-            "mute": lambda: self._on_mute_toggle(),
-            "pan_left": lambda: self._on_pan_step(-0.1),
-            "pan_right": lambda: self._on_pan_step(0.1),
-            "rate_up": lambda: self._on_rate_step(0.1),
-            "rate_down": lambda: self._on_rate_step(-0.1),
-            "record": lambda: self._radio_panel._on_record(),
-            "open_recording_folder": lambda: self._on_open_recording_folder(),
-            "open_podcast_folder": lambda: self._on_open_podcast_folder(),
-            "open_settings": lambda: self._show_settings(),
-            "open_scheduler": lambda: self._switch_tab(6),
-            "open_help": lambda: self._show_documentation(),
-        }
+        """Register assignments marked Global in the unified shortcut editor."""
+        from radiomaster.ui.shortcut_editor import load_shortcuts, shortcut_to_global_spec
+
+        shortcuts = load_shortcuts(self._config)
+        hotkeys = {}
+        for action, shortcut in shortcuts.items():
+            if shortcut.get("global") and (spec := shortcut_to_global_spec(shortcut)):
+                hotkeys[action] = [spec]
+        handlers = getattr(self, "_shortcut_handlers", {})
         warnings = self._global_hotkey_manager.register_all(hotkeys, handlers)
         if warnings:
             log = logging.getLogger("radiomaster")

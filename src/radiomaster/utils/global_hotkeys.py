@@ -5,9 +5,9 @@ a "global" hotkey (play/pause/stop/volume from anywhere). Distinct from the
 in-app accelerator-table shortcuts (ui/shortcut_editor.py), which only fire
 while the app has focus.
 
-Each action may have zero, one, or several key combinations bound to it (see
-GlobalHotkeysDialog's add/edit/remove list), so config stores "hotkeys" as
-dict[str, list[str]] rather than a single spec per action.
+The accessible Keyboard Shortcuts editor owns assignment and persistence.
+This module is now only the Windows registration backend for assignments whose
+Global checkbox is selected.
 """
 
 from __future__ import annotations

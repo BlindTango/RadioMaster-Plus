@@ -11,12 +11,47 @@ import wx
 
 from radiomaster.utils.accessibility import set_accessible_name
 
+
+def _key(action: str) -> str:
+    """A marker resolved from current configuration when a help window opens."""
+    return f"{{shortcut:{action}}}"
+
+
+def render_help_topics(topics: list[tuple[str, str]], config) -> list[tuple[str, str]]:
+    """Resolve shortcut markers from the same catalogue used by MainWindow."""
+    from radiomaster.ui.shortcut_editor import format_shortcut, load_shortcuts
+
+    shortcuts = load_shortcuts(config)
+
+    def display(action: str) -> str:
+        shortcut = shortcuts.get(action, {})
+        value = format_shortcut(shortcut)
+        if value == "Unassigned":
+            return value
+        return f"{value} ({'Global' if shortcut.get('global') else 'In app'})"
+
+    panel_actions = (
+        ("Radio", "panel_radio"), ("Podcasts", "panel_podcasts"),
+        ("Audiobooks", "panel_audiobooks"), ("Media Player", "panel_media"),
+        ("YouTube", "panel_youtube"), ("Downloads", "panel_downloads"),
+        ("Scheduler", "panel_scheduler"),
+    )
+    panel_summary = "; ".join(f"{label}: {display(action)}" for label, action in panel_actions)
+    rendered = []
+    for title, body in topics:
+        body = body.replace("{panel_shortcuts}", panel_summary)
+        for action in shortcuts:
+            body = body.replace(f"{{shortcut:{action}}}", display(action))
+        rendered.append((title, body))
+    return rendered
+
 USER_MANUAL_TOPICS: list[tuple[str, str]] = [
     ("Welcome and Overview", (
         "RadioMaster+ streams internet radio, podcasts, YouTube videos, audiobooks "
         "(including DAISY), and local media files -- all fully operable by keyboard "
         "and screen reader.\n\n"
-        "The main window has seven tabs, reached with Ctrl+1 through Ctrl+7 or by "
+        "The main window has seven tabs, reached with the assigned panel shortcuts "
+        "({panel_shortcuts}) or by "
         "clicking a tab: Radio, Podcasts, Audiobooks, Media Player, YouTube, Downloads, "
         "and Scheduler. Below the tabs is the transport bar (Play/Pause, Stop, "
         "Next/Previous/First/Last, Volume, Rate, Pan, Record, Mute), which stays the "
@@ -28,9 +63,9 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
     ("Main Window and Menus", (
         "The main window is divided into a seven-page listbook, a persistent Now "
         "Playing and transport area, an optional lyrics panel, and a status bar. "
-        "Use Ctrl+1 through Ctrl+7 to open Radio, Podcasts, Audiobooks, Media "
-        "Player, YouTube, Downloads, or Scheduler. Ctrl+Tab and Ctrl+Shift+Tab "
-        "move forward and backward through those pages.\n\n"
+        "Assigned panel shortcuts are {panel_shortcuts}. Use "
+        f"{_key('next_tab')} and {_key('previous_tab')} to move forward and backward "
+        "through those pages.\n\n"
         "File opens local files, folders, URLs, and podcast OPML files. View "
         "controls the equalizer, lyrics panel, fullscreen mode, theme, and "
         "language. Effects contains live audio effects and preset managers. "
@@ -43,7 +78,7 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "dialog without applying an action."
     )),
     ("Step by Step: Play Your First Station", (
-        "1. Make sure the Radio tab is selected (Ctrl+1).\n"
+        f"1. Make sure the Radio tab is selected ({_key('panel_radio')}).\n"
         "2. Tab to the station list on the right, or use Search at the top to find "
         "a station by name, genre, country, or language.\n"
         "3. Select a station and press Enter, or double-click it, to start playing.\n"
@@ -64,7 +99,7 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "folder next to the app itself rather than your user profile."
     )),
     ("Step by Step: Subscribe to a Podcast", (
-        "1. Switch to the Podcasts tab (Ctrl+2).\n"
+        f"1. Switch to the Podcasts tab ({_key('panel_podcasts')}).\n"
         "2. Use the search box to find a show, or File > Podcasts > Add Feed... to "
         "subscribe directly by RSS URL.\n"
         "3. Select an episode and press Play, or Download Episode to save it for "
@@ -73,11 +108,11 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "to or from another podcast app."
     )),
     ("Step by Step: Download a YouTube Video", (
-        "1. Switch to the YouTube tab (Ctrl+5).\n"
+        f"1. Switch to the YouTube tab ({_key('panel_youtube')}).\n"
         "2. Search for a video or paste a URL.\n"
         "3. Select a result, choose a quality/format, and press Download Video "
         "(or Download Audio Only for MP3/Opus/FLAC extraction).\n"
-        "4. Track progress in the Downloads tab (Ctrl+6) -- downloads are "
+        f"4. Track progress in the Downloads tab ({_key('panel_downloads')}) -- downloads are "
         "queue-based and can be paused/resumed."
     )),
     ("Radio Tab", (
@@ -160,7 +195,7 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "space, and network availability before relying on an unattended schedule."
     )),
     ("Step by Step: Read/Listen to an Audiobook", (
-        "1. Switch to the Audiobooks tab (Ctrl+3) and browse to a DAISY 2.02 or "
+        f"1. Switch to the Audiobooks tab ({_key('panel_audiobooks')}) and browse to a DAISY 2.02 or "
         "NISO 39.86 book folder, or a folder of conventional audio files.\n"
         "2. Use the chapter list to jump to any chapter -- audio and text stay "
         "synchronized, with the current sentence highlighted as it plays.\n"
@@ -213,13 +248,13 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "of what you're currently listening to."
     )),
     ("Downloads", (
-        "The Downloads tab (Ctrl+6) shows every queued, in-progress, and completed "
+        f"The Downloads tab ({_key('panel_downloads')}) shows every queued, in-progress, and completed "
         "download from Podcasts and YouTube in one place, with pause/resume and "
         "history. Download location, format, and metadata embedding are configured "
         "in Settings > Downloads."
     )),
     ("Lyrics Panel", (
-        "View > Toggle Lyrics Panel (Ctrl+L) shows or hides lyrics for the current "
+        f"View > Toggle Lyrics Panel ({_key('toggle_lyrics')}) shows or hides lyrics for the current "
         "track. RadioMaster+ can query LRCLib, Lyrics.ovh, Genius, and Musixmatch, "
         "then caches successful results locally. Synced LRC lyrics highlight the "
         "current line during playback; plain lyrics remain readable without timed "
@@ -238,37 +273,31 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "output folder when you want to preserve the original recording untouched."
     )),
     ("Sleep Timer", (
-        "Tools > Sleep Timer (Ctrl+T) can stop playback after a countdown, at the "
+        f"Tools > Sleep Timer ({_key('sleep_timer')}) can stop playback after a countdown, at the "
         "end of the current track, or at the end of the playlist. Review the active "
         "timer before leaving the computer unattended. Starting a replacement timer "
         "supersedes the previous timer."
     )),
-    ("Global Hotkeys", (
-        "Tools > Global Hotkeys... assigns system-wide key combinations to Play/"
-        "Pause, Stop, Next/Previous Track, Volume Up/Down, Mute, Record, Open "
-        "Settings, Open Recording Scheduler, and Open Help -- these work even when "
-        "RadioMaster+ isn't the focused window, unlike the in-app keyboard shortcuts "
-        "below.\n\n"
-        "Press Add..., choose a feature, then the key combination you want (e.g. "
-        "Ctrl+Alt+P). A feature can have more than one binding -- select an "
-        "existing one and press Edit... or Remove to change it."
-    )),
-    ("In-App Keyboard Shortcuts", (
-        "Tools > Keyboard Shortcuts... (Ctrl+K) lets you view and rebind every "
-        "in-app action -- these only work while RadioMaster+ has focus, unlike "
-        "Global Hotkeys above. Conflicts with an existing binding are flagged "
+    ("Keyboard Shortcuts", (
+        f"Tools > Keyboard Shortcuts... ({_key('keyboard_shortcuts')}) lets you view and rebind menu, "
+        "panel, and playback actions in one accessible list. Use New, Edit, or "
+        "Delete to manage an assignment. Check Global shortcut while creating or "
+        "editing an assignment when it should work even while RadioMaster+ is not "
+        "focused. Leave it unchecked for an in-app shortcut. Conflicts are rejected "
         "before you can save."
     )),
     ("Default Keyboard Navigation", (
-        "Ctrl+1 through Ctrl+7: open the seven main tabs.\n"
-        "Ctrl+Tab / Ctrl+Shift+Tab: next or previous tab.\n"
-        "Ctrl+P: play or pause. Ctrl+Shift+S: stop.\n"
-        "Ctrl+F: focus search on the current searchable tab.\n"
-        "Ctrl+O: open a file. Ctrl+U: open a URL.\n"
-        "Ctrl+L: toggle lyrics. F11: toggle fullscreen.\n"
-        "Ctrl+D: Downloads. Ctrl+R: Scheduler. Ctrl+I: Track Identifier.\n"
-        "Ctrl+T: Sleep Timer. Ctrl+K: Keyboard Shortcuts. Ctrl+,: Settings.\n"
-        "F1: User Manual. Alt+F4 or Ctrl+Q: exit.\n\n"
+        "Panel shortcuts: {panel_shortcuts}.\n"
+        f"{_key('next_tab')}: next panel. {_key('previous_tab')}: previous panel.\n"
+        f"{_key('play_pause')}: play or pause. {_key('stop')}: stop.\n"
+        f"{_key('search')}: focus search.\n"
+        f"{_key('open_file')}: open a file. {_key('open_url')}: open a URL.\n"
+        f"{_key('toggle_lyrics')}: toggle lyrics. {_key('toggle_fullscreen')}: toggle fullscreen.\n"
+        f"{_key('download_manager')}: Downloads. {_key('recording_scheduler')}: Scheduler. "
+        f"{_key('track_identifier')}: Track Identifier.\n"
+        f"{_key('sleep_timer')}: Sleep Timer. {_key('keyboard_shortcuts')}: Keyboard Shortcuts. "
+        f"{_key('settings')}: Settings.\n"
+        f"{_key('user_manual')}: User Manual. {_key('exit')}: exit.\n\n"
         "Lists use Up/Down, Home/End, Page Up/Page Down, and Enter in the normal "
         "Windows manner. Tab and Shift+Tab move between controls. Context Menu or "
         "Shift+F10 opens an item's available commands. User-rebound shortcuts can "
@@ -276,7 +305,7 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "does not perform the action shown here."
     )),
     ("Settings", (
-        "Tools > Settings... (Ctrl+,) covers 9 categories: General, Playback, "
+        f"Tools > Settings... ({_key('settings')}) covers 9 categories: General, Playback, "
         "Radio, Podcasts, Downloads, Recordings, Network, Accessibility, and "
         "Advanced (logging level and log file location).\n\n"
         "Notable options: default volume/rate, crossfade duration, output audio "
@@ -290,7 +319,7 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "Every control has an explicit accessible name read by NVDA/Narrator, "
         "including composite controls like the search box's inner text field. Full "
         "keyboard navigation is supported throughout -- every feature, including "
-        "the Effects menu's Preset Manager and the Global Hotkeys editor, is "
+        "the Effects menu's Preset Manager and Keyboard Shortcuts editor, is "
         "reachable without a mouse.\n\n"
         "High Contrast mode (Settings > Accessibility) respects Windows' system "
         "high-contrast setting, and a dyslexia-friendly font option (OpenDyslexic) "
@@ -374,30 +403,30 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
 
 QUICK_START_TOPICS: list[tuple[str, str]] = [
     ("Five-Minute Quick Start", (
-        "1. Use Ctrl+1 through Ctrl+7 to choose a main tab.\n"
+        "1. Use an assigned panel shortcut to choose a main tab: {panel_shortcuts}.\n"
         "2. On Radio, select a station and press Enter. On Podcasts or YouTube, "
         "search first, select a result, and press Enter.\n"
-        "3. Use Ctrl+P to play or pause and Ctrl+Shift+S to stop. Tab to the Now "
+        f"3. Use {_key('play_pause')} to play or pause and {_key('stop')} to stop. Tab to the Now "
         "Playing controls for Volume, Rate, Pan, seeking, recording, and track "
         "navigation.\n"
-        "4. Press Ctrl+, to review output device, downloads, recordings, network, "
+        f"4. Press {_key('settings')} to review output device, downloads, recordings, network, "
         "accessibility, and update settings.\n"
-        "5. Press F1 at any time for the complete User Manual."
+        f"5. Press {_key('user_manual')} at any time for the complete User Manual."
     )),
     ("Play Internet Radio", (
-        "Press Ctrl+1. Tab to Search and type a station name, genre, country, or "
+        f"Press {_key('panel_radio')}. Tab to Search and type a station name, genre, country, or "
         "language, or browse the category tree. Select a station in the results "
         "list and press Enter. Use the context menu to add it to Favorites or start "
         "recording."
     )),
     ("Play Podcasts, Local Media, and Audiobooks", (
-        "Podcasts: press Ctrl+2, search or choose a subscription, select an episode, "
-        "and press Enter. Audiobooks: press Ctrl+3, choose Browse Folder, select a "
-        "chapter, then Play or Read with TTS. Local media: press Ctrl+O for a file "
+        f"Podcasts: press {_key('panel_podcasts')}, search or choose a subscription, select an episode, "
+        f"and press Enter. Audiobooks: press {_key('panel_audiobooks')}, choose Browse Folder, select a "
+        f"chapter, then Play or Read with TTS. Local media: press {_key('open_file')} for a file "
         "or use File > Open Folder, then select a playlist item and press Enter."
     )),
     ("Play YouTube", (
-        "Press Ctrl+5, enter a search, choose Videos, Channels, or Playlists, and "
+        f"Press {_key('panel_youtube')}, enter a search, choose Videos, Channels, or Playlists, and "
         "activate a result. RadioMaster+ prepares the best available video and audio "
         "before opening playback, so large or 4K videos can take longer to start. "
         "Use Help > Update YouTube Library if extraction stops working."
@@ -405,8 +434,8 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
     ("Accessibility Essentials", (
         "Tab and Shift+Tab move between controls. Arrow keys move in lists and "
         "menus, Enter activates, Shift+F10 opens a context menu, and Escape backs "
-        "out. Ctrl+Tab changes main tabs. Tools > Keyboard Shortcuts changes in-app "
-        "keys; Tools > Global Hotkeys creates keys that work outside the app. "
+        f"out. {_key('next_tab')} changes main tabs. Tools > Keyboard Shortcuts manages both "
+        "in-app and optional global keys from one accessible list. "
         "Settings > Accessibility contains high contrast, dyslexia font, screen "
         "reader optimization, enhanced keyboard navigation, focus indicators, and "
         "reduced motion."
@@ -415,6 +444,18 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.62", (
+        "Redesigned Keyboard Shortcuts as an accessible, searchable CRUD manager "
+        "covering menus, panels, effects, and playback controls. Added explicit "
+        "main-key and left/right modifier selection, duplicate prevention, and "
+        "immediate application of saved assignments.\n\n"
+        "Consolidated global hotkeys into the same editor with a per-assignment "
+        "Global shortcut checkbox, scope column, Windows-key support for global "
+        "assignments, and one authoritative command catalogue.\n\n"
+        "The User Manual and Quick Start Guide now resolve every documented "
+        "shortcut dynamically, including its Global or In-app scope, so help "
+        "always reflects the current saved configuration."
+    )),
     ("Version 1.1.61", (
         "Added a comprehensive offline User Manual covering every main tab, menus, "
         "playback, effects, recording, downloads, lyrics, track tools, settings, "
@@ -450,10 +491,14 @@ RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
 
 class HelpDialog(wx.Dialog):
     def __init__(self, parent: wx.Window, *, title: str = "RadioMaster+ User Manual",
-                 topics: list[tuple[str, str]] | None = None) -> None:
+                 topics: list[tuple[str, str]] | None = None, config=None) -> None:
         super().__init__(parent, title=title,
                           size=(780, 520), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
-        self._topics = topics if topics is not None else USER_MANUAL_TOPICS
+        source_topics = topics if topics is not None else USER_MANUAL_TOPICS
+        active_config = config if config is not None else getattr(parent, "_config", None)
+        self._topics = (
+            render_help_topics(source_topics, active_config) if active_config is not None else source_topics
+        )
 
         topics_label = wx.StaticText(self, label="&Topics:")
         self.topic_list = wx.ListBox(self, choices=[topic for topic, _ in self._topics])
