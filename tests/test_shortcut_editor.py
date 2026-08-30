@@ -3,12 +3,14 @@
 from radiomaster.ui.help_dialog import render_help_topics
 from radiomaster.ui.shortcut_editor import (
     DEFAULT_SHORTCUTS,
+    KEYS,
     find_conflict,
     load_shortcuts,
     shortcut_signature,
     shortcut_to_accel,
     shortcut_to_global_spec,
 )
+from radiomaster.utils.global_hotkeys import parse_hotkey
 
 
 class FakeConfig:
@@ -49,6 +51,26 @@ def test_left_and_right_modifiers_conflict_at_runtime() -> None:
 def test_windows_modifier_is_not_silently_converted_to_ctrl() -> None:
     assert shortcut_to_accel({"key": "A", "modifiers": ["Left Windows"]}) is None
     assert shortcut_to_global_spec({"key": "A", "modifiers": ["Left Windows"]}) == "Windows+A"
+
+
+def test_multimedia_and_extended_keys_are_available_and_convertible() -> None:
+    expected = {
+        "Media Play/Pause", "Media Stop", "Media Next Track", "Media Previous Track",
+        "Volume Up", "Volume Down", "Volume Mute", "Browser Home", "Launch Mail",
+        "Context Menu", "Num Lock", "Numpad Enter",
+    }
+    assert expected <= set(KEYS)
+    for key in expected:
+        shortcut = {"key": key, "modifiers": [], "global": False}
+        assert shortcut_to_accel(shortcut) is not None, key
+
+
+def test_multimedia_keys_can_be_global() -> None:
+    spec = shortcut_to_global_spec({
+        "key": "Media Play/Pause", "modifiers": [], "global": True,
+    })
+    assert spec == "MEDIAPLAYPAUSE"
+    assert parse_hotkey(spec) is not None
 
 
 def test_global_scope_is_loaded_with_assignment() -> None:

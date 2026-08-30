@@ -140,6 +140,30 @@ KEYS = (
         "Print Screen",
         "Scroll Lock",
         "Pause",
+        "Context Menu",
+        "Help",
+        "Select",
+        "Execute",
+        "Cancel",
+        "Clear",
+        "Num Lock",
+        "Media Play/Pause",
+        "Media Stop",
+        "Media Next Track",
+        "Media Previous Track",
+        "Volume Up",
+        "Volume Down",
+        "Volume Mute",
+        "Browser Back",
+        "Browser Forward",
+        "Browser Refresh",
+        "Browser Stop",
+        "Browser Search",
+        "Browser Favorites",
+        "Browser Home",
+        "Launch Mail",
+        "Launch App 1",
+        "Launch App 2",
         "`",
         "-",
         "=",
@@ -160,7 +184,23 @@ KEYS = (
         "Numpad Divide",
         "Numpad Decimal",
         "Numpad Enter",
+        "Numpad Equal",
+        "Numpad Separator",
+        "Numpad Space",
+        "Numpad Tab",
+        "Numpad Home",
+        "Numpad End",
+        "Numpad PageUp",
+        "Numpad PageDown",
+        "Numpad Insert",
+        "Numpad Delete",
+        "Numpad Up",
+        "Numpad Down",
+        "Numpad Left",
+        "Numpad Right",
     ]
+    + [f"Special {n}" for n in range(1, 21)]
+    + [f"Launch {n}" for n in list(range(10)) + list("ABCDEF")]
 )
 
 _WX_KEYS = {
@@ -180,18 +220,63 @@ _WX_KEYS = {
     "Left": wx.WXK_LEFT,
     "Right": wx.WXK_RIGHT,
     "Pause": wx.WXK_PAUSE,
+    "Caps Lock": wx.WXK_CAPITAL,
+    "Print Screen": wx.WXK_SNAPSHOT,
+    "Scroll Lock": wx.WXK_SCROLL,
+    "Num Lock": wx.WXK_NUMLOCK,
+    "Context Menu": wx.WXK_WINDOWS_MENU,
+    "Help": wx.WXK_HELP,
+    "Select": wx.WXK_SELECT,
+    "Execute": wx.WXK_EXECUTE,
+    "Cancel": wx.WXK_CANCEL,
+    "Clear": wx.WXK_CLEAR,
+    "Media Play/Pause": wx.WXK_MEDIA_PLAY_PAUSE,
+    "Media Stop": wx.WXK_MEDIA_STOP,
+    "Media Next Track": wx.WXK_MEDIA_NEXT_TRACK,
+    "Media Previous Track": wx.WXK_MEDIA_PREV_TRACK,
+    "Volume Up": wx.WXK_VOLUME_UP,
+    "Volume Down": wx.WXK_VOLUME_DOWN,
+    "Volume Mute": wx.WXK_VOLUME_MUTE,
+    "Browser Back": wx.WXK_BROWSER_BACK,
+    "Browser Forward": wx.WXK_BROWSER_FORWARD,
+    "Browser Refresh": wx.WXK_BROWSER_REFRESH,
+    "Browser Stop": wx.WXK_BROWSER_STOP,
+    "Browser Search": wx.WXK_BROWSER_SEARCH,
+    "Browser Favorites": wx.WXK_BROWSER_FAVORITES,
+    "Browser Home": wx.WXK_BROWSER_HOME,
+    "Launch Mail": wx.WXK_LAUNCH_MAIL,
+    "Launch App 1": wx.WXK_LAUNCH_APP1,
+    "Launch App 2": wx.WXK_LAUNCH_APP2,
     "Numpad Add": wx.WXK_NUMPAD_ADD,
     "Numpad Subtract": wx.WXK_NUMPAD_SUBTRACT,
     "Numpad Multiply": wx.WXK_NUMPAD_MULTIPLY,
     "Numpad Divide": wx.WXK_NUMPAD_DIVIDE,
     "Numpad Decimal": wx.WXK_NUMPAD_DECIMAL,
     "Numpad Enter": wx.WXK_NUMPAD_ENTER,
+    "Numpad Equal": wx.WXK_NUMPAD_EQUAL,
+    "Numpad Separator": wx.WXK_NUMPAD_SEPARATOR,
+    "Numpad Space": wx.WXK_NUMPAD_SPACE,
+    "Numpad Tab": wx.WXK_NUMPAD_TAB,
+    "Numpad Home": wx.WXK_NUMPAD_HOME,
+    "Numpad End": wx.WXK_NUMPAD_END,
+    "Numpad PageUp": wx.WXK_NUMPAD_PAGEUP,
+    "Numpad PageDown": wx.WXK_NUMPAD_PAGEDOWN,
+    "Numpad Insert": wx.WXK_NUMPAD_INSERT,
+    "Numpad Delete": wx.WXK_NUMPAD_DELETE,
+    "Numpad Up": wx.WXK_NUMPAD_UP,
+    "Numpad Down": wx.WXK_NUMPAD_DOWN,
+    "Numpad Left": wx.WXK_NUMPAD_LEFT,
+    "Numpad Right": wx.WXK_NUMPAD_RIGHT,
 }
 for _n in range(1, 25):
     if (value := getattr(wx, f"WXK_F{_n}", None)) is not None:
         _WX_KEYS[f"F{_n}"] = value
 for _n in range(10):
     _WX_KEYS[f"Numpad {_n}"] = getattr(wx, f"WXK_NUMPAD{_n}")
+for _n in range(1, 21):
+    _WX_KEYS[f"Special {_n}"] = getattr(wx, f"WXK_SPECIAL{_n}")
+for _name in [*map(str, range(10)), *"ABCDEF"]:
+    _WX_KEYS[f"Launch {_name}"] = getattr(wx, f"WXK_LAUNCH_{_name}")
 
 
 def format_shortcut(shortcut: dict) -> str:
@@ -248,21 +333,58 @@ def shortcut_to_global_spec(shortcut: dict) -> str | None:
     key_aliases = {
         "PageUp": "PAGEUP",
         "PageDown": "PAGEDOWN",
-        "Numpad Add": None,
-        "Numpad Subtract": None,
-        "Numpad Multiply": None,
-        "Numpad Divide": None,
-        "Numpad Decimal": None,
-        "Numpad Enter": None,
-        "Caps Lock": None,
-        "Print Screen": None,
-        "Scroll Lock": None,
+        "Caps Lock": "CAPSLOCK",
+        "Print Screen": "PRINTSCREEN",
+        "Scroll Lock": "SCROLLLOCK",
+        "Num Lock": "NUMLOCK",
+        "Context Menu": "CONTEXTMENU",
+        "Media Play/Pause": "MEDIAPLAYPAUSE",
+        "Media Stop": "MEDIASTOP",
+        "Media Next Track": "MEDIANEXTTRACK",
+        "Media Previous Track": "MEDIAPREVTRACK",
+        "Volume Up": "VOLUMEUP",
+        "Volume Down": "VOLUMEDOWN",
+        "Volume Mute": "VOLUMEMUTE",
+        "Browser Back": "BROWSERBACK",
+        "Browser Forward": "BROWSERFORWARD",
+        "Browser Refresh": "BROWSERREFRESH",
+        "Browser Stop": "BROWSERSTOP",
+        "Browser Search": "BROWSERSEARCH",
+        "Browser Favorites": "BROWSERFAVORITES",
+        "Browser Home": "BROWSERHOME",
+        "Launch Mail": "LAUNCHMAIL",
+        "Launch App 1": "LAUNCHAPP1",
+        "Launch App 2": "LAUNCHAPP2",
+        "Numpad Add": "NUMPADADD",
+        "Numpad Subtract": "NUMPADSUBTRACT",
+        "Numpad Multiply": "NUMPADMULTIPLY",
+        "Numpad Divide": "NUMPADDIVIDE",
+        "Numpad Decimal": "NUMPADDECIMAL",
+        "Numpad Enter": "NUMPADENTER",
+        "Numpad Equal": "NUMPADEQUAL",
+        "Numpad Separator": "NUMPADSEPARATOR",
+        "Numpad Space": "NUMPADSPACE",
+        "Numpad Tab": "NUMPADTAB",
+        "Numpad Home": "NUMPADHOME",
+        "Numpad End": "NUMPADEND",
+        "Numpad PageUp": "NUMPADPAGEUP",
+        "Numpad PageDown": "NUMPADPAGEDOWN",
+        "Numpad Insert": "NUMPADINSERT",
+        "Numpad Delete": "NUMPADDELETE",
+        "Numpad Up": "NUMPADUP",
+        "Numpad Down": "NUMPADDOWN",
+        "Numpad Left": "NUMPADLEFT",
+        "Numpad Right": "NUMPADRIGHT",
         "Backspace": None,
     }
+    for name in [*map(str, range(10)), *"ABCDEF"]:
+        key_aliases[f"Launch {name}"] = f"LAUNCH{name}"
+    for number in range(10):
+        key_aliases[f"Numpad {number}"] = f"NUMPAD{number}"
+    for number in range(1, 21):
+        key_aliases[f"Special {number}"] = None
     token = key_aliases.get(key, key)
-    if key.startswith("F") and key[1:].isdigit() and int(key[1:]) > 12:
-        return None
-    if token is None or (len(token) == 1 and not token.isalnum()) or key.startswith("Numpad "):
+    if token is None or (len(token) == 1 and not token.isalnum()):
         return None
     parts = [name for name in ("Ctrl", "Alt", "Shift", "Windows") if name in modifiers]
     return "+".join([*parts, token])
@@ -308,8 +430,15 @@ class ShortcutAssignmentDialog(wx.Dialog):
         )
         root = wx.BoxSizer(wx.VERTICAL)
         intro = wx.StaticText(
-            self, label="Choose a feature, main key, and modifiers. Each shortcut must be unique."
+            self,
+            label=(
+                "Choose a feature, main key, and modifiers. Each shortcut must be unique. "
+                "Fn is not listed because standard keyboards process it in hardware and do not "
+                "send an Fn-down event to Windows. Choose the multimedia or function key that "
+                "Windows receives instead."
+            ),
         )
+        intro.Wrap(620)
         root.Add(intro, 0, wx.ALL, 12)
         grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=10)
         grid.AddGrowableCol(1, 1)

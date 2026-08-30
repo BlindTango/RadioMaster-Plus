@@ -444,6 +444,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.63", (
+        "Expanded the Keyboard Shortcuts main-key catalogue with multimedia "
+        "playback and volume keys, browser controls, application-launch keys, "
+        "F1 through F24, lock/state keys, extended numpad navigation, context-menu "
+        "and other wxPython-representable special keys.\n\n"
+        "The new keys work with both in-app accelerators and supported Windows "
+        "global assignments. The assignment dialog now explains that Fn is "
+        "processed by keyboard firmware and cannot be detected as a standalone "
+        "modifier; users should select the resulting media or function key instead."
+    )),
     ("Version 1.1.62", (
         "Redesigned Keyboard Shortcuts as an accessible, searchable CRUD manager "
         "covering menus, panels, effects, and playback controls. Added explicit "

@@ -51,13 +51,36 @@ _SPECIAL_KEYS = {
     "ESCAPE": wx.WXK_ESCAPE, "TAB": wx.WXK_TAB, "HOME": wx.WXK_HOME, "END": wx.WXK_END,
     "PAGEUP": wx.WXK_PAGEUP, "PAGEDOWN": wx.WXK_PAGEDOWN, "INSERT": wx.WXK_INSERT,
     "DELETE": wx.WXK_DELETE,
-    **{f"F{i}": getattr(wx, f"WXK_F{i}") for i in range(1, 13)},
+    **{f"F{i}": getattr(wx, f"WXK_F{i}") for i in range(1, 25)},
     # Multimedia/browser keyboard keys -- these carry no modifiers in practice
     # (a physical media key doesn't also hold Ctrl down) but are still valid
     # RegisterHotKey targets on their own or combined with modifiers.
     "MEDIAPLAYPAUSE": wx.WXK_MEDIA_PLAY_PAUSE, "MEDIASTOP": wx.WXK_MEDIA_STOP,
     "MEDIANEXTTRACK": wx.WXK_MEDIA_NEXT_TRACK, "MEDIAPREVTRACK": wx.WXK_MEDIA_PREV_TRACK,
     "VOLUMEUP": wx.WXK_VOLUME_UP, "VOLUMEDOWN": wx.WXK_VOLUME_DOWN, "VOLUMEMUTE": wx.WXK_VOLUME_MUTE,
+    "CAPSLOCK": wx.WXK_CAPITAL, "PRINTSCREEN": wx.WXK_SNAPSHOT,
+    "SCROLLLOCK": wx.WXK_SCROLL, "NUMLOCK": wx.WXK_NUMLOCK,
+    "CONTEXTMENU": wx.WXK_WINDOWS_MENU, "HELP": wx.WXK_HELP,
+    "SELECT": wx.WXK_SELECT, "EXECUTE": wx.WXK_EXECUTE,
+    "CANCEL": wx.WXK_CANCEL, "CLEAR": wx.WXK_CLEAR,
+    "BROWSERBACK": wx.WXK_BROWSER_BACK, "BROWSERFORWARD": wx.WXK_BROWSER_FORWARD,
+    "BROWSERREFRESH": wx.WXK_BROWSER_REFRESH, "BROWSERSTOP": wx.WXK_BROWSER_STOP,
+    "BROWSERSEARCH": wx.WXK_BROWSER_SEARCH, "BROWSERFAVORITES": wx.WXK_BROWSER_FAVORITES,
+    "BROWSERHOME": wx.WXK_BROWSER_HOME, "LAUNCHMAIL": wx.WXK_LAUNCH_MAIL,
+    "LAUNCHAPP1": wx.WXK_LAUNCH_APP1, "LAUNCHAPP2": wx.WXK_LAUNCH_APP2,
+    "NUMPADADD": wx.WXK_NUMPAD_ADD, "NUMPADSUBTRACT": wx.WXK_NUMPAD_SUBTRACT,
+    "NUMPADMULTIPLY": wx.WXK_NUMPAD_MULTIPLY, "NUMPADDIVIDE": wx.WXK_NUMPAD_DIVIDE,
+    "NUMPADDECIMAL": wx.WXK_NUMPAD_DECIMAL, "NUMPADENTER": wx.WXK_NUMPAD_ENTER,
+    "NUMPADEQUAL": wx.WXK_NUMPAD_EQUAL, "NUMPADSEPARATOR": wx.WXK_NUMPAD_SEPARATOR,
+    "NUMPADSPACE": wx.WXK_NUMPAD_SPACE, "NUMPADTAB": wx.WXK_NUMPAD_TAB,
+    "NUMPADHOME": wx.WXK_NUMPAD_HOME, "NUMPADEND": wx.WXK_NUMPAD_END,
+    "NUMPADPAGEUP": wx.WXK_NUMPAD_PAGEUP, "NUMPADPAGEDOWN": wx.WXK_NUMPAD_PAGEDOWN,
+    "NUMPADINSERT": wx.WXK_NUMPAD_INSERT, "NUMPADDELETE": wx.WXK_NUMPAD_DELETE,
+    "NUMPADUP": wx.WXK_NUMPAD_UP, "NUMPADDOWN": wx.WXK_NUMPAD_DOWN,
+    "NUMPADLEFT": wx.WXK_NUMPAD_LEFT, "NUMPADRIGHT": wx.WXK_NUMPAD_RIGHT,
+    **{f"NUMPAD{i}": getattr(wx, f"WXK_NUMPAD{i}") for i in range(10)},
+    **{f"LAUNCH{i}": getattr(wx, f"WXK_LAUNCH_{i}") for i in range(10)},
+    **{f"LAUNCH{letter}": getattr(wx, f"WXK_LAUNCH_{letter}") for letter in "ABCDEF"},
 }
 
 # Actions a global hotkey can be bound to, plus the human-readable label the
