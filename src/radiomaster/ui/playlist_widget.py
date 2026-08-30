@@ -4,6 +4,7 @@ import wx
 from typing import Any, Callable
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.database.repository import PlaylistRepository
+from radiomaster.utils.accessibility import set_accessible_name
 
 
 class PlaylistWidget(wx.Panel):
@@ -26,22 +27,22 @@ class PlaylistWidget(wx.Panel):
         selector_sizer.Add(wx.StaticText(self, label="Playlist:"), 0, wx.ALIGN_CENTER_VERTICAL)
 
         self._playlist_choice = wx.Choice(self)
-        self._playlist_choice.SetName("Playlist Selector")
+        set_accessible_name(self._playlist_choice, "Playlist Selector")
         selector_sizer.Add(self._playlist_choice, 1, wx.LEFT | wx.RIGHT, 4)
 
         self._btn_new = wx.Button(self, label="New...")
-        self._btn_new.SetName("New Playlist")
+        set_accessible_name(self._btn_new, "New Playlist")
         selector_sizer.Add(self._btn_new, 0, wx.RIGHT, 4)
 
         self._btn_delete = wx.Button(self, label="Delete")
-        self._btn_delete.SetName("Delete Playlist")
+        set_accessible_name(self._btn_delete, "Delete Playlist")
         selector_sizer.Add(self._btn_delete, 0)
 
         main_sizer.Add(selector_sizer, 0, wx.EXPAND | wx.ALL, 4)
 
         # Playlist items
         self._item_list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        self._item_list.SetName("Playlist Items")
+        set_accessible_name(self._item_list, "Playlist Items")
         self._item_list.AppendColumn("#", width=40)
         self._item_list.AppendColumn("Title", width=250)
         self._item_list.AppendColumn("Duration", width=70)
@@ -50,19 +51,19 @@ class PlaylistWidget(wx.Panel):
         # Controls
         ctrl_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._btn_play = wx.Button(self, label="Play")
-        self._btn_play.SetName("Play Item")
+        set_accessible_name(self._btn_play, "Play Item")
         ctrl_sizer.Add(self._btn_play, 0, wx.RIGHT, 4)
 
         self._btn_remove = wx.Button(self, label="Remove")
-        self._btn_remove.SetName("Remove Item")
+        set_accessible_name(self._btn_remove, "Remove Item")
         ctrl_sizer.Add(self._btn_remove, 0, wx.RIGHT, 4)
 
         self._btn_clear = wx.Button(self, label="Clear")
-        self._btn_clear.SetName("Clear Playlist")
+        set_accessible_name(self._btn_clear, "Clear Playlist")
         ctrl_sizer.Add(self._btn_clear, 0, wx.RIGHT, 4)
 
         self._btn_shuffle = wx.Button(self, label="Shuffle")
-        self._btn_shuffle.SetName("Shuffle")
+        set_accessible_name(self._btn_shuffle, "Shuffle")
         ctrl_sizer.Add(self._btn_shuffle, 0)
 
         main_sizer.Add(ctrl_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 4)

@@ -269,3 +269,150 @@ class YouTubeService:
         except Exception as e:
             logger.error(f"Failed to get playlist: {e}")
         return []
+
+    def get_version(self) -> str:
+        """Return the installed yt-dlp version string, or "" if it can't
+        be determined (e.g. the binary is missing)."""
+        try:
+            result = subprocess.run(
+                [get_ytdlp(), "--version"], capture_output=True, text=True,
+                timeout=15, creationflags=_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception as e:
+            logger.error(f"Failed to get yt-dlp version: {e}")
+        return ""
+
+    def download_to_temp(self, url: str, progress_cb=None) -> str | None:
+        """Download a video to a temporary file and return its local path.
+
+        Modern YouTube no longer serves a single muxed (video+audio)
+        stream for most videos -- it splits them into separate video-only
+        and audio-only adaptive streams, so there is no one URL ffplay
+        can stream directly (get_stream_info() returns None for those).
+        yt-dlp's own downloader merges the two into one file, which is
+        the reliable way to play such videos. Used as a fallback when
+        direct streaming isn't possible.
+
+        Returns the temp file path on success, or None on failure. The
+        caller owns the file and should delete it when playback ends.
+        """
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+        os.remove(tmp_path)  # let yt-dlp create the file itself
+        cmd = [
+            get_ytdlp(), *get_yt_dlp_proxy_args(),
+            "-f", "bestvideo+bestaudio/best",
+            "--merge-output-format", "mp4",
+            "--no-playlist", "-o", tmp_path, url,
+        ]
+        try:
+            subprocess.run(cmd, check=True, timeout=3600, creationflags=_NO_WINDOW)
+            if os.path.isfile(tmp_path) and os.path.getsize(tmp_path) > 0:
+                return tmp_path
+        except Exception as e:
+            logger.error(f"Failed to download video to temp: {e}")
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return None
+
+    def check_for_update(self) -> tuple[bool, str]:
+        """Check whether a newer yt-dlp release is available, without
+        downloading it.
+
+        Returns ``(update_available, latest_version)``. ``update_available``
+        is True only when the installed version is older than the latest
+        stable release. On any failure (offline, rate-limited, missing
+        binary) it returns ``(False, "")`` so a background check can fail
+        silently -- the manual Help > Update YouTube Library is the
+        fallback that surfaces real errors.
+        """
+        current = self.get_version()
+        if not current:
+            return False, ""
+        try:
+            import requests
+            resp = requests.get(
+                "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
+                timeout=10,
+                headers={"Accept": "application/vnd.github+json",
+                         "User-Agent": "RadioMasterPlus-Updater"},
+            )
+            if resp.status_code != 200:
+                return False, ""
+            tag = resp.json().get("tag_name", "").lstrip("vV")
+            if not tag:
+                return False, ""
+            # Compare dotted version tuples (e.g. "2026.08.19").
+            def _parts(v: str) -> tuple:
+                import re
+                return tuple(int(p) for p in re.findall(r"\d+", v)) or (0,)
+            if _parts(tag) > _parts(current):
+                return True, tag
+        except Exception:
+            return False, ""
+        return False, ""
+
+    def update(self, progress_cb=None) -> tuple[bool, str]:
+        """Update the bundled yt-dlp.exe to the latest stable release.
+
+        The bundled binary is a standalone PyInstaller-built exe, so it
+        can't self-update via ``-U`` (that only works for pip/wheel
+        installs -- it errors with "You installed yt-dlp with pip or
+        using the wheel from PyPi"). Instead this downloads the latest
+        ``yt-dlp.exe`` from the official GitHub releases and atomically
+        replaces the bundled copy in place.
+
+        Returns ``(ok, message)``. On success *message* is the new
+        version; on failure it's a human-readable error.
+        """
+        import tempfile
+        from radiomaster.utils.tools import get_tools_dir
+
+        tools_dir = get_tools_dir()
+        target = os.path.join(tools_dir, "yt-dlp.exe")
+        if not os.path.isdir(tools_dir):
+            return False, "The tools folder could not be found."
+        if not os.access(tools_dir, os.W_OK):
+            return False, (
+                "The tools folder is not writable. If RadioMaster+ is installed "
+                "under Program Files, run it as administrator or reinstall to a "
+                "user-writable location to update the YouTube library."
+            )
+
+        url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+        try:
+            import requests
+            resp = requests.get(url, timeout=30, stream=True)
+            resp.raise_for_status()
+        except Exception as e:
+            return False, f"Could not download the update: {e}"
+
+        total = int(resp.headers.get("Content-Length", 0))
+        downloaded = 0
+        tmp_path = target + ".part"
+        try:
+            with open(tmp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=262144):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_cb:
+                            progress_cb(downloaded, total)
+            if total and downloaded != total:
+                raise OSError(f"Download incomplete ({downloaded} of {total} bytes).")
+            os.replace(tmp_path, target)
+        except OSError as exc:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            return False, f"Could not save the updated YouTube library: {exc}"
+
+        new_version = self.get_version()
+        return True, new_version or "updated"

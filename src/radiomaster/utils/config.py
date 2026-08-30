@@ -71,6 +71,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "updates": {
         "check_frequency_days": 7,
         "channel": "stable",
+        # Auto-update the bundled yt-dlp.exe (the "YouTube library") in
+        # the background on startup, at most once per
+        # ytdlp_check_frequency_days. Keeping yt-dlp current is what
+        # keeps YouTube playback working when YouTube changes its API.
+        "ytdlp_auto_update": True,
+        "ytdlp_check_frequency_days": 7,
+        "ytdlp_last_check_timestamp": 0,
     },
     "logging": {
         "level": "info",

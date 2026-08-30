@@ -94,14 +94,14 @@ class NowPlayingBar(wx.Panel):
         controls_sizer.Add(wx.StaticText(self, label="Vol:"), 0, wx.ALIGN_CENTER_VERTICAL)
         self._volume_slider = wx.Slider(self, value=80, minValue=0, maxValue=100,
                                         size=(100, -1), style=wx.SL_HORIZONTAL)
-        self._volume_slider.SetName("Volume")
+        set_accessible_name(self._volume_slider, "Volume")
         controls_sizer.Add(self._volume_slider, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
 
         # Rate (playback speed)
         controls_sizer.Add(wx.StaticText(self, label="Rate:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         self._rate_slider = wx.Slider(self, value=100, minValue=50, maxValue=300,
                          size=(100, -1), style=wx.SL_HORIZONTAL)
-        self._rate_slider.SetName("Rate")
+        set_accessible_name(self._rate_slider, "Rate")
         # Defaults to a ~30-unit (0.3x) step on arrow keys/PgUp/PgDn/track
         # clicks over this 50-300 range -- too coarse to find a comfortable
         # speed. 5 (0.05x) per arrow press, 10 (0.1x) per page/track click.
@@ -113,7 +113,7 @@ class NowPlayingBar(wx.Panel):
         controls_sizer.Add(wx.StaticText(self, label="Pan:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         self._pan_slider = wx.Slider(self, value=0, minValue=-100, maxValue=100,
                          size=(100, -1), style=wx.SL_HORIZONTAL)
-        self._pan_slider.SetName("Pan")
+        set_accessible_name(self._pan_slider, "Pan")
         controls_sizer.Add(self._pan_slider, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
 
         # Record button. Fixed width, not auto-sized to the initial label:

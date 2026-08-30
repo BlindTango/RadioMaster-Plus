@@ -37,6 +37,10 @@ class ScheduleDialog(wx.Dialog):
         self._load_data()
         
         self.Centre(wx.BOTH)
+        # Land initial focus on the URL field (the first, most important
+        # control) rather than the default button -- use CallAfter so it
+        # sticks after ShowModal() gives the button sizer initial focus.
+        wx.CallAfter(self._url_ctrl.SetFocus)
 
     def _setup_ui(self) -> None:
         """Create the dialog UI."""

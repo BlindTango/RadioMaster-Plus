@@ -102,6 +102,15 @@ class PresetManagerDialog(wx.Dialog):
         self.SetSizer(sizer)
         self._preset_list.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda e: self._update_button_states())
         self._preset_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, lambda e: self._update_button_states())
+        # wx.ID_CLOSE (unlike wx.ID_CANCEL) doesn't get automatic
+        # Escape-closes-dialog behavior, so bind it explicitly.
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+        else:
+            event.Skip()
 
     def _on_preset_list_resize(self, event: wx.SizeEvent) -> None:
         event.Skip()

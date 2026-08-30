@@ -665,12 +665,30 @@ class AdvancedPanel(SettingsPanel):
         log_path_info.Wrap(600)
         sizer.Add(log_path_info, 0, wx.ALL, 5)
 
+        # Auto-update the YouTube library (yt-dlp) in the background.
+        self.ytdlp_auto_update_chk = wx.CheckBox(
+            self, label="Automatically update the YouTube library (yt-dlp) in the background")
+        self.ytdlp_auto_update_chk.SetValue(
+            self.config.get("updates.ytdlp_auto_update", default=True))
+        sizer.Add(self.ytdlp_auto_update_chk, 0, wx.ALL, 5)
+
+        ytdlp_info = wx.StaticText(
+            self,
+            label="Checks for a newer yt-dlp on startup (at most weekly) and updates it "
+                  "silently. Keeping it current is the best way to keep YouTube playback "
+                  "working. You can always update manually via Help > Update YouTube Library.",
+        )
+        ytdlp_info.Wrap(600)
+        sizer.Add(ytdlp_info, 0, wx.ALL, 5)
+
     def onSave(self) -> None:
         new_level = self._log_level_values[self.logging_combo.GetSelection()]
         if new_level != self.config.get("logging.level", default="info"):
             self.config.set("logging.level", value=new_level)
             from ..utils.logging_setup import setup_logging
             setup_logging(level=new_level, log_dir=get_paths()["logs"])
+        self.config.set("updates.ytdlp_auto_update",
+                        value=self.ytdlp_auto_update_chk.IsChecked())
 
 
 # ---------------------------------------------------------------------------

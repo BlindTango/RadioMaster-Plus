@@ -10,6 +10,8 @@ immediately when the application starts.
 import wx
 from typing import Callable
 
+from radiomaster.utils.accessibility import set_accessible_name
+
 
 class PlaybackControlsPanel(wx.Panel):
     """Panel containing playback control widgets.
@@ -45,23 +47,23 @@ class PlaybackControlsPanel(wx.Panel):
 
         # Transport buttons
         self._btn_first = wx.Button(self, label="|◀", id=wx.NewIdRef())
-        self._btn_first.SetName("First Track")
+        set_accessible_name(self._btn_first, "First Track")
         self._btn_prev = wx.Button(self, label="◀◀", id=wx.NewIdRef())
-        self._btn_prev.SetName("Previous Track")
+        set_accessible_name(self._btn_prev, "Previous Track")
         self._btn_play = wx.Button(self, label="▶", id=wx.NewIdRef())
-        self._btn_play.SetName("Play")
+        set_accessible_name(self._btn_play, "Play")
         self._btn_pause = wx.Button(self, label="⏸", id=wx.NewIdRef())
-        self._btn_pause.SetName("Pause")
+        set_accessible_name(self._btn_pause, "Pause")
         self._btn_stop = wx.Button(self, label="■", id=wx.NewIdRef())
-        self._btn_stop.SetName("Stop")
+        set_accessible_name(self._btn_stop, "Stop")
         self._btn_rewind = wx.Button(self, label="◀◀◀", id=wx.NewIdRef())
-        self._btn_rewind.SetName("Rewind")
+        set_accessible_name(self._btn_rewind, "Rewind")
         self._btn_ffwd = wx.Button(self, label="▶▶▶", id=wx.NewIdRef())
-        self._btn_ffwd.SetName("Fast Forward")
+        set_accessible_name(self._btn_ffwd, "Fast Forward")
         self._btn_next = wx.Button(self, label="▶▶", id=wx.NewIdRef())
-        self._btn_next.SetName("Next Track")
+        set_accessible_name(self._btn_next, "Next Track")
         self._btn_last = wx.Button(self, label="▶|", id=wx.NewIdRef())
-        self._btn_last.SetName("Last Track")
+        set_accessible_name(self._btn_last, "Last Track")
 
         for btn in (
             self._btn_first,
@@ -81,19 +83,19 @@ class PlaybackControlsPanel(wx.Panel):
         # Volume slider
         main_sizer.Add(wx.StaticText(self, label="Vol:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         self._volume_slider = wx.Slider(self, value=80, minValue=0, maxValue=100, style=wx.SL_HORIZONTAL)
-        self._volume_slider.SetName("Volume")
+        set_accessible_name(self._volume_slider, "Volume")
         main_sizer.Add(self._volume_slider, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
 
         # Rate slider
         main_sizer.Add(wx.StaticText(self, label="Rate:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         self._rate_slider = wx.Slider(self, value=100, minValue=50, maxValue=300, style=wx.SL_HORIZONTAL)
-        self._rate_slider.SetName("Playback Rate")
+        set_accessible_name(self._rate_slider, "Playback Rate")
         main_sizer.Add(self._rate_slider, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
 
         # Pan slider
         main_sizer.Add(wx.StaticText(self, label="Pan:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         self._pan_slider = wx.Slider(self, value=0, minValue=-100, maxValue=100, style=wx.SL_HORIZONTAL)
-        self._pan_slider.SetName("Stereo Pan")
+        set_accessible_name(self._pan_slider, "Stereo Pan")
         main_sizer.Add(self._pan_slider, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
 
         self.SetSizer(main_sizer)

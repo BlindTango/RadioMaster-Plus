@@ -157,6 +157,12 @@ class MainWindow(wx.Frame):
         if self._config.get("updates.check_on_startup", default=True) and self._update_check_due():
             self._check_updates(silent=True)
 
+        # Background auto-update of the bundled yt-dlp.exe (the "YouTube
+        # library") -- see _auto_update_ytdlp. Runs off the UI thread and
+        # only if the user hasn't turned it off in Settings > Advanced.
+        if self._config.get("updates.ytdlp_auto_update", default=True) and self._ytdlp_update_due():
+            self._auto_update_ytdlp()
+
         self.Centre()
 
     @property
@@ -320,6 +326,8 @@ class MainWindow(wx.Frame):
         help_menu.Append(wx.ID_ABOUT, "&About RadioMaster+")
         self._menu_ids["check_updates"] = wx.NewIdRef()
         help_menu.Append(self._menu_ids["check_updates"], "Check for &Updates...")
+        self._menu_ids["update_ytdlp"] = wx.NewIdRef()
+        help_menu.Append(self._menu_ids["update_ytdlp"], "Update &YouTube Library...")
         self._menu_ids["documentation"] = wx.NewIdRef()
         help_menu.Append(self._menu_ids["documentation"], "&Documentation\tF1")
         menubar.Append(help_menu, "&Help")
@@ -806,6 +814,7 @@ class MainWindow(wx.Frame):
         # Help menu
         self.Bind(wx.EVT_MENU, lambda e: self._show_about(), id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, lambda e: self._check_updates(), id=self._menu_ids["check_updates"])
+        self.Bind(wx.EVT_MENU, lambda e: self._update_ytdlp(), id=self._menu_ids["update_ytdlp"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_documentation(), id=self._menu_ids["documentation"])
 
     def _on_open_file(self) -> None:
@@ -1524,6 +1533,52 @@ class MainWindow(wx.Frame):
         last_check = self._config.get("updates.last_check_timestamp", default=0)
         return time.time() - last_check >= days * 86400
 
+    def _ytdlp_update_due(self) -> bool:
+        """Whether enough time has passed since the last background yt-dlp
+        update check to run another one. Mirrors _update_check_due() so the
+        startup check doesn't hit GitHub's API on every single launch."""
+        import time
+        days = self._config.get("updates.ytdlp_check_frequency_days", default=7)
+        last_check = self._config.get("updates.ytdlp_last_check_timestamp", default=0)
+        return time.time() - last_check >= days * 86400
+
+    def _auto_update_ytdlp(self) -> None:
+        """Background auto-update of the bundled yt-dlp.exe (the "YouTube
+        library"), run once at startup if due. Checks for a newer release
+        and, if one exists, downloads and replaces the bundled copy --
+        all on a daemon thread so startup is never blocked. Fails
+        silently (logged only) on any error, including a non-writable
+        tools folder (e.g. installed under Program Files); the manual
+        Help > Update YouTube Library is the fallback that surfaces real
+        problems to the user."""
+        import threading
+        import time
+        from radiomaster.services.youtube_dl import YouTubeService
+
+        # Record the attempt timestamp up front so a failed/offline check
+        # doesn't retry on every subsequent launch (same reasoning as
+        # _check_updates).
+        self._config.set("updates.ytdlp_last_check_timestamp", value=time.time())
+        self._config.save()
+
+        def worker():
+            try:
+                service = YouTubeService()
+                available, _latest = service.check_for_update()
+                if not available:
+                    return
+                ok, message = service.update()
+                if ok:
+                    logging.getLogger("radiomaster").info(
+                        f"Background yt-dlp update succeeded: {message}")
+                else:
+                    logging.getLogger("radiomaster").warning(
+                        f"Background yt-dlp update failed: {message}")
+            except Exception:
+                logging.getLogger("radiomaster").exception("Background yt-dlp update error")
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _check_updates(self, silent: bool = False) -> None:
         """Check GitHub for a newer release. silent=True (startup auto-check)
         stays quiet on failure or "no update found" -- only a manual Help >
@@ -1559,6 +1614,65 @@ class MainWindow(wx.Frame):
 
     def _update_check_failed(self, message: str) -> None:
         wx.MessageBox(message, "Check for Updates", wx.OK | wx.ICON_ERROR, self)
+
+    def _update_ytdlp(self) -> None:
+        """Help > Update YouTube Library: download the latest yt-dlp.exe
+        and replace the bundled copy in place.
+
+        YouTube changes its extraction API frequently, and an outdated
+        yt-dlp is the most common cause of "YouTube videos won't play"
+        (the old binary gets HTTP 403 from googlevideo.com even on its
+        own downloads). This lets the user refresh the library on demand
+        without waiting for a full app release. Runs the download off the
+        UI thread so the window doesn't freeze."""
+        from radiomaster.services.youtube_dl import YouTubeService
+        from radiomaster.utils.wx_safe import call_after_safe
+
+        service = YouTubeService()
+        current = service.get_version() or "unknown"
+
+        if wx.MessageBox(
+            f"Update the YouTube library (yt-dlp) to the latest version?\n\n"
+            f"Current version: {current}\n\n"
+            "This downloads the latest yt-dlp.exe from the official GitHub "
+            "releases and replaces the bundled copy. YouTube changes its "
+            "extraction API often, so keeping this up to date is the best "
+            "way to keep YouTube playback working.",
+            "Update YouTube Library", wx.YES_NO | wx.ICON_QUESTION, self,
+        ) != wx.YES:
+            return
+
+        self._status_bar.set_status("Updating YouTube library...")
+
+        def progress_cb(downloaded: int, total: int) -> None:
+            if total:
+                pct = int(downloaded * 100 / total)
+                call_after_safe(self, self._status_bar.set_status,
+                                f"Updating YouTube library... {pct}%")
+            else:
+                call_after_safe(self, self._status_bar.set_status,
+                                f"Updating YouTube library... {downloaded // 1024} KB")
+
+        def worker():
+            ok, message = service.update(progress_cb=progress_cb)
+            call_after_safe(self, self._update_ytdlp_result, ok, message)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_ytdlp_result(self, ok: bool, message: str) -> None:
+        self._status_bar.set_status("Ready")
+        if ok:
+            wx.MessageBox(
+                f"The YouTube library was updated successfully.\n\n"
+                f"New version: {message}",
+                "Update YouTube Library", wx.OK | wx.ICON_INFORMATION, self,
+            )
+        else:
+            wx.MessageBox(
+                f"The YouTube library could not be updated.\n\n{message}",
+                "Update YouTube Library", wx.OK | wx.ICON_ERROR, self,
+            )
 
     def _update_check_result(self, checker, info, silent: bool) -> None:
         from radiomaster import __version__

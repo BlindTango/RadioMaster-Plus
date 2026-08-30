@@ -50,8 +50,60 @@ class YouTubePanel(wx.Panel):
         self._current_source_title = ""
         self._current_source_duration = 0.0
         self._stream_rejected_retried = False
+        # A temp file downloaded as a fallback when a video has no single
+        # muxed stream URL (modern YouTube splits video/audio). Kept so it
+        # can be deleted once playback moves on or the panel is destroyed.
+        self._temp_playback_file: str | None = None
         self._engine.on_stream_rejected(self._on_stream_rejected)
         self._setup_ui()
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
+
+    def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
+        """Clean up any temp playback file when the panel is destroyed."""
+        if event.GetEventObject() is self:
+            self._cleanup_temp_file()
+        event.Skip()
+
+    def _cleanup_temp_file(self) -> None:
+        """Delete the temp playback file, if any."""
+        if self._temp_playback_file:
+            try:
+                import os
+                os.remove(self._temp_playback_file)
+            except OSError:
+                pass
+            self._temp_playback_file = None
+
+    def _resolve_and_play(self, url: str, title: str, duration: float, seq: int,
+                          stream: dict | None = None) -> None:
+        """Resolve a playable stream for *url* and start playback.
+
+        Runs on a worker thread. First tries to resolve a single muxed
+        stream URL (the fast path -- ffplay streams it directly). Modern
+        YouTube no longer serves a single muxed stream for most videos
+        (it splits video-only and audio-only adaptive streams), so when
+        that returns nothing, falls back to downloading the video to a
+        temp file via yt-dlp (which merges the two) and plays the local
+        file instead. The temp file is tracked in _temp_playback_file so
+        it can be cleaned up later.
+
+        *stream*, when given, is an already-resolved get_stream_info()
+        result (e.g. from _on_play_url, which needs it for the title/
+        duration) -- avoids a second redundant yt-dlp call."""
+        from radiomaster.services.youtube_dl import YouTubeService
+        service = YouTubeService()
+        if stream is None:
+            stream = service.get_stream_info(url)
+        stream_url = (stream or {}).get('url')
+        headers = (stream or {}).get('http_headers')
+        if stream_url:
+            wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq, headers)
+            return
+        # No single muxed stream -- download to a temp file and play that.
+        self._set_status(f"Status: Downloading '{title}' for playback...")
+        tmp_path = service.download_to_temp(url)
+        wx.CallAfter(self._apply_play_result, tmp_path, title, duration, seq, None,
+                     is_temp_file=True)
 
     def _setup_ui(self) -> None:
         """Create the YouTube panel layout."""
@@ -451,11 +503,9 @@ class YouTubePanel(wx.Panel):
                     stream = service.get_stream_info(url)
                     title = (stream or {}).get('title') or url
                     duration = (stream or {}).get('duration', 0.0)
-                    headers = (stream or {}).get('http_headers')
                     self._current_source_title = title
                     self._current_source_duration = duration
-                    wx.CallAfter(self._apply_play_result, (stream or {}).get('url'),
-                                 title, duration, seq, headers)
+                    self._resolve_and_play(url, title, duration, seq, stream)
 
                 import threading
                 threading.Thread(target=worker, daemon=True).start()
@@ -496,25 +546,15 @@ class YouTubePanel(wx.Panel):
         self._stream_rejected_retried = False
 
         def worker():
-            from radiomaster.services.youtube_dl import YouTubeService
-            service = YouTubeService()
-            # get_stream_info(), not the cheaper get_stream_url(): the
-            # HTTP headers it also returns (see its own docstring) are
-            # what let ffplay's request avoid a 403 that get_stream_url()
-            # alone had no way to prevent. title/duration already known
-            # from the search result are kept (this video's own listing
-            # is more reliable than re-deriving them from the resolve).
-            stream = service.get_stream_info(video_url)
-            headers = (stream or {}).get('http_headers')
-            wx.CallAfter(self._apply_play_result, (stream or {}).get('url'),
-                         title, duration, seq, headers)
+            self._resolve_and_play(video_url, title, duration, seq)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_play_result(self, stream_url: str | None, title: str,
                             duration: float = 0.0, seq: int = 0,
-                            http_headers: dict | None = None) -> None:
+                            http_headers: dict | None = None,
+                            is_temp_file: bool = False) -> None:
         if seq and seq != self._play_request_seq:
             # A newer play request has started (or finished) since this
             # one was kicked off -- e.g. two quick double-clicks each
@@ -525,11 +565,22 @@ class YouTubePanel(wx.Panel):
             # older, already-superseded resolution winning the race and
             # restarting playback right after the real one had already
             # begun.
+            if is_temp_file and stream_url:
+                try:
+                    import os
+                    os.remove(stream_url)
+                except OSError:
+                    pass
             return
         if not stream_url:
             wx.MessageBox("Unable to resolve a playable stream for the selected video.",
                          "Error", wx.OK | wx.ICON_ERROR)
             return
+        # If we're switching to a new source, drop any previous temp file.
+        if not is_temp_file:
+            self._cleanup_temp_file()
+        else:
+            self._temp_playback_file = stream_url
         self._engine.play(stream_url, title=title, is_video=True, duration=duration,
                           http_headers=http_headers)
         self._set_status(f"Status: Playing '{title}'")
@@ -559,12 +610,7 @@ class YouTubePanel(wx.Panel):
         seq = self._play_request_seq
 
         def worker():
-            from radiomaster.services.youtube_dl import YouTubeService
-            service = YouTubeService()
-            stream = service.get_stream_info(url)
-            headers = (stream or {}).get('http_headers')
-            wx.CallAfter(self._apply_play_result, (stream or {}).get('url'),
-                         title, duration, seq, headers)
+            self._resolve_and_play(url, title, duration, seq)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()

@@ -74,11 +74,18 @@ class VideoFrame(wx.Frame):
         self.SetSizer(main_sizer)
 
     def _setup_accelerators(self) -> None:
-        """Set up keyboard accelerators."""
+        """Set up keyboard accelerators.
+
+        Deliberately no bare Space entry: a wx.AcceleratorTable on the
+        Frame intercepts Space globally, before it ever reaches a focused
+        control -- so a focused button wouldn't activate on Space, and
+        typing a space anywhere would be swallowed as a play/pause toggle.
+        Play/Pause is already reachable via the transport button and the
+        F11/Escape accelerators below.
+        """
         entries = [
             (wx.ACCEL_NORMAL, wx.WXK_F11, wx.NewIdRef()),
             (wx.ACCEL_NORMAL, wx.WXK_ESCAPE, wx.NewIdRef()),
-            (wx.ACCEL_NORMAL, wx.WXK_SPACE, wx.NewIdRef()),
         ]
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
 

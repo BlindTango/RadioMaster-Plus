@@ -49,6 +49,11 @@ def _get_tools_dir() -> Path:
     return Path.cwd() / "tools"
 
 
+def get_tools_dir() -> str:
+    """Return the path to the ``tools/`` directory as a string."""
+    return str(_get_tools_dir())
+
+
 def get_ffmpeg() -> str:
     """Return the path to ffmpeg.exe."""
     return str(_get_tools_dir() / "ffmpeg.exe")
