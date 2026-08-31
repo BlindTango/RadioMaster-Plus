@@ -534,7 +534,6 @@ class ShortcutAssignmentDialog(wx.Dialog):
                 f"Unavailable: already assigned to {DEFAULT_SHORTCUTS[conflict]['description']}.",
             )
         self.status.SetLabel(message)
-        self.ok.Enable(valid)
         return valid
 
     def _changed(self, event):
@@ -544,6 +543,19 @@ class ShortcutAssignmentDialog(wx.Dialog):
     def _on_ok(self, event):
         if self._validate():
             self.EndModal(wx.ID_OK)
+            return
+
+        wx.MessageBox(
+            self.status.GetLabel(),
+            "Invalid Keyboard Shortcut",
+            wx.OK | wx.ICON_WARNING,
+            self,
+        )
+        action = self.selection()[0]
+        if not action:
+            self.feature.SetFocus()
+        else:
+            self.key.SetFocus()
 
 
 class ShortcutEditor(wx.Dialog):

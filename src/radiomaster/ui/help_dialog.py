@@ -444,6 +444,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.65", (
+        "Replaced the Scheduler panel's inaccessible calendar grid with labeled "
+        "native date and time pickers. The selected values now prefill new "
+        "schedules, which default five minutes ahead, and enabled schedules "
+        "cannot be saved with a start time in the past.\n\n"
+        "Fixed the Keyboard Shortcuts assignment dialog leaving its Create or "
+        "Save button disabled after entering a new binding. The action remains "
+        "available and now presents a clear validation message with focus "
+        "returned to the field that needs correction."
+    )),
     ("Version 1.1.64", (
         "Fixed portable installations losing their configured downloads, "
         "recordings, and podcast folders when a removable drive receives a "

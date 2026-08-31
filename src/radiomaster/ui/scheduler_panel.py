@@ -1,8 +1,11 @@
-"""Scheduler tab panel with calendar view for recording schedules."""
+"""Scheduler tab panel for managing recording schedules."""
+
+from datetime import datetime, timedelta
+from typing import Any
 
 import wx
 import wx.adv
-from typing import Any
+
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.database.repository import ScheduleRepository
 from radiomaster.ui.schedule_dialog import ScheduleDialog
@@ -34,11 +37,42 @@ class SchedulerPanel(wx.Panel):
         """Create the scheduler panel layout."""
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Calendar — bind CHAR_HOOK to forward Tab (CalendarCtrl traps Tab internally)
-        self._calendar = wx.adv.CalendarCtrl(self, style=wx.adv.CAL_SHOW_HOLIDAYS)
-        set_accessible_name(self._calendar, "Schedule Calendar")
-        self._calendar.Bind(wx.EVT_CHAR_HOOK, self._on_calendar_key)
-        main_sizer.Add(self._calendar, 0, wx.ALIGN_CENTER | wx.ALL, 8)
+        # Native date and time fields expose their values and editing controls to
+        # assistive technology more reliably than CalendarCtrl's grid of days.
+        start_sizer = wx.StaticBoxSizer(wx.HORIZONTAL, self, "New schedule start")
+
+        date_label = wx.StaticText(self, label="Date:")
+        start_sizer.Add(date_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self._date_picker = wx.adv.DatePickerCtrl(
+            self,
+            style=wx.adv.DP_DROPDOWN | wx.adv.DP_SHOWCENTURY,
+        )
+        set_accessible_name(self._date_picker, "New schedule start date")
+        self._date_picker.SetHelpText("Choose the start date for the new schedule.")
+        self._date_picker.SetToolTip("Choose the start date for the new schedule.")
+        start_sizer.Add(self._date_picker, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        time_label = wx.StaticText(self, label="Time:")
+        start_sizer.Add(time_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self._time_picker = wx.adv.TimePickerCtrl(self)
+        set_accessible_name(self._time_picker, "New schedule start time")
+        self._time_picker.SetHelpText("Choose the start time for the new schedule.")
+        self._time_picker.SetToolTip("Choose the start time for the new schedule.")
+        start_sizer.Add(self._time_picker, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        initial_start = datetime.now() + timedelta(minutes=5)
+        self._date_picker.SetValue(wx.DateTime.FromDMY(
+            initial_start.day,
+            initial_start.month - 1,
+            initial_start.year,
+        ))
+        self._time_picker.SetValue(wx.DateTime.FromHMS(
+            initial_start.hour,
+            initial_start.minute,
+            0,
+        ))
+
+        main_sizer.Add(start_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
         # Scheduled recordings
         main_sizer.Add(wx.StaticText(self, label="Scheduled Recordings"), 0, wx.ALL, 4)
@@ -56,6 +90,8 @@ class SchedulerPanel(wx.Panel):
         ctrl_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._btn_add = wx.Button(self, label="Add Schedule...")
         set_accessible_name(self._btn_add, "Add Schedule")
+        self._btn_add.SetHelpText("Add a schedule using the selected start date and time.")
+        self._btn_add.SetToolTip("Add a schedule using the selected start date and time.")
         ctrl_sizer.Add(self._btn_add, 0, wx.RIGHT, 4)
 
         self._btn_edit = wx.Button(self, label="Edit...")
@@ -73,14 +109,6 @@ class SchedulerPanel(wx.Panel):
         self._btn_add.Bind(wx.EVT_BUTTON, self._on_add)
         self._btn_edit.Bind(wx.EVT_BUTTON, self._on_edit)
         self._btn_delete.Bind(wx.EVT_BUTTON, self._on_delete)
-
-    def _on_calendar_key(self, evt: wx.KeyEvent) -> None:
-        """Forward Tab/Shift+Tab from the calendar control to the next control.
-        CalendarCtrl traps Tab internally, so we use Navigate() to move focus."""
-        if evt.GetKeyCode() == wx.WXK_TAB:
-            self._calendar.Navigate(not evt.ShiftDown())
-        else:
-            evt.Skip()
 
     def _load_schedules(self) -> None:
         """Load schedules from database into the list."""
@@ -100,7 +128,17 @@ class SchedulerPanel(wx.Panel):
 
     def _on_add(self, event: wx.CommandEvent) -> None:
         """Add a new recording schedule."""
-        dlg = ScheduleDialog(self, self._db)
+        date = self._date_picker.GetValue()
+        time = self._time_picker.GetValue()
+        initial_start = datetime(
+            date.year,
+            date.month + 1,
+            date.day,
+            time.hour,
+            time.minute,
+            time.second,
+        )
+        dlg = ScheduleDialog(self, self._db, initial_start=initial_start)
         if dlg.ShowModal() == wx.ID_OK:
             self._load_schedules()
             self._resync_service()

@@ -17,6 +17,7 @@ class ScheduleDialog(wx.Dialog):
         parent: wx.Window,
         db: DatabaseManager,
         schedule_data: dict[str, Any] | None = None,
+        initial_start: datetime | None = None,
     ) -> None:
         """Initialize the schedule dialog.
         
@@ -24,6 +25,7 @@ class ScheduleDialog(wx.Dialog):
             parent: Parent window
             db: Database manager instance
             schedule_data: Existing schedule data for edit mode, None for add mode
+            initial_start: Initial date and time for a new schedule
         """
         title = "Edit Recording Schedule" if schedule_data else "Add Recording Schedule"
         super().__init__(parent, title=title, size=(500, 600))
@@ -31,6 +33,7 @@ class ScheduleDialog(wx.Dialog):
         self._db = db
         self._repo = ScheduleRepository(db)
         self._schedule_data = schedule_data
+        self._initial_start = initial_start
         self._result: dict[str, Any] | None = None
         
         self._setup_ui()
@@ -163,10 +166,10 @@ class ScheduleDialog(wx.Dialog):
             if start_time_str:
                 try:
                     start_dt = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M")
-                    self._date_picker.SetValue(wx.DateTimeFromDMY(
+                    self._date_picker.SetValue(wx.DateTime.FromDMY(
                         start_dt.day, start_dt.month - 1, start_dt.year
                     ))
-                    self._time_picker.SetValue(wx.DateTimeFromHMS(
+                    self._time_picker.SetValue(wx.DateTime.FromHMS(
                         start_dt.hour, start_dt.minute, start_dt.second
                     ))
                 except ValueError:
@@ -191,6 +194,17 @@ class ScheduleDialog(wx.Dialog):
             # Set enabled
             enabled = self._schedule_data.get('enabled', 1)
             self._enabled_check.SetValue(bool(enabled))
+        elif self._initial_start:
+            self._date_picker.SetValue(wx.DateTime.FromDMY(
+                self._initial_start.day,
+                self._initial_start.month - 1,
+                self._initial_start.year,
+            ))
+            self._time_picker.SetValue(wx.DateTime.FromHMS(
+                self._initial_start.hour,
+                self._initial_start.minute,
+                self._initial_start.second,
+            ))
 
     def _on_ok(self, event: wx.CommandEvent) -> None:
         """Handle OK button - validate and save."""
@@ -212,10 +226,21 @@ class ScheduleDialog(wx.Dialog):
         date = self._date_picker.GetValue()
         time = self._time_picker.GetValue()
         
-        start_time = datetime(
+        start_datetime = datetime(
             date.year, date.month + 1, date.day,
             time.hour, time.minute, time.second
-        ).strftime("%Y-%m-%d %H:%M")
+        )
+
+        if self._enabled_check.GetValue() and start_datetime <= datetime.now():
+            wx.MessageBox(
+                "Start date and time must be in the future for an enabled schedule.",
+                "Validation Error",
+                wx.OK | wx.ICON_ERROR,
+            )
+            self._date_picker.SetFocus()
+            return
+
+        start_time = start_datetime.strftime("%Y-%m-%d %H:%M")
         
         self._result = {
             'url': url,
