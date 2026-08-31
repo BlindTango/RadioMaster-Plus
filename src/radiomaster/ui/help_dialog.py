@@ -446,6 +446,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.68", (
+        "Improved video-backend test isolation by making simulated ffplay processes "
+        "match the real process interface and preventing unrelated Windows audio-session "
+        "work during process-exit and stream-rejection tests. This removes background "
+        "thread warnings and strengthens release verification without changing playback "
+        "behavior."
+    )),
     ("Version 1.1.67", (
         "Improved radio and YouTube audio stability on connections with packet-arrival "
         "jitter. Live playback now builds a decode-ahead cushion before starting and "

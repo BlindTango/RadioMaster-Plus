@@ -90,7 +90,7 @@ class TestHelpSystem:
             "Troubleshooting",
         } <= titles
         assert len(QUICK_START_TOPICS) >= 5
-        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.67"
+        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.68"
 
 
 class TestPanelControls:

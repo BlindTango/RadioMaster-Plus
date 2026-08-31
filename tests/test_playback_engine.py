@@ -109,6 +109,7 @@ class TestPlaybackEngine:
         class FakeProc:
             def __init__(self):
                 self.stdin = MagicMock()
+                self.pid = 4242
                 self.returncode = None
 
             def poll(self):
@@ -125,7 +126,8 @@ class TestPlaybackEngine:
                 pass
 
         with patch("radiomaster.engine.playback_engine.subprocess.Popen") as popen, \
-             patch("radiomaster.engine.playback_engine.get_ffplay", return_value="ffplay"):
+             patch("radiomaster.engine.playback_engine.get_ffplay", return_value="ffplay"), \
+             patch("radiomaster.utils.session_volume.set_process_volume", return_value=True):
             popen.return_value = FakeProc()
 
             engine = PlaybackEngine()
@@ -163,6 +165,7 @@ class TestPlaybackEngine:
         class FakeProc:
             def __init__(self):
                 self.stdin = MagicMock()
+                self.pid = 4243
                 self.returncode = None
                 self._alive = True
 
@@ -183,7 +186,8 @@ class TestPlaybackEngine:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
         with patch("radiomaster.engine.playback_engine.subprocess.Popen") as popen, \
-             patch("radiomaster.engine.playback_engine.get_ffplay", return_value="ffplay"):
+             patch("radiomaster.engine.playback_engine.get_ffplay", return_value="ffplay"), \
+             patch("radiomaster.utils.session_volume.set_process_volume", return_value=True):
             popen.return_value = FakeProc()
 
             engine = PlaybackEngine()
