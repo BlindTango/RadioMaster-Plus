@@ -1,8 +1,10 @@
 """Audiobook tab panel with DAISY support, chapter navigation, and SAPI TTS."""
 
-import wx
 import os
 from typing import Any
+
+import wx
+
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.services.daisy_parser import DaisyParser
@@ -11,6 +13,10 @@ from radiomaster.utils.accessibility import set_accessible_name
 
 class AudiobookPanel(wx.Panel):
     """Panel for browsing and playing audiobooks including DAISY format."""
+
+    AUDIO_EXTENSIONS = (
+        ".m4b", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav", ".wma",
+    )
 
     def __init__(self, parent: wx.Window, db: DatabaseManager, engine: PlaybackEngine) -> None:
         super().__init__(parent)
@@ -67,6 +73,10 @@ class AudiobookPanel(wx.Panel):
         set_accessible_name(self._btn_browse, "Browse Audiobook Folder")
         left_sizer.Add(self._btn_browse, 0, wx.EXPAND | wx.ALL, 4)
 
+        self._btn_browse_file = wx.Button(left_panel, label="Browse File...")
+        set_accessible_name(self._btn_browse_file, "Browse Audiobook File")
+        left_sizer.Add(self._btn_browse_file, 0, wx.EXPAND | wx.ALL, 4)
+
         left_panel.SetSizer(left_sizer)
         main_sizer.Add(left_panel, 0, wx.EXPAND | wx.RIGHT, 4)
 
@@ -92,10 +102,6 @@ class AudiobookPanel(wx.Panel):
 
         # Controls
         ctrl_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_play = wx.Button(right_panel, label="Play")
-        set_accessible_name(self._btn_play, "Play Audiobook")
-        ctrl_sizer.Add(self._btn_play, 0, wx.RIGHT, 4)
-
         self._btn_tts = wx.Button(right_panel, label="Read with TTS")
         set_accessible_name(self._btn_tts, "Read with Text to Speech")
         ctrl_sizer.Add(self._btn_tts, 0, wx.RIGHT, 4)
@@ -112,10 +118,11 @@ class AudiobookPanel(wx.Panel):
         self.SetSizer(main_sizer)
 
         self._btn_browse.Bind(wx.EVT_BUTTON, self._on_browse)
-        self._btn_play.Bind(wx.EVT_BUTTON, self._on_play)
+        self._btn_browse_file.Bind(wx.EVT_BUTTON, self._on_browse_file)
         self._btn_tts.Bind(wx.EVT_BUTTON, self._on_tts)
         self._btn_bookmark.Bind(wx.EVT_BUTTON, self._on_bookmark)
         self._chapter_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_chapter_selected)
+        self._chapter_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
         self._library_tree.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_tree_sel_changed)
 
     def _on_browse(self, event: wx.CommandEvent) -> None:
@@ -165,9 +172,10 @@ class AudiobookPanel(wx.Panel):
                 
                 # List audio files
                 self._chapter_list.DeleteAllItems()
-                audio_files = []
-                for ext in ('.mp3', '.m4b', '.m4a', '.wav', '.flac'):
-                    audio_files.extend([f for f in os.listdir(path) if f.endswith(ext)])
+                audio_files = [
+                    filename for filename in os.listdir(path)
+                    if filename.lower().endswith(self.AUDIO_EXTENSIONS)
+                ]
                 
                 for i, audio_file in enumerate(sorted(audio_files)):
                     idx = self._chapter_list.InsertItem(i, audio_file)
@@ -176,6 +184,33 @@ class AudiobookPanel(wx.Panel):
 
             self._register_book(path, self._title_text.GetValue())
 
+        dlg.Destroy()
+
+    def _on_browse_file(self, event: wx.CommandEvent) -> None:
+        """Choose one audiobook media file and show it in the chapter list."""
+        wildcard = (
+            "Audiobook and audio files|*.m4b;*.mp3;*.m4a;*.aac;*.flac;*.ogg;*.opus;"
+            "*.wav;*.wma|All files|*.*"
+        )
+        dlg = wx.FileDialog(
+            self,
+            "Select audiobook file",
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            path = dlg.GetPath()
+            title = os.path.splitext(os.path.basename(path))[0]
+            self._current_path = path
+            self._current_book = None
+            self._title_text.SetValue(title)
+            self._chapter_list.DeleteAllItems()
+            item = self._chapter_list.InsertItem(0, os.path.basename(path))
+            self._chapter_list.SetItem(item, 1, "")
+            self._chapter_list.SetItemData(item, 0)
+            self._chapter_list.Select(item)
+            self._register_book(path, title)
+            self._chapter_list.SetFocus()
         dlg.Destroy()
 
     def _register_book(self, path: str, title: str) -> None:
@@ -226,15 +261,20 @@ class AudiobookPanel(wx.Panel):
                 self._engine.play(audio_path, title=f"{title} - {chapter_title}")
                 self._apply_resume_seek()
         else:
-            # Regular folder
-            audio_files = []
-            for ext in ('.mp3', '.m4b', '.m4a', '.wav', '.flac'):
-                audio_files.extend([f for f in os.listdir(self._current_path) if f.endswith(ext)])
-
-            if chapter_idx < len(audio_files):
-                audio_path = os.path.join(self._current_path, audio_files[chapter_idx])
+            if os.path.isfile(self._current_path):
+                audio_path = self._current_path
                 self._engine.play(audio_path, title=os.path.basename(audio_path))
                 self._apply_resume_seek()
+            else:
+                # Regular folder
+                audio_files = sorted(
+                    f for f in os.listdir(self._current_path)
+                    if f.lower().endswith(self.AUDIO_EXTENSIONS)
+                )
+                if chapter_idx < len(audio_files):
+                    audio_path = os.path.join(self._current_path, audio_files[chapter_idx])
+                    self._engine.play(audio_path, title=os.path.basename(audio_path))
+                    self._apply_resume_seek()
 
     def _apply_resume_seek(self) -> None:
         """Seek to the saved position once, shortly after playback starts."""

@@ -1330,11 +1330,18 @@ class MainWindow(wx.Frame):
         dlg.Destroy()
 
     def _on_open_folder(self) -> None:
-        """Open a folder dialog."""
+        """Load a folder's supported files into the Media Player playlist."""
         dlg = wx.DirDialog(self, "Select a folder")
         if dlg.ShowModal() == wx.ID_OK:
             path = dlg.GetPath()
-            self._status_bar.set_status(f"Browsing: {path}")
+            self._switch_tab(3)
+            count = self._media_panel.load_folder(path)
+            if count:
+                self._status_bar.set_status(
+                    f"Loaded {count} media {'file' if count == 1 else 'files'} from {path}"
+                )
+            else:
+                self._status_bar.set_status(f"No supported media files found in {path}")
         dlg.Destroy()
 
     def _on_import_opml(self) -> None:

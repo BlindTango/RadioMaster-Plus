@@ -90,7 +90,48 @@ class TestHelpSystem:
             "Troubleshooting",
         } <= titles
         assert len(QUICK_START_TOPICS) >= 5
-        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.65"
+        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.66"
+
+
+class TestPanelControls:
+    def test_audiobook_uses_chapter_activation_without_play_button(
+        self, app_and_window
+    ) -> None:
+        _app, win = app_and_window
+        assert not hasattr(win._audiobook_panel, "_btn_play")
+
+    def test_scheduler_has_no_redundant_panel_date_or_time_picker(
+        self, app_and_window
+    ) -> None:
+        _app, win = app_and_window
+        assert not hasattr(win._scheduler_panel, "_date_picker")
+        assert not hasattr(win._scheduler_panel, "_time_picker")
+
+    def test_audiobook_has_browse_file_button(self, app_and_window) -> None:
+        _app, win = app_and_window
+        assert win._audiobook_panel._btn_browse_file.GetLabel() == "Browse File..."
+
+    def test_media_folder_populates_visible_playlist(
+        self, app_and_window, tmp_path
+    ) -> None:
+        _app, win = app_and_window
+        (tmp_path / "one.mp3").touch()
+        nested = tmp_path / "disc two"
+        nested.mkdir()
+        (nested / "two.FLAC").touch()
+        (nested / "notes.txt").touch()
+
+        count = win._media_panel.load_folder(str(tmp_path))
+
+        assert count == 2
+        assert win._media_panel._playlist.GetItemCount() == 2
+        assert len(win._media_panel._paths) == 2
+
+    def test_media_uses_playlist_activation_without_play_button(
+        self, app_and_window
+    ) -> None:
+        _app, win = app_and_window
+        assert not hasattr(win._media_panel, "_btn_play")
 
 
 class TestTabOrder:

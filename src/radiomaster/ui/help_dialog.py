@@ -142,9 +142,11 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "frequency, retention, and auto-advance."
     )),
     ("Audiobooks Tab", (
-        "Browse Folder opens a conventional audiobook folder or a DAISY 2.02 or "
-        "DAISY NISO 39.86 book. The library tree lists loaded books and the chapter "
-        "list provides direct chapter navigation. Press Play for recorded audio or "
+        "Browse File opens one audiobook media file. Browse Folder opens a conventional "
+        "audiobook folder or a DAISY 2.02 or DAISY NISO 39.86 book. The library tree "
+        "lists loaded books and the chapter "
+        "list provides direct chapter navigation. Select a chapter and press Enter "
+        "for recorded audio, then use the transport controls for playback. Use "
         "Read with TTS for SAPI text-to-speech.\n\n"
         "Add Bookmark stores the current location. RadioMaster+ also remembers the "
         "last position automatically and offers to resume it. For DAISY books, "
@@ -154,8 +156,8 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
     ("Media Player Tab", (
         "Use File > Open File, File > Open Folder, or Add to Playlist to add local "
         "audio and video. The playlist shows the queued files; select one and press "
-        "Play or Enter. Clear removes the current playlist without deleting files "
-        "from disk.\n\n"
+        "Enter or double-click it, then use the transport controls for playback. "
+        "Clear removes the current playlist without deleting files from disk.\n\n"
         "Supported formats are provided by FFmpeg and include MP3, FLAC, OGG, WAV, "
         "AAC, M4A, Opus, M4B, MP4, MKV, AVI, WebM, and MOV. Metadata tags supply "
         "artist and title information when available. Track changes can crossfade "
@@ -444,6 +446,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.66", (
+        "Streamlined the Scheduler panel by removing its redundant date and time "
+        "controls; scheduling details remain in the Add and Edit dialogs.\n\n"
+        "Removed redundant Play buttons from Audiobooks and Media Player. Press "
+        "Enter or double-click a chapter or playlist item to start it, then use "
+        "the shared transport controls. Audiobooks now has a Browse File button "
+        "for loading an individual media file.\n\n"
+        "Fixed File > Open Folder in Media Player so supported files, including "
+        "files in subfolders, appear in the playlist and are ready for playback."
+    )),
     ("Version 1.1.65", (
         "Replaced the Scheduler panel's inaccessible calendar grid with labeled "
         "native date and time pickers. The selected values now prefill new "

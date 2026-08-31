@@ -1,7 +1,9 @@
 """Media Player tab panel with file tree, playlist, and playback."""
 
+import os
+
 import wx
-from typing import Any
+
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.ui.file_tree import FileTreePanel
@@ -10,6 +12,11 @@ from radiomaster.utils.accessibility import set_accessible_name
 
 class MediaPlayerPanel(wx.Panel):
     """Panel for browsing and playing local media files."""
+
+    MEDIA_EXTENSIONS = {
+        ".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a", ".wma", ".opus",
+        ".mp4", ".mkv", ".avi", ".webm", ".mov", ".m4b",
+    }
 
     def __init__(self, parent: wx.Window, db: DatabaseManager, engine: PlaybackEngine) -> None:
         super().__init__(parent)
@@ -42,10 +49,6 @@ class MediaPlayerPanel(wx.Panel):
 
         # Controls
         ctrl_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_play = wx.Button(right_panel, label="Play")
-        set_accessible_name(self._btn_play, "Play")
-        ctrl_sizer.Add(self._btn_play, 0, wx.RIGHT, 4)
-
         self._btn_add = wx.Button(right_panel, label="Add to Playlist")
         set_accessible_name(self._btn_add, "Add to Playlist")
         ctrl_sizer.Add(self._btn_add, 0, wx.RIGHT, 4)
@@ -61,9 +64,10 @@ class MediaPlayerPanel(wx.Panel):
 
         self.SetSizer(main_sizer)
 
-        self._btn_play.Bind(wx.EVT_BUTTON, self._on_play)
         self._btn_add.Bind(wx.EVT_BUTTON, self._on_add)
         self._btn_clear.Bind(wx.EVT_BUTTON, self._on_clear)
+        self._playlist.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
+        self._file_tree.on_file_selected(self._add_path)
 
     def _on_play(self, event: wx.CommandEvent) -> None:
         """Play the selected playlist item."""
@@ -107,14 +111,36 @@ class MediaPlayerPanel(wx.Panel):
     def _on_add(self, event: wx.CommandEvent) -> None:
         """Add selected file from tree to playlist."""
         path = self._file_tree.get_selected_path()
-        if path:
-            import os
-            name = os.path.basename(path)
-            title, artist = self._read_tags(path)
-            idx = self._playlist.InsertItem(self._playlist.GetItemCount(), title or name)
-            self._playlist.SetItem(idx, 1, artist)
-            self._playlist.SetItem(idx, 2, "")
-            self._paths.insert(idx, path)
+        if path and os.path.isfile(path):
+            self._add_path(path)
+
+    def _add_path(self, path: str) -> None:
+        """Append one media file to the visible playlist and playback path list."""
+        name = os.path.basename(path)
+        title, artist = self._read_tags(path)
+        idx = self._playlist.InsertItem(self._playlist.GetItemCount(), title or name)
+        self._playlist.SetItem(idx, 1, artist)
+        self._playlist.SetItem(idx, 2, "")
+        self._paths.append(path)
+
+    def load_folder(self, path: str) -> int:
+        """Replace the playlist with supported media files from a folder tree."""
+        media_paths = sorted(
+            (
+                os.path.join(root, filename)
+                for root, _dirs, files in os.walk(path)
+                for filename in files
+                if os.path.splitext(filename)[1].lower() in self.MEDIA_EXTENSIONS
+            ),
+            key=str.casefold,
+        )
+        self._on_clear(wx.CommandEvent())
+        for media_path in media_paths:
+            self._add_path(media_path)
+        if media_paths:
+            self._playlist.Select(0)
+            self._playlist.SetFocus()
+        return len(media_paths)
 
     @staticmethod
     def _read_tags(path: str) -> tuple[str, str]:
@@ -140,3 +166,4 @@ class MediaPlayerPanel(wx.Panel):
         """Clear the playlist."""
         self._playlist.DeleteAllItems()
         self._paths.clear()
+        self._current_index = -1

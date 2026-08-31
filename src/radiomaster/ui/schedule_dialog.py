@@ -17,7 +17,6 @@ class ScheduleDialog(wx.Dialog):
         parent: wx.Window,
         db: DatabaseManager,
         schedule_data: dict[str, Any] | None = None,
-        initial_start: datetime | None = None,
     ) -> None:
         """Initialize the schedule dialog.
         
@@ -25,7 +24,6 @@ class ScheduleDialog(wx.Dialog):
             parent: Parent window
             db: Database manager instance
             schedule_data: Existing schedule data for edit mode, None for add mode
-            initial_start: Initial date and time for a new schedule
         """
         title = "Edit Recording Schedule" if schedule_data else "Add Recording Schedule"
         super().__init__(parent, title=title, size=(500, 600))
@@ -33,7 +31,6 @@ class ScheduleDialog(wx.Dialog):
         self._db = db
         self._repo = ScheduleRepository(db)
         self._schedule_data = schedule_data
-        self._initial_start = initial_start
         self._result: dict[str, Any] | None = None
         
         self._setup_ui()
@@ -89,8 +86,19 @@ class ScheduleDialog(wx.Dialog):
         main_sizer.Add(date_label, 0, wx.ALL, 4)
         self._date_picker = wx.adv.DatePickerCtrl(panel, style=wx.adv.DP_DROPDOWN | wx.adv.DP_SHOWCENTURY)
         set_accessible_name(self._date_picker, "Start Date")
-        self._date_picker.SetValue(wx.DateTime.Now())
         main_sizer.Add(self._date_picker, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+
+        default_start = datetime.now() + timedelta(minutes=5)
+        self._date_picker.SetValue(wx.DateTime.FromDMY(
+            default_start.day,
+            default_start.month - 1,
+            default_start.year,
+        ))
+        self._time_picker.SetValue(wx.DateTime.FromHMS(
+            default_start.hour,
+            default_start.minute,
+            0,
+        ))
         
         # Duration
         duration_label = wx.StaticText(panel, label="Duration (minutes, 0 = until end):")
@@ -194,18 +202,6 @@ class ScheduleDialog(wx.Dialog):
             # Set enabled
             enabled = self._schedule_data.get('enabled', 1)
             self._enabled_check.SetValue(bool(enabled))
-        elif self._initial_start:
-            self._date_picker.SetValue(wx.DateTime.FromDMY(
-                self._initial_start.day,
-                self._initial_start.month - 1,
-                self._initial_start.year,
-            ))
-            self._time_picker.SetValue(wx.DateTime.FromHMS(
-                self._initial_start.hour,
-                self._initial_start.minute,
-                self._initial_start.second,
-            ))
-
     def _on_ok(self, event: wx.CommandEvent) -> None:
         """Handle OK button - validate and save."""
         # Validate
