@@ -19,6 +19,22 @@ class TestConfig:
         assert config.get("general", "language") == "en"
         assert config.get("radio", "station_update_frequency") == "weekly"
 
+    def test_instances_do_not_mutate_shared_defaults(self, tmp_path) -> None:
+        first = ConfigManager(str(tmp_path / "first"))
+        first.set("general", "language", value="english")
+
+        second = ConfigManager(str(tmp_path / "second"))
+        assert second.get("general", "language") == "en"
+        assert DEFAULT_CONFIG["general"]["language"] == "en"
+
+    def test_legacy_language_name_is_migrated_to_iso_code(self, tmp_path) -> None:
+        config = ConfigManager(str(tmp_path))
+        config.set("general", "language", value="English")
+        config.save()
+
+        reloaded = ConfigManager(str(tmp_path))
+        assert reloaded.get("general", "language") == "en"
+
     def test_set_and_get(self, config: ConfigManager) -> None:
         config.set("playback", "default_volume", value=0.5)
         assert config.get("playback", "default_volume") == 0.5

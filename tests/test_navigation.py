@@ -90,7 +90,7 @@ class TestHelpSystem:
             "Troubleshooting",
         } <= titles
         assert len(QUICK_START_TOPICS) >= 5
-        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.68"
+        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.69"
 
 
 class TestPanelControls:
@@ -132,6 +132,56 @@ class TestPanelControls:
     ) -> None:
         _app, win = app_and_window
         assert not hasattr(win._media_panel, "_btn_play")
+
+
+class TestGeneralSettings:
+    def test_general_controls_are_named_and_offer_real_themes(self, app_and_window) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
+        try:
+            panel = dlg._panel_map[0]
+            assert panel.lang_combo.GetName() == "Language (applies after restart)"
+            assert panel.theme_combo.GetName() == "Theme"
+            assert panel.font_size_spin.GetName() == "Font Size"
+            assert panel.theme_combo.GetItems() == win._theme_manager.get_theme_names()
+            assert "Show system tray notification" in panel.show_notifications_chk.GetLabel()
+        finally:
+            dlg.Destroy()
+
+    def test_general_panel_saves_theme_key_not_display_label(self, app_and_window) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        original = win._config.get("general.theme", default="default")
+        dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
+        try:
+            panel = dlg._panel_map[0]
+            dark_index = panel._theme_keys.index("dark")
+            panel.theme_combo.SetSelection(dark_index)
+            panel.onSave()
+            assert win._config.get("general.theme") == "dark"
+        finally:
+            win._config.set("general.theme", value=original)
+            dlg.Destroy()
+
+    def test_apply_button_invokes_live_settings_callback(self, app_and_window) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        on_apply = MagicMock()
+        dlg = SettingsDialog(
+            win, win._config, theme_manager=win._theme_manager, on_apply=on_apply
+        )
+        try:
+            dlg._save_all = MagicMock()
+            with patch("radiomaster.ui.settings_dialog.wx.MessageBox"):
+                dlg._on_apply(None)
+            dlg._save_all.assert_called_once_with()
+            on_apply.assert_called_once_with()
+        finally:
+            dlg.Destroy()
 
 
 class TestTabOrder:

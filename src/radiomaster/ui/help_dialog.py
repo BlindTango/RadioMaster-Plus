@@ -446,6 +446,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.69", (
+        "Removed the redundant, unlabeled Default Volume slider from Settings > Playback; "
+        "the accessible transport-bar volume control remains the single persistent volume "
+        "setting.\n\n"
+        "Completed the General settings wiring. Language restart behavior is now explicit, "
+        "themes list only real built-in and custom choices and apply immediately, Font Size "
+        "and the combo boxes have accessible names, the tray-notification option is accurately "
+        "described, and Apply now takes effect without closing the dialog.\n\n"
+        "Fixed configuration instances sharing nested defaults and automatically migrated "
+        "legacy language names such as English to ISO codes such as en."
+    )),
     ("Version 1.1.68", (
         "Improved video-backend test isolation by making simulated ffplay processes "
         "match the real process interface and preventing unrelated Windows audio-session "

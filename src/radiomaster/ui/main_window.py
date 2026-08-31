@@ -846,6 +846,8 @@ class MainWindow(wx.Frame):
             self, self._config,
             station_updater=self._station_updater,
             on_station_update=self._radio_panel.refresh_after_station_update,
+            theme_manager=self._theme_manager,
+            on_apply=self._apply_settings_changes,
         )
         if dlg.ShowModal() == wx.ID_OK:
             # Settings saved, apply changes
@@ -868,12 +870,18 @@ class MainWindow(wx.Frame):
         high_contrast = self._config.get('accessibility.high_contrast', default=False)
         dyslexia_font = self._config.get('accessibility.dyslexia_font', default=False)
 
-        # General > Language previously saved a value nothing ever read
-        # (see app.py's startup init and settings_dialog.GeneralPanel for
-        # the matching fixes) -- apply it live here too, same as the View
-        # menu's language items already do.
-        from radiomaster.i18n import I18nManager
-        I18nManager().set_language(self._config.get('general.language', default='en'))
+        # Language is applied in app.py before the UI is constructed. wx
+        # controls do not retranslate their existing native labels, so
+        # changing I18nManager here produced a confusing half-translated
+        # session. Settings labels this honestly as restart-required.
+
+        # Unlike language, themes can be applied safely to existing
+        # controls. GeneralPanel stores an actual ThemeManager key (not a
+        # lower-cased display label), so built-in and custom themes both
+        # take effect immediately after OK or Apply.
+        self._theme_manager.apply_theme(
+            self._config.get('general.theme', default='default')
+        )
         
         if high_contrast:
             # Pure black/white across every control, not just the frame/

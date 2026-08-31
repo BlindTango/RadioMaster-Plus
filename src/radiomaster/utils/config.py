@@ -1,5 +1,6 @@
 """Configuration management for RadioMaster+."""
 
+import copy
 import json
 import os
 from typing import Any
@@ -90,6 +91,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "effects": {},
 }
 
+_LEGACY_LANGUAGE_CODES = {
+    "english": "en", "spanish": "es", "french": "fr", "german": "de",
+    "italian": "it", "portuguese": "pt", "russian": "ru", "japanese": "ja",
+    "chinese": "zh",
+}
+
 
 class ConfigManager:
     """Manages application configuration stored as JSON."""
@@ -102,7 +109,14 @@ class ConfigManager:
 
     def _load(self) -> None:
         """Load configuration from disk, merging with defaults."""
-        self._data = dict(DEFAULT_CONFIG)
+        # DEFAULT_CONFIG contains nested dictionaries.  A shallow dict()
+        # copy leaves those children shared, so changing one manager (for
+        # example general.language) silently changes the defaults seen by
+        # every manager created later in the same process.  Tests exposed
+        # this as the default drifting from "en" to the legacy "english"
+        # value.  Each manager must own a fully independent configuration
+        # tree.
+        self._data = copy.deepcopy(DEFAULT_CONFIG)
         if os.path.exists(self._config_file):
             try:
                 with open(self._config_file, "r", encoding="utf-8") as f:
@@ -110,6 +124,11 @@ class ConfigManager:
                 self._deep_merge(self._data, saved)
             except (json.JSONDecodeError, OSError):
                 pass
+        language = self._data.get("general", {}).get("language")
+        if isinstance(language, str):
+            migrated = _LEGACY_LANGUAGE_CODES.get(language.casefold())
+            if migrated:
+                self._data["general"]["language"] = migrated
 
     def _deep_merge(self, base: dict, override: dict) -> None:
         """Recursively merge override dict into base dict."""

@@ -69,6 +69,17 @@ class SettingsPanel(wx.Panel):
 class GeneralPanel(SettingsPanel):
     title = "General"
 
+    def __init__(self, parent: wx.Window, config: Config, theme_manager: Any = None) -> None:
+        # Use the application's live ThemeManager when available so the
+        # choices exactly match themes that can actually be applied,
+        # including user-saved custom themes.  The fallback keeps direct
+        # panel construction (tests/tools) working.
+        if theme_manager is None:
+            from radiomaster.ui.theme_manager import ThemeManager
+            theme_manager = ThemeManager(config)
+        self._theme_manager = theme_manager
+        super().__init__(parent, config)
+
     def makeSettings(self, sizer: wx.BoxSizer) -> None:
         # Language
         from radiomaster.i18n import LANGUAGES
@@ -77,10 +88,11 @@ class GeneralPanel(SettingsPanel):
         # below converts back to the code, so this list's order fixes the
         # code<->name mapping in both directions.
         self._lang_codes = list(LANGUAGES.keys())
-        sizer.Add(wx.StaticText(self, label="Language:"), 0, wx.ALL, 5)
+        sizer.Add(wx.StaticText(self, label="Language (applies after restart):"), 0, wx.ALL, 5)
         self.lang_combo = wx.ComboBox(
             self, choices=[LANGUAGES[c] for c in self._lang_codes], style=wx.CB_READONLY,
         )
+        set_accessible_name(self.lang_combo, "Language (applies after restart)")
         current_code = self.config.get("general.language", default="en")
         if current_code not in LANGUAGES:
             current_code = "en"
@@ -89,11 +101,13 @@ class GeneralPanel(SettingsPanel):
 
         # Theme
         sizer.Add(wx.StaticText(self, label="Theme:"), 0, wx.ALL, 5)
-        self.theme_combo = wx.ComboBox(self, choices=[
-            "Default", "Dark", "Light", "High Contrast", "Custom",
-        ], style=wx.CB_READONLY)
-        self.theme_combo.SetStringSelection(
-            self.config.get("general.theme", default="default").title()
+        self._theme_keys = self._theme_manager.get_theme_keys()
+        theme_names = self._theme_manager.get_theme_names()
+        self.theme_combo = wx.ComboBox(self, choices=theme_names, style=wx.CB_READONLY)
+        set_accessible_name(self.theme_combo, "Theme")
+        current_theme = self.config.get("general.theme", default="default")
+        self.theme_combo.SetSelection(
+            self._theme_keys.index(current_theme) if current_theme in self._theme_keys else 0
         )
         sizer.Add(self.theme_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
@@ -103,6 +117,7 @@ class GeneralPanel(SettingsPanel):
             self, value=str(self.config.get("general.font_size", default=12)),
             min=8, max=24,
         )
+        set_accessible_name(self.font_size_spin, "Font Size")
         sizer.Add(self.font_size_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         # Startup options
@@ -118,7 +133,9 @@ class GeneralPanel(SettingsPanel):
         self.close_to_tray_chk.SetValue(self.config.get("general.close_to_tray", default=False))
         sizer.Add(self.close_to_tray_chk, 0, wx.ALL, 5)
 
-        self.show_notifications_chk = wx.CheckBox(self, label="Show notifications")
+        self.show_notifications_chk = wx.CheckBox(
+            self, label="Show system tray notification when RadioMaster+ is hidden"
+        )
         self.show_notifications_chk.SetValue(self.config.get("general.show_notifications", default=True))
         sizer.Add(self.show_notifications_chk, 0, wx.ALL, 5)
 
@@ -127,7 +144,9 @@ class GeneralPanel(SettingsPanel):
         selected_name = self.lang_combo.GetStringSelection()
         code = next((c for c in self._lang_codes if LANGUAGES[c] == selected_name), "en")
         self.config.set("general.language", value=code)
-        self.config.set("general.theme", value=self.theme_combo.GetStringSelection().lower())
+        theme_index = self.theme_combo.GetSelection()
+        theme_key = self._theme_keys[theme_index] if theme_index != wx.NOT_FOUND else "default"
+        self.config.set("general.theme", value=theme_key)
         self.config.set("general.font_size", value=self.font_size_spin.GetValue())
         self.config.set("general.start_on_boot", value=self.start_on_boot_chk.IsChecked())
         self.config.set("general.minimize_to_tray", value=self.minimize_to_tray_chk.IsChecked())
@@ -149,13 +168,6 @@ class PlaybackPanel(SettingsPanel):
         idx = device_names.index(saved_device) if saved_device in device_names else 0
         self.output_device_combo.SetSelection(idx)
         sizer.Add(self.output_device_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
-
-        sizer.Add(wx.StaticText(self, label="Default Volume:"), 0, wx.ALL, 5)
-        self.volume_slider = wx.Slider(
-            self, value=int(self.config.get("playback.volume", default=1.0) * 100),
-            minValue=0, maxValue=100, style=wx.SL_HORIZONTAL | wx.SL_LABELS,
-        )
-        sizer.Add(self.volume_slider, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Crossfade Duration (seconds):"), 0, wx.ALL, 5)
         self.crossfade_spin = wx.SpinCtrl(
@@ -198,7 +210,6 @@ class PlaybackPanel(SettingsPanel):
         selected = self.output_device_combo.GetStringSelection()
         device_name = "" if selected == "System Default" else selected
         self.config.set("playback.output_device", value=device_name)
-        self.config.set("playback.volume", value=self.volume_slider.GetValue() / 100.0)
         self.config.set("playback.crossfade_duration", value=self.crossfade_spin.GetValue())
         self.config.set("playback.gapless", value=self.gapless_chk.IsChecked())
         self.config.set("playback.replaygain", value=self.replaygain_combo.GetStringSelection().lower())
@@ -716,13 +727,16 @@ class SettingsDialog(wx.Dialog):
     ]
 
     def __init__(self, parent: wx.Window, config: Config,
-                 station_updater: Any = None, on_station_update: Any = None) -> None:
+                 station_updater: Any = None, on_station_update: Any = None,
+                 theme_manager: Any = None, on_apply: Any = None) -> None:
         self.config = config
         # Only RadioPanel uses these (its "Update Now" button) -- passed
         # in here rather than through every panel class's __init__ so the
         # other 8 categories' constructors stay untouched; see _get_panel.
         self.station_updater = station_updater
         self.on_station_update = on_station_update
+        self.theme_manager = theme_manager
+        self.on_apply = on_apply
         self._panel_map: dict[int, SettingsPanel] = {}
         self._current_panel: SettingsPanel | None = None
 
@@ -786,7 +800,10 @@ class SettingsDialog(wx.Dialog):
     def _get_panel(self, index: int) -> SettingsPanel:
         if index not in self._panel_map:
             cls = self.category_classes[index]
-            panel = cls(self._container, self.config)
+            if cls is GeneralPanel:
+                panel = cls(self._container, self.config, self.theme_manager)
+            else:
+                panel = cls(self._container, self.config)
             if isinstance(panel, RadioPanel):
                 panel.station_updater = self.station_updater
                 panel.on_station_update = self.on_station_update
@@ -829,6 +846,8 @@ class SettingsDialog(wx.Dialog):
 
     def _on_apply(self, evt: wx.CommandEvent) -> None:
         self._save_all()
+        if self.on_apply:
+            self.on_apply()
         wx.MessageBox("Settings applied successfully.", "Settings", wx.OK | wx.ICON_INFORMATION, self)
 
     def _on_cancel(self, evt: wx.CommandEvent) -> None:
