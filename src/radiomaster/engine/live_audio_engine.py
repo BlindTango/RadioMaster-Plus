@@ -43,6 +43,13 @@ SAMPLE_RATE = 48000
 CHANNELS = 2
 BLOCKSIZE = 1024
 QUEUE_MAXSIZE = 200  # ~4s of audio at 1024-sample blocks/48kHz
+# A live network stream needs enough decoded audio in hand to ride through
+# ordinary packet-arrival jitter.  Starting the device on the first decoded
+# frame (and resuming on every isolated frame after an underrun) turns that
+# jitter into the repeated audio/silence breakup users hear.  One second is a
+# useful compromise: stable even for high-bitrate FLAC/YouTube sources without
+# making Play feel unresponsive.
+PREBUFFER_CHUNKS = 48
 FADE_SAMPLES = 64  # ~1.3ms at 48kHz -- inaudible as a level change, but
 # long enough that a fade through it (instead of a raw sample-value jump)
 # eliminates the audible "click" a buffer-underrun boundary produces,
@@ -428,6 +435,7 @@ class LiveAudioEngine:
 
         self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
         self._leftover_was_padded = False
+        self._rebuffering = True
         self._callback_lock = threading.Lock()
 
         # Every effect except pitch_tempo (which still needs a real
@@ -491,6 +499,7 @@ class LiveAudioEngine:
         self._reconnect_attempts = 0
         self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
         self._leftover_was_padded = False
+        self._rebuffering = True
 
         self._state = self.STATE_BUFFERING
         self._notify_state()
@@ -509,6 +518,17 @@ class LiveAudioEngine:
         notification cadence to decode iterations would fire a burst of
         stale updates instead of tracking real playback over time."""
         while not self._stop_flag.is_set():
+            # State callbacks are deliberately emitted here, not from the
+            # real-time PortAudio callback.  A network underrun changes the
+            # flag there; this low-rate thread safely tells the UI when the
+            # engine is waiting for its cushion and when audio is ready again.
+            if self._output_stream is not None and not self._pause_flag.is_set():
+                if self._rebuffering and self._state == self.STATE_PLAYING:
+                    self._state = self.STATE_BUFFERING
+                    self._notify_state()
+                elif not self._rebuffering and self._state == self.STATE_BUFFERING:
+                    self._state = self.STATE_PLAYING
+                    self._notify_state()
             if self._on_position_update:
                 self._on_position_update(self._position, self._duration)
             if self._on_buffering:
@@ -556,6 +576,7 @@ class LiveAudioEngine:
         with self._callback_lock:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
             self._leftover_was_padded = False
+            self._rebuffering = True
         if self._decode_thread is not None:
             if wait:
                 self._decode_thread.join(timeout=3)
@@ -843,6 +864,10 @@ class LiveAudioEngine:
             self._reconnect_attempts += 1
             self._state = self.STATE_BUFFERING
             self._notify_state()
+            with self._callback_lock:
+                self._rebuffering = True
+                self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
+                self._leftover_was_padded = False
             time.sleep(self._reconnect_interval)
             if self._stop_flag.is_set():
                 return
@@ -877,6 +902,7 @@ class LiveAudioEngine:
         with self._callback_lock:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
             self._leftover_was_padded = False
+            self._rebuffering = True
         self._state = self.STATE_STOPPED
         self._notify_state()
 
@@ -904,11 +930,6 @@ class LiveAudioEngine:
                 # session before this stale one wakes up -- see the
                 # matching comment in _handle_decode_failure.
                 return
-            self._start_output_stream()
-            self._state = self.STATE_PLAYING
-            self._notify_state()
-            self._reconnect_attempts = 0
-
             for packet in container.demux(stream):
                 if self._stop_flag.is_set():
                     return
@@ -942,6 +963,7 @@ class LiveAudioEngine:
                             while not self._stop_flag.is_set():
                                 try:
                                     self._pcm_queue.put(pcm, timeout=0.5)
+                                    self._begin_output_if_buffered()
                                     break
                                 except queue.Full:
                                     continue
@@ -949,6 +971,10 @@ class LiveAudioEngine:
             if not self._stop_flag.is_set():
                 if self._auto_reconnect and self._duration == 0.0:
                     raise RuntimeError("stream ended unexpectedly")
+                # A very short local sound may contain less than the normal
+                # prebuffer target.  It still needs an output stream once all
+                # of its decoded audio is available.
+                self._begin_output_if_buffered(force=True)
                 # Let any buffered audio finish playing before reporting stopped.
                 deadline = time.time() + 5
                 while not self._pcm_queue.empty() and time.time() < deadline:
@@ -966,6 +992,26 @@ class LiveAudioEngine:
     # ------------------------------------------------------------------
     # Output stream (sounddevice / WASAPI)
     # ------------------------------------------------------------------
+    def _begin_output_if_buffered(self, force: bool = False) -> None:
+        """Start playback only after a useful decode-ahead cushion exists.
+
+        The callback performs the equivalent check after a mid-stream
+        underrun.  This decode-thread side handles initial playback, when no
+        output callback exists yet to observe that the queue has filled.
+        """
+        if self._output_stream is not None:
+            return
+        if not force and self._pcm_queue.qsize() < PREBUFFER_CHUNKS:
+            return
+        if self._pcm_queue.empty() or self._stop_flag.is_set():
+            return
+        with self._callback_lock:
+            self._rebuffering = False
+        self._start_output_stream()
+        self._state = self.STATE_PLAYING
+        self._notify_state()
+        self._reconnect_attempts = 0
+
     def _start_output_stream(self) -> None:
         # A reconnect calls this again on the same engine instance without
         # going through stop() first. Without closing the previous stream,
@@ -1049,6 +1095,11 @@ class LiveAudioEngine:
             if self._pause_flag.is_set():
                 outdata.fill(0.0)
                 return
+            if self._rebuffering:
+                if self._pcm_queue.qsize() < PREBUFFER_CHUNKS:
+                    outdata.fill(0.0)
+                    return
+                self._rebuffering = False
             need = frames
             chunks = [self._leftover]
             pad_flags = [self._leftover_was_padded]
@@ -1060,6 +1111,7 @@ class LiveAudioEngine:
                 except queue.Empty:
                     chunk = np.zeros((need - have, CHANNELS), dtype=np.float32)
                     pad_flags.append(True)
+                    self._rebuffering = True
                 chunks.append(chunk)
                 have += chunk.shape[0]
             combined = np.concatenate(chunks, axis=0)

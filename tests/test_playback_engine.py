@@ -257,6 +257,59 @@ class TestLiveAudioEngine:
     """Tests for the audio-only backend (PyAV decode + sounddevice output)
     that gives Volume/Pan/Rate/effects genuinely live, no-restart changes."""
 
+    def test_initial_playback_waits_for_prebuffer_cushion(self) -> None:
+        """Opening a live source must not start PortAudio on an empty queue.
+
+        That old behaviour made ordinary network jitter audible immediately,
+        especially on high-bitrate FLAC stations and YouTube audio streams.
+        """
+        from radiomaster.engine.live_audio_engine import (
+            CHANNELS,
+            LiveAudioEngine,
+            PREBUFFER_CHUNKS,
+        )
+
+        engine = LiveAudioEngine()
+        engine._stop_flag.clear()
+        chunk = np.ones((1024, CHANNELS), dtype=np.float32)
+        with patch.object(engine, "_start_output_stream") as start_output:
+            for _ in range(PREBUFFER_CHUNKS - 1):
+                engine._pcm_queue.put(chunk.copy())
+            engine._begin_output_if_buffered()
+            start_output.assert_not_called()
+
+            engine._pcm_queue.put(chunk.copy())
+            engine._begin_output_if_buffered()
+            start_output.assert_called_once()
+            assert engine.state == engine.STATE_PLAYING
+            assert engine._rebuffering is False
+
+    def test_underrun_waits_for_full_cushion_before_resuming(self) -> None:
+        """After starvation, isolated arriving chunks stay buffered instead
+        of producing the repeated audio/silence breakup reported by users."""
+        from radiomaster.engine.live_audio_engine import (
+            CHANNELS,
+            LiveAudioEngine,
+            PREBUFFER_CHUNKS,
+        )
+
+        engine = LiveAudioEngine()
+        engine._volume = 1.0
+        engine._rebuffering = True
+        chunk = np.ones((1024, CHANNELS), dtype=np.float32) * 0.25
+        outdata = np.empty_like(chunk)
+
+        for _ in range(PREBUFFER_CHUNKS - 1):
+            engine._pcm_queue.put(chunk.copy())
+        engine._audio_callback(outdata, 1024, None, None)
+        assert np.all(outdata == 0.0)
+        assert engine._pcm_queue.qsize() == PREBUFFER_CHUNKS - 1
+
+        engine._pcm_queue.put(chunk.copy())
+        engine._audio_callback(outdata, 1024, None, None)
+        assert np.any(outdata != 0.0)
+        assert engine._rebuffering is False
+
     def test_initial_state(self) -> None:
         from radiomaster.engine.live_audio_engine import LiveAudioEngine
         engine = LiveAudioEngine()

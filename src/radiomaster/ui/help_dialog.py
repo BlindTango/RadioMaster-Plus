@@ -446,6 +446,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.67", (
+        "Improved radio and YouTube audio stability on connections with packet-arrival "
+        "jitter. Live playback now builds a decode-ahead cushion before starting and "
+        "rebuilds it after an underrun instead of repeatedly alternating short audio "
+        "fragments with silence.\n\n"
+        "The transport state now reports buffering while that cushion is restored. "
+        "Streams whose servers terminate the connection prematurely may still require "
+        "automatic reconnection or selecting another source."
+    )),
     ("Version 1.1.66", (
         "Streamlined the Scheduler panel by removing its redundant date and time "
         "controls; scheduling details remain in the Add and Edit dialogs.\n\n"
