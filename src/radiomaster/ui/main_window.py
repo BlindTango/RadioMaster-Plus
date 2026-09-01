@@ -1195,6 +1195,10 @@ class MainWindow(wx.Frame):
         # remaining; duration == 0 (an unbounded radio stream) shows just
         # elapsed -- how long the current connection has been playing.
         self._status_bar.set_time_info(position, duration)
+        # A real crossfade must begin before the outgoing track reports
+        # natural completion. The media panel guards ownership/current URL,
+        # so position updates from podcasts, radio, and video are harmless.
+        self._media_panel.try_crossfade_advance(position, duration)
 
     def _on_engine_error(self, message: str) -> None:
         """Handle playback errors."""

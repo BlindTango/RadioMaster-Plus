@@ -1,6 +1,7 @@
 """Media Player tab panel with file tree, playlist, and playback."""
 
 import os
+import time
 
 import wx
 
@@ -24,6 +25,7 @@ class MediaPlayerPanel(wx.Panel):
         self._engine = engine
         self._paths: list[str] = []
         self._current_index: int = -1
+        self._next_transition_not_before: float = 0.0
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -101,11 +103,55 @@ class MediaPlayerPanel(wx.Panel):
         title = self._playlist.GetItemText(next_index)
         artist = self._playlist.GetItemText(next_index, 1)
         from radiomaster.utils.config import ConfigManager
-        fade_seconds = ConfigManager.get_instance().get("playback.crossfade_duration", default=0)
-        if fade_seconds:
+        config = ConfigManager.get_instance()
+        fade_seconds = config.get("playback.crossfade_duration", default=0)
+        # Gapless and crossfade are distinct transition styles. Gapless
+        # starts the next decoder immediately at natural end; crossfade is
+        # initiated before natural end by try_crossfade_advance().
+        gapless = config.get("playback.gapless", default=False)
+        if fade_seconds and not gapless:
             self._engine.crossfade_to(self._paths[next_index], title=title, artist=artist, fade_seconds=fade_seconds)
         else:
             self._engine.play(self._paths[next_index], title=title, artist=artist)
+        return True
+
+    def try_crossfade_advance(self, position: float, duration: float) -> bool:
+        """Start the next playlist item early enough for a real overlap.
+
+        Natural-end notification is too late to crossfade: the outgoing
+        decoder has already stopped. Position updates provide the advance
+        notice needed to start the incoming decoder while both can play.
+        Gapless mode deliberately wins over crossfade and waits for the
+        natural-end path above.
+        """
+        if time.monotonic() < self._next_transition_not_before:
+            return False
+        if self._current_index < 0 or self._current_index >= len(self._paths):
+            return False
+        if self._engine.current_url != self._paths[self._current_index]:
+            return False
+        next_index = self._current_index + 1
+        if next_index >= len(self._paths) or duration <= 0:
+            return False
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        fade_seconds = float(config.get("playback.crossfade_duration", default=0))
+        if config.get("playback.gapless", default=False) or fade_seconds <= 0:
+            return False
+        if duration - position > fade_seconds:
+            return False
+        self._current_index = next_index
+        title = self._playlist.GetItemText(next_index)
+        artist = self._playlist.GetItemText(next_index, 1)
+        actual_fade = min(fade_seconds, max(0.1, duration - position))
+        # During an overlap, both decoders briefly emit position updates.
+        # Ignore them until the outgoing decoder has been stopped so its
+        # near-end position cannot accidentally skip another playlist item.
+        self._next_transition_not_before = time.monotonic() + actual_fade + 0.5
+        self._engine.crossfade_to(
+            self._paths[next_index], title=title, artist=artist,
+            fade_seconds=actual_fade,
+        )
         return True
 
     def _on_add(self, event: wx.CommandEvent) -> None:
@@ -167,3 +213,4 @@ class MediaPlayerPanel(wx.Panel):
         self._playlist.DeleteAllItems()
         self._paths.clear()
         self._current_index = -1
+        self._next_transition_not_before = 0.0

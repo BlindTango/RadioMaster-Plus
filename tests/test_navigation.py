@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import wx
+import wx.adv
 
 from radiomaster.app import RadioMasterApp
 from radiomaster.services.station_api import Station
@@ -90,7 +91,8 @@ class TestHelpSystem:
             "Troubleshooting",
         } <= titles
         assert len(QUICK_START_TOPICS) >= 5
-        assert RELEASE_NOTES_TOPICS[0][0] == "Version 1.1.69"
+        from radiomaster import __version__
+        assert RELEASE_NOTES_TOPICS[0][0] == f"Version {__version__}"
 
 
 class TestPanelControls:
@@ -182,6 +184,157 @@ class TestGeneralSettings:
             on_apply.assert_called_once_with()
         finally:
             dlg.Destroy()
+
+
+class TestPlaybackSettings:
+    def test_playback_controls_save_every_setting_and_link_is_actionable(
+        self, app_and_window
+    ) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        original = {
+            key: win._config.get(f"playback.{key}")
+            for key in (
+                "output_device", "crossfade_duration", "gapless", "replaygain",
+                "normalize_audio", "remember_position", "acoustid_api_key",
+            )
+        }
+        dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
+        try:
+            dlg._switch_to(1)
+            panel = dlg._panel_map[1]
+            panel.output_device_combo.SetSelection(0)
+            panel.crossfade_spin.SetValue(4)
+            panel.gapless_chk.SetValue(True)
+            panel.replaygain_combo.SetStringSelection("Track")
+            panel.normalize_chk.SetValue(True)
+            panel.remember_pos_chk.SetValue(False)
+            panel.acoustid_key_txt.SetValue(" test-key ")
+            panel.onSave()
+
+            assert panel.crossfade_spin.GetName() == "Crossfade Duration (seconds)"
+            assert panel.replaygain_combo.GetName() == "ReplayGain mode"
+            links = [child for child in panel.GetChildren() if isinstance(child, wx.adv.HyperlinkCtrl)]
+            assert len(links) == 1
+            assert links[0].GetURL() == "https://acoustid.org/api-key"
+            assert win._config.get("playback.output_device") == ""
+            assert win._config.get("playback.crossfade_duration") == 4
+            assert win._config.get("playback.gapless") is True
+            assert win._config.get("playback.replaygain") == "track"
+            assert win._config.get("playback.normalize_audio") is True
+            assert win._config.get("playback.remember_position") is False
+            assert win._config.get("playback.acoustid_api_key") == "test-key"
+        finally:
+            for key, value in original.items():
+                win._config.set(f"playback.{key}", value=value)
+            dlg.Destroy()
+
+    def test_playlist_crossfade_starts_before_natural_end(self, app_and_window) -> None:
+        _app, win = app_and_window
+        panel = win._media_panel
+        config = win._config
+        old_fade = config.get("playback.crossfade_duration")
+        old_gapless = config.get("playback.gapless")
+        old_paths = panel._paths
+        old_index = panel._current_index
+        try:
+            panel._paths = ["first.mp3", "second.mp3"]
+            panel._current_index = 0
+            panel._playlist.DeleteAllItems()
+            panel._playlist.InsertItem(0, "First")
+            panel._playlist.InsertItem(1, "Second")
+            config.set("playback.crossfade_duration", value=3)
+            config.set("playback.gapless", value=False)
+            win._engine._current_url = "first.mp3"
+            win._engine.crossfade_to = MagicMock()
+
+            assert panel.try_crossfade_advance(96.5, 100.0) is False
+            assert panel.try_crossfade_advance(97.0, 100.0) is True
+            win._engine.crossfade_to.assert_called_once()
+            assert panel._current_index == 1
+        finally:
+            config.set("playback.crossfade_duration", value=old_fade)
+            config.set("playback.gapless", value=old_gapless)
+            panel._paths = old_paths
+            panel._current_index = old_index
+            panel._playlist.DeleteAllItems()
+
+
+class TestRadioSettings:
+    def test_radio_controls_save_all_runtime_settings(self, app_and_window) -> None:
+        _app, win = app_and_window
+        from radiomaster.services.station_update_scheduler import FREQUENCIES
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        keys = (
+            "default_country", "show_duplicates", "auto_reconnect",
+            "reconnect_max_attempts", "reconnect_interval",
+            "auto_play_last_station", "station_update_frequency",
+        )
+        original = {key: win._config.get(f"radio.{key}") for key in keys}
+        dlg = SettingsDialog(
+            win, win._config, station_updater=win._station_updater,
+            on_station_update=win._radio_panel.refresh_after_station_update,
+            theme_manager=win._theme_manager,
+        )
+        try:
+            dlg._switch_to(2)
+            panel = dlg._panel_map[2]
+            panel.country_combo.SetStringSelection("Canada")
+            panel.show_duplicates_chk.SetValue(True)
+            panel.auto_reconnect_chk.SetValue(False)
+            panel._sync_reconnect_controls()
+            assert panel.reconnect_attempts_spin.IsEnabled() is False
+            assert panel.reconnect_interval_spin.IsEnabled() is False
+            panel.auto_reconnect_chk.SetValue(True)
+            panel._sync_reconnect_controls()
+            panel.reconnect_attempts_spin.SetValue(8)
+            panel.reconnect_interval_spin.SetValue(4)
+            panel.auto_play_last_chk.SetValue(True)
+            panel.update_freq_choice.SetSelection(FREQUENCIES.index("monthly"))
+            panel.onSave()
+
+            assert panel.country_combo.GetName() == "Default Country"
+            assert panel.reconnect_attempts_spin.GetName() == "Reconnect attempts before giving up"
+            assert panel.reconnect_interval_spin.GetName() == (
+                "Interval between reconnect attempts (seconds)"
+            )
+            assert panel.update_now_status.GetName() == "Station list update status"
+            assert panel.station_updater is win._station_updater
+            assert panel.on_station_update == win._radio_panel.refresh_after_station_update
+            assert win._config.get("radio.default_country") == "canada"
+            assert win._config.get("radio.show_duplicates") is True
+            assert win._config.get("radio.auto_reconnect") is True
+            assert win._config.get("radio.reconnect_max_attempts") == 8
+            assert win._config.get("radio.reconnect_interval") == 4.0
+            assert win._config.get("radio.auto_play_last_station") is True
+            assert win._config.get("radio.station_update_frequency") == "monthly"
+        finally:
+            for key, value in original.items():
+                win._config.set(f"radio.{key}", value=value)
+            dlg.Destroy()
+
+    def test_applying_radio_settings_updates_live_consumers(self, app_and_window) -> None:
+        _app, win = app_and_window
+        win._engine.set_auto_reconnect = MagicMock()
+        win._engine.set_reconnect_settings = MagicMock()
+        win._radio_panel._apply_sections = MagicMock()
+        win._station_update_scheduler.set_frequency = MagicMock()
+
+        win._apply_settings_changes()
+
+        win._engine.set_auto_reconnect.assert_called_once_with(
+            win._config.get("radio.auto_reconnect")
+        )
+        win._engine.set_reconnect_settings.assert_called_once_with(
+            win._config.get("radio.reconnect_max_attempts"),
+            win._config.get("radio.reconnect_interval"),
+        )
+        win._radio_panel._apply_sections.assert_called_once_with()
+        win._station_update_scheduler.set_frequency.assert_called_once_with(
+            win._config.get("radio.station_update_frequency")
+        )
 
 
 class TestTabOrder:

@@ -446,6 +446,18 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.70", (
+        "Completed the Playback settings wiring. Output device, crossfade, gapless playback, "
+        "ReplayGain, normalization, position memory, and AcoustID configuration now have "
+        "explicit defaults and connected runtime behavior. Playlist crossfades now begin "
+        "before the outgoing track ends, gapless playback takes precedence when selected, "
+        "and the AcoustID key link is actionable and accessible.\n\n"
+        "Completed the Radio settings wiring. Country and duplicate filtering, automatic "
+        "reconnection, reconnect limits, last-station playback, scheduled station updates, "
+        "and manual updates are connected to their live consumers. Reconnect detail controls "
+        "now follow the main toggle, invalid saved selections recover safely, and unexpected "
+        "manual-update errors no longer leave the Update Now button disabled."
+    )),
     ("Version 1.1.69", (
         "Removed the redundant, unlabeled Default Volume slider from Settings > Playback; "
         "the accessible transport-bar volume control remains the single persistent volume "

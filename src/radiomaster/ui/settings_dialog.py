@@ -174,16 +174,21 @@ class PlaybackPanel(SettingsPanel):
             self, value=str(self.config.get("playback.crossfade_duration", default=0)),
             min=0, max=10,
         )
+        set_accessible_name(self.crossfade_spin, "Crossfade Duration (seconds)")
         sizer.Add(self.crossfade_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         self.gapless_chk = wx.CheckBox(self, label="Gapless playback")
         self.gapless_chk.SetValue(self.config.get("playback.gapless", default=False))
+        self.gapless_chk.SetToolTip(
+            "Start consecutive playlist tracks without a fade; when enabled, this takes priority over crossfade."
+        )
         sizer.Add(self.gapless_chk, 0, wx.ALL, 5)
 
         sizer.Add(wx.StaticText(self, label="ReplayGain:"), 0, wx.ALL, 5)
         self.replaygain_combo = wx.ComboBox(
             self, choices=["None", "Album", "Track"], style=wx.CB_READONLY,
         )
+        set_accessible_name(self.replaygain_combo, "ReplayGain mode")
         self.replaygain_combo.SetStringSelection(
             self.config.get("playback.replaygain", default="none").title()
         )
@@ -203,7 +208,10 @@ class PlaybackPanel(SettingsPanel):
         )
         set_accessible_name(self.acoustid_key_txt, "AcoustID API Key")
         sizer.Add(self.acoustid_key_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
-        key_link = wx.StaticText(self, label="Get a free key at acoustid.org/api-key")
+        key_link = wx.adv.HyperlinkCtrl(
+            self, label="Get a free AcoustID API key", url="https://acoustid.org/api-key"
+        )
+        set_accessible_name(key_link, "Get a free AcoustID API key (opens acoustid.org)")
         sizer.Add(key_link, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
     def onSave(self) -> None:
@@ -236,6 +244,9 @@ class RadioPanel(SettingsPanel):
         ], style=wx.CB_READONLY)
         current = self.config.get("radio.default_country", default="all")
         self.country_combo.SetStringSelection("All" if current == "all" else current.title())
+        if self.country_combo.GetSelection() == wx.NOT_FOUND:
+            self.country_combo.SetStringSelection("All")
+        set_accessible_name(self.country_combo, "Default Country")
         sizer.Add(self.country_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         self.show_duplicates_chk = wx.CheckBox(self, label="Show duplicate stations")
@@ -251,25 +262,43 @@ class RadioPanel(SettingsPanel):
             self, value=str(self.config.get("radio.reconnect_max_attempts", default=5)),
             min=1, max=20,
         )
+        set_accessible_name(self.reconnect_attempts_spin, "Reconnect attempts before giving up")
         sizer.Add(self.reconnect_attempts_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        sizer.Add(wx.StaticText(self, label="Interval between reconnect attempts (seconds):"), 0, wx.ALL, 5)
+        sizer.Add(
+            wx.StaticText(self, label="Interval between reconnect attempts (seconds):"),
+            0, wx.ALL, 5,
+        )
         self.reconnect_interval_spin = wx.SpinCtrl(
             self, value=str(int(self.config.get("radio.reconnect_interval", default=2))),
             min=1, max=30,
         )
+        set_accessible_name(
+            self.reconnect_interval_spin, "Interval between reconnect attempts (seconds)"
+        )
         sizer.Add(self.reconnect_interval_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+        self.auto_reconnect_chk.Bind(wx.EVT_CHECKBOX, self._on_auto_reconnect_changed)
+        self._sync_reconnect_controls()
 
-        self.auto_play_last_chk = wx.CheckBox(self, label="Automatically play the last station on launch")
-        self.auto_play_last_chk.SetValue(self.config.get("radio.auto_play_last_station", default=False))
+        self.auto_play_last_chk = wx.CheckBox(
+            self, label="Automatically play the last station on launch"
+        )
+        self.auto_play_last_chk.SetValue(
+            self.config.get("radio.auto_play_last_station", default=False)
+        )
         sizer.Add(self.auto_play_last_chk, 0, wx.ALL, 5)
 
         from radiomaster.services.station_update_scheduler import FREQUENCIES, FREQUENCY_LABELS
         sizer.Add(wx.StaticText(self, label="Station list update frequency:"), 0, wx.ALL, 5)
-        self.update_freq_choice = wx.Choice(self, choices=[FREQUENCY_LABELS[f] for f in FREQUENCIES])
+        self.update_freq_choice = wx.Choice(
+            self, choices=[FREQUENCY_LABELS[f] for f in FREQUENCIES]
+        )
         current_freq = self.config.get("radio.station_update_frequency", default="weekly")
         self.update_freq_choice.SetSelection(
-            FREQUENCIES.index(current_freq) if current_freq in FREQUENCIES else FREQUENCIES.index("weekly"))
+            FREQUENCIES.index(current_freq)
+            if current_freq in FREQUENCIES
+            else FREQUENCIES.index("weekly")
+        )
         set_accessible_name(self.update_freq_choice, "Station list update frequency")
         sizer.Add(self.update_freq_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
@@ -279,7 +308,17 @@ class RadioPanel(SettingsPanel):
         sizer.Add(self.update_now_btn, 0, wx.ALL, 5)
 
         self.update_now_status = wx.StaticText(self, label="")
+        set_accessible_name(self.update_now_status, "Station list update status")
         sizer.Add(self.update_now_status, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+    def _on_auto_reconnect_changed(self, event: wx.CommandEvent) -> None:
+        self._sync_reconnect_controls()
+        event.Skip()
+
+    def _sync_reconnect_controls(self) -> None:
+        enabled = self.auto_reconnect_chk.IsChecked()
+        self.reconnect_attempts_spin.Enable(enabled)
+        self.reconnect_interval_spin.Enable(enabled)
 
     def _on_update_now(self, event: wx.CommandEvent) -> None:
         if not self.station_updater:
@@ -297,28 +336,47 @@ class RadioPanel(SettingsPanel):
             call_after_safe(self, self.update_now_status.SetLabel, text)
 
         def worker():
-            result = self.station_updater.update_now(progress_cb=progress_cb)
-            if result.ok:
+            try:
+                result = self.station_updater.update_now(progress_cb=progress_cb)
+                if result.ok:
+                    call_after_safe(
+                        self, self.update_now_status.SetLabel,
+                        f"Updated {result.changed} stations ({result.unchanged} unchanged).",
+                    )
+                    if self.on_station_update:
+                        call_after_safe(self, self.on_station_update)
+                else:
+                    call_after_safe(
+                        self, self.update_now_status.SetLabel, f"Update failed: {result.error}"
+                    )
+            except Exception as exc:
+                # StationUpdater converts expected network failures into an
+                # UpdateResult. Keep the dialog usable for unexpected DB or
+                # filesystem errors too, instead of stranding a disabled button.
                 call_after_safe(self, self.update_now_status.SetLabel,
-                                 f"Updated {result.changed} stations ({result.unchanged} unchanged).")
-                if self.on_station_update:
-                    call_after_safe(self, self.on_station_update)
-            else:
-                call_after_safe(self, self.update_now_status.SetLabel, f"Update failed: {result.error}")
-            call_after_safe(self, self.update_now_btn.Enable)
+                                f"Update failed: {exc}")
+            finally:
+                call_after_safe(self, self.update_now_btn.Enable)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
     def onSave(self) -> None:
         from radiomaster.services.station_update_scheduler import FREQUENCIES
-        self.config.set("radio.default_country", value=self.country_combo.GetStringSelection().lower())
+        country = self.country_combo.GetStringSelection() or "All"
+        self.config.set("radio.default_country", value=country.lower())
         self.config.set("radio.show_duplicates", value=self.show_duplicates_chk.IsChecked())
         self.config.set("radio.auto_reconnect", value=self.auto_reconnect_chk.IsChecked())
-        self.config.set("radio.reconnect_max_attempts", value=self.reconnect_attempts_spin.GetValue())
-        self.config.set("radio.reconnect_interval", value=float(self.reconnect_interval_spin.GetValue()))
+        self.config.set(
+            "radio.reconnect_max_attempts", value=self.reconnect_attempts_spin.GetValue()
+        )
+        self.config.set(
+            "radio.reconnect_interval", value=float(self.reconnect_interval_spin.GetValue())
+        )
         self.config.set("radio.auto_play_last_station", value=self.auto_play_last_chk.IsChecked())
-        self.config.set("radio.station_update_frequency", value=FREQUENCIES[self.update_freq_choice.GetSelection()])
+        selection = self.update_freq_choice.GetSelection()
+        frequency = FREQUENCIES[selection] if 0 <= selection < len(FREQUENCIES) else "weekly"
+        self.config.set("radio.station_update_frequency", value=frequency)
 
 
 class PodcastsPanel(SettingsPanel):

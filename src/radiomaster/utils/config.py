@@ -16,6 +16,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "playback": {
         "default_volume": 0.8,
         "crossfade_duration": 3,
+        "gapless": False,
+        "output_device": "",
+        "replaygain": "none",
+        "normalize_audio": False,
+        "remember_position": True,
+        "acoustid_api_key": "",
         "fade_in_duration": 0,
         "fade_out_duration": 0,
         "buffer_size": 4096,
@@ -35,6 +41,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "station_update_frequency": "weekly",
         "connection_timeout": 10,
         "retry_count": 3,
+        "default_country": "all",
+        "show_duplicates": False,
+        "auto_reconnect": True,
+        "reconnect_max_attempts": 5,
+        "reconnect_interval": 2.0,
         "auto_play_last_station": False,
         # Set whenever a station starts playing (see RadioPanel._play_station);
         # empty until then.
