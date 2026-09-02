@@ -303,10 +303,20 @@ class DownloadRepository:
         completed podcast/YouTube download had no way to be played back
         from Download History: the row said "completed" but nothing knew
         which file on disk it actually corresponded to."""
+        download = self._db.fetchone(
+            "SELECT url, source_type FROM downloads WHERE id = ?", (download_id,)
+        )
+        stored_path = self._stored_path(file_path)
         self._db.execute(
             "UPDATE downloads SET progress = 100, status = 'completed', file_path = ? WHERE id = ?",
-            (self._stored_path(file_path), download_id),
+            (stored_path, download_id),
         )
+        if download and download.get("source_type") == "podcast":
+            self._db.execute(
+                "UPDATE episodes SET download_status = 'completed', file_path = ? "
+                "WHERE audio_url = ?",
+                (stored_path, download.get("url", "")),
+            )
         self._db.commit()
 
     def set_file_path(self, download_id: int, file_path: str) -> None:
@@ -361,6 +371,15 @@ class DownloadRepository:
                 "UPDATE downloads SET progress = ? WHERE id = ?",
                 (progress, download_id),
             )
+        if status == "failed":
+            download = self._db.fetchone(
+                "SELECT url, source_type FROM downloads WHERE id = ?", (download_id,)
+            )
+            if download and download.get("source_type") == "podcast":
+                self._db.execute(
+                    "UPDATE episodes SET download_status = 'failed' WHERE audio_url = ?",
+                    (download.get("url", ""),),
+                )
         self._db.commit()
 
 

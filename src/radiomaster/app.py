@@ -134,7 +134,9 @@ class RadioMasterApp(wx.App):
 
         from radiomaster.utils.paths import get_recordings_dir
         rec_dir = get_recordings_dir()
-        self._scheduler_service = SchedulerService(rec_dir)
+        self._scheduler_service = SchedulerService(
+            rec_dir, download_manager=self._download_manager, database=self._db
+        )
         from radiomaster.database.repository import ScheduleRepository
         self._scheduler_service.load_schedules(ScheduleRepository(self._db).get_all())
         self._scheduler_service.start()
@@ -165,12 +167,20 @@ class RadioMasterApp(wx.App):
         """Clean up on exit."""
         self.logger.info(f"Shutting down {__app_name__}")
         if self._main_window:
+            # EVT_CLOSE normally handles this first; keep an idempotent
+            # backstop for tests, OS shutdown, and other non-window exits.
+            self._main_window._radio_panel.shutdown_recordings()
             # Backstop for MainWindow._on_close (EVT_CLOSE), which is what
             # normally stops playback before the frame is destroyed. Cheap
             # to call again here in case exit happened some other way.
             # wait=False for the same reason _on_close uses it -- OnExit()
             # blocking here delays process exit exactly when an installer
             # (see AppMutex) may be waiting on it to actually be gone.
+            # wx may already have detached this App by the time a direct
+            # OnExit call reaches here. Detach the UI callback in that rare
+            # path so stopping the backend cannot post to a dead event loop.
+            if wx.GetApp() is None:
+                self._main_window.engine.on_state_change(None)
             self._main_window.engine.stop(wait=False)
             # Same backstop reasoning for the tray icon: a leftover icon
             # only disappears once the user mouses over it if this doesn't

@@ -40,6 +40,8 @@ class RadioBrowserClient:
             "User-Agent": "RadioMaster+/1.0",
             "Content-Type": "application/json",
         })
+        from radiomaster.utils.network import apply_to_session
+        apply_to_session(self._session, "RadioMaster+/1.0")
         discovered = _discover_servers()
         seen: dict[str, None] = {}
         for url in discovered + DEFAULT_BASE_URLS:
@@ -48,6 +50,8 @@ class RadioBrowserClient:
 
     def _get(self, path: str, params: dict | None = None, timeout: int = 15) -> list[dict[str, Any]]:
         """Try each base URL until one succeeds."""
+        from radiomaster.utils.network import get_timeout
+        timeout = get_timeout(default=timeout)
         for base in self._base_urls:
             try:
                 resp = self._session.get(f"{base}{path}", params=params, timeout=timeout)

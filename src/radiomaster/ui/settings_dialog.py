@@ -391,8 +391,10 @@ class PodcastsPanel(SettingsPanel):
         # own subfolder under here (see podcast_panel.py's _on_download),
         # so this is a dedicated location, not the shared Downloads one.
         self.podcast_path_txt = wx.TextCtrl(self, value=get_podcasts_dir())
+        set_accessible_name(self.podcast_path_txt, "Podcast Download Location")
         path_sizer.Add(self.podcast_path_txt, 1, wx.EXPAND)
-        podcast_browse_btn = wx.Button(self, label="Browse...")
+        podcast_browse_btn = wx.Button(self, label="Browse Podcast Download Location...")
+        set_accessible_name(podcast_browse_btn, "Browse Podcast Download Location")
         podcast_browse_btn.Bind(wx.EVT_BUTTON, lambda e: self._browse(self.podcast_path_txt))
         path_sizer.Add(podcast_browse_btn, 0, wx.LEFT, 5)
         sizer.Add(path_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -406,6 +408,7 @@ class PodcastsPanel(SettingsPanel):
             self, value=str(self.config.get("podcasts.download_limit", default=3)),
             min=1, max=100,
         )
+        set_accessible_name(self.download_limit_spin, "Episodes to download per podcast")
         sizer.Add(self.download_limit_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Episodes to keep:"), 0, wx.ALL, 5)
@@ -413,19 +416,29 @@ class PodcastsPanel(SettingsPanel):
             self, value=str(self.config.get("podcasts.keep_episodes", default=10)),
             min=1, max=1000,
         )
+        set_accessible_name(self.keep_episodes_spin, "Episodes to keep")
         sizer.Add(self.keep_episodes_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        self.sync_gpodder_chk = wx.CheckBox(self, label="Sync with gpodder.net")
-        self.sync_gpodder_chk.SetValue(self.config.get("podcasts.sync_gpodder", default=False))
-        sizer.Add(self.sync_gpodder_chk, 0, wx.ALL, 5)
-
-        sizer.Add(wx.StaticText(self, label="gPodder Username:"), 0, wx.ALL, 5)
+        sizer.Add(
+            wx.StaticText(
+                self, label="gPodder Username (for importing public subscriptions):"
+            ),
+            0, wx.ALL, 5,
+        )
         self.gpodder_user_txt = wx.TextCtrl(
             self, value=self.config.get("podcasts.gpodder_username", default=""),
         )
+        set_accessible_name(
+            self.gpodder_user_txt, "gPodder Username for importing public subscriptions"
+        )
         sizer.Add(self.gpodder_user_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        sizer.Add(wx.StaticText(self, label="Podcast Index API Key (for a second search directory):"), 0, wx.ALL, 5)
+        sizer.Add(
+            wx.StaticText(
+                self, label="Podcast Index API Key (for a second search directory):"
+            ),
+            0, wx.ALL, 5,
+        )
         self.podcastindex_key_txt = wx.TextCtrl(
             self, value=self.config.get("podcasts.podcastindex_api_key", default=""),
         )
@@ -435,6 +448,7 @@ class PodcastsPanel(SettingsPanel):
         sizer.Add(wx.StaticText(self, label="Podcast Index API Secret:"), 0, wx.ALL, 5)
         self.podcastindex_secret_txt = wx.TextCtrl(
             self, value=self.config.get("podcasts.podcastindex_api_secret", default=""),
+            style=wx.TE_PASSWORD,
         )
         set_accessible_name(self.podcastindex_secret_txt, "Podcast Index API Secret")
         sizer.Add(self.podcastindex_secret_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -452,9 +466,20 @@ class PodcastsPanel(SettingsPanel):
         set_accessible_name(self.episode_order_choice, "Episode order")
         sizer.Add(self.episode_order_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        self.auto_advance_chk = wx.CheckBox(self, label="Auto-advance to the next episode when one finishes")
+        self.auto_advance_chk = wx.CheckBox(
+            self, label="Auto-advance to the next episode when one finishes"
+        )
         self.auto_advance_chk.SetValue(self.config.get("podcasts.auto_advance", default=False))
         sizer.Add(self.auto_advance_chk, 0, wx.ALL, 5)
+        self.auto_download_chk.Bind(wx.EVT_CHECKBOX, self._on_auto_download_changed)
+        self._update_auto_download_state()
+
+    def _on_auto_download_changed(self, event: wx.CommandEvent) -> None:
+        self._update_auto_download_state()
+        event.Skip()
+
+    def _update_auto_download_state(self) -> None:
+        self.download_limit_spin.Enable(self.auto_download_chk.IsChecked())
 
     def _browse(self, ctrl: wx.TextCtrl) -> None:
         dlg = wx.DirDialog(self, "Choose directory", ctrl.GetValue())
@@ -463,17 +488,31 @@ class PodcastsPanel(SettingsPanel):
         dlg.Destroy()
 
     def onSave(self) -> None:
-        self.config.set("podcasts.download_path", value=path_for_storage(self.podcast_path_txt.GetValue()))
+        self.config.set(
+            "podcasts.download_path",
+            value=path_for_storage(self.podcast_path_txt.GetValue()),
+        )
         self.config.set("podcasts.auto_download", value=self.auto_download_chk.IsChecked())
         self.config.set("podcasts.download_limit", value=self.download_limit_spin.GetValue())
         self.config.set("podcasts.keep_episodes", value=self.keep_episodes_spin.GetValue())
-        self.config.set("podcasts.sync_gpodder", value=self.sync_gpodder_chk.IsChecked())
-        self.config.set("podcasts.gpodder_username", value=self.gpodder_user_txt.GetValue().strip())
-        self.config.set("podcasts.podcastindex_api_key", value=self.podcastindex_key_txt.GetValue().strip())
-        self.config.set("podcasts.podcastindex_api_secret", value=self.podcastindex_secret_txt.GetValue().strip())
+        self.config.set(
+            "podcasts.gpodder_username", value=self.gpodder_user_txt.GetValue().strip()
+        )
+        self.config.set(
+            "podcasts.podcastindex_api_key",
+            value=self.podcastindex_key_txt.GetValue().strip(),
+        )
+        self.config.set(
+            "podcasts.podcastindex_api_secret",
+            value=self.podcastindex_secret_txt.GetValue().strip(),
+        )
         self.config.set(
             "podcasts.episode_order",
-            value="oldest" if self.episode_order_choice.GetStringSelection() == "Oldest first" else "newest",
+            value=(
+                "oldest"
+                if self.episode_order_choice.GetStringSelection() == "Oldest first"
+                else "newest"
+            ),
         )
         self.config.set("podcasts.auto_advance", value=self.auto_advance_chk.IsChecked())
 
@@ -491,8 +530,10 @@ class DownloadsPanel(SettingsPanel):
         # default instead of showing that stale Music-folder path
         # forever after. See get_downloads_dir()'s own docstring.
         self.download_path_txt = wx.TextCtrl(self, value=get_downloads_dir())
+        set_accessible_name(self.download_path_txt, "Download Location")
         path_sizer.Add(self.download_path_txt, 1, wx.EXPAND)
-        btn = wx.Button(self, label="Browse...")
+        btn = wx.Button(self, label="Browse Download Location...")
+        set_accessible_name(btn, "Browse Download Location")
         btn.Bind(wx.EVT_BUTTON, lambda e: self._browse(self.download_path_txt))
         path_sizer.Add(btn, 0, wx.LEFT, 5)
         sizer.Add(path_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -502,15 +543,21 @@ class DownloadsPanel(SettingsPanel):
             self, value=str(self.config.get("downloads.max_concurrent", default=3)),
             min=1, max=10,
         )
+        set_accessible_name(self.max_concurrent_spin, "Maximum Concurrent Downloads")
         sizer.Add(self.max_concurrent_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Audio Format:"), 0, wx.ALL, 5)
+        from radiomaster.services.download_manager import AUDIO_FORMATS, normalize_audio_format
         self.format_combo = wx.ComboBox(
-            self, choices=["MP3", "AAC", "OGG", "FLAC", "WAV", "M4A"], style=wx.CB_READONLY,
+            self, choices=[item.upper() for item in AUDIO_FORMATS],
+            style=wx.CB_READONLY,
         )
         self.format_combo.SetStringSelection(
-            self.config.get("downloads.audio_format", default="mp3").upper()
+            normalize_audio_format(
+                self.config.get("downloads.audio_format", default="mp3")
+            ).upper()
         )
+        set_accessible_name(self.format_combo, "Audio Format")
         sizer.Add(self.format_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Audio Quality:"), 0, wx.ALL, 5)
@@ -520,9 +567,10 @@ class DownloadsPanel(SettingsPanel):
         self.quality_combo.SetStringSelection(
             self.config.get("downloads.audio_quality", default="192k")
         )
+        set_accessible_name(self.quality_combo, "Audio Quality")
         sizer.Add(self.quality_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        self.embed_metadata_chk = wx.CheckBox(self, label="Embed metadata (ID3 tags)")
+        self.embed_metadata_chk = wx.CheckBox(self, label="Embed metadata")
         self.embed_metadata_chk.SetValue(self.config.get("downloads.embed_metadata", default=True))
         sizer.Add(self.embed_metadata_chk, 0, wx.ALL, 5)
 
@@ -537,9 +585,15 @@ class DownloadsPanel(SettingsPanel):
         dlg.Destroy()
 
     def onSave(self) -> None:
-        self.config.set("downloads.download_path", value=path_for_storage(self.download_path_txt.GetValue()))
+        self.config.set(
+            "downloads.download_path",
+            value=path_for_storage(self.download_path_txt.GetValue()),
+        )
         self.config.set("downloads.max_concurrent", value=self.max_concurrent_spin.GetValue())
-        self.config.set("downloads.audio_format", value=self.format_combo.GetStringSelection().lower())
+        self.config.set(
+            "downloads.audio_format",
+            value=self.format_combo.GetStringSelection().lower(),
+        )
         self.config.set("downloads.audio_quality", value=self.quality_combo.GetStringSelection())
         self.config.set("downloads.embed_metadata", value=self.embed_metadata_chk.IsChecked())
         self.config.set("downloads.embed_artwork", value=self.embed_artwork_chk.IsChecked())
@@ -557,8 +611,10 @@ class RecordingsPanel(SettingsPanel):
         # decides where recordings get written (see radio_panel.py), so
         # showing anything else here would make Settings lie about it.
         self.recording_path_txt = wx.TextCtrl(self, value=get_recordings_dir())
+        set_accessible_name(self.recording_path_txt, "Recording Location")
         path_sizer.Add(self.recording_path_txt, 1, wx.EXPAND)
-        btn = wx.Button(self, label="Browse...")
+        btn = wx.Button(self, label="Browse Recording Location...")
+        set_accessible_name(btn, "Browse Recording Location")
         btn.Bind(wx.EVT_BUTTON, lambda e: self._browse(self.recording_path_txt))
         path_sizer.Add(btn, 0, wx.LEFT, 5)
         sizer.Add(path_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
@@ -566,25 +622,46 @@ class RecordingsPanel(SettingsPanel):
         self.match_source_chk = wx.CheckBox(
             self, label="Record in the station's original format when possible "
                         "(codec/bitrate/sample rate/channels)")
-        self.match_source_chk.SetValue(self.config.get("recordings.match_source_format", default=True))
+        self.match_source_chk.SetValue(
+            self.config.get("recordings.match_source_format", default=True)
+        )
         sizer.Add(self.match_source_chk, 0, wx.ALL, 5)
 
         sizer.Add(wx.StaticText(self, label="Recording Format:"), 0, wx.ALL, 5)
+        from radiomaster.services.recording_session import (
+            RECORDING_FORMATS,
+            RECORDING_QUALITIES,
+            normalize_recording_format,
+            normalize_recording_quality,
+        )
         self.rec_format_combo = wx.ComboBox(
-            self, choices=["MP3", "AAC", "OGG", "FLAC", "WAV"], style=wx.CB_READONLY,
+            self, choices=[item.upper() for item in RECORDING_FORMATS],
+            style=wx.CB_READONLY,
         )
         self.rec_format_combo.SetStringSelection(
-            self.config.get("recordings.recording_format", default="mp3").upper()
+            normalize_recording_format(
+                self.config.get("recordings.recording_format", default="mp3")
+            ).upper()
         )
+        set_accessible_name(self.rec_format_combo, "Recording Format")
         sizer.Add(self.rec_format_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Recording Quality:"), 0, wx.ALL, 5)
         self.rec_quality_combo = wx.ComboBox(
-            self, choices=["128k", "192k", "256k", "320k", "Best"], style=wx.CB_READONLY,
+            self,
+            choices=[
+                "Best" if quality == "best" else quality
+                for quality in RECORDING_QUALITIES
+            ],
+            style=wx.CB_READONLY,
         )
-        self.rec_quality_combo.SetStringSelection(
+        current_quality = normalize_recording_quality(
             self.config.get("recordings.recording_quality", default="320k")
         )
+        self.rec_quality_combo.SetStringSelection(
+            "Best" if current_quality == "best" else current_quality
+        )
+        set_accessible_name(self.rec_quality_combo, "Recording Quality")
         sizer.Add(self.rec_quality_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         # Format/Quality only apply when NOT matching the source (they're
@@ -592,23 +669,70 @@ class RecordingsPanel(SettingsPanel):
         # so disable them together with the checkbox instead of leaving
         # two controls visibly enabled but silently inert, which a screen
         # reader user would have no way to discover.
-        def _on_match_source_toggle(event: wx.CommandEvent) -> None:
-            enabled = not self.match_source_chk.IsChecked()
-            self.rec_format_combo.Enable(enabled)
-            self.rec_quality_combo.Enable(enabled)
+        def _on_recording_option_changed(event: wx.CommandEvent) -> None:
+            self._update_recording_option_states()
             event.Skip()
 
-        self.match_source_chk.Bind(wx.EVT_CHECKBOX, _on_match_source_toggle)
-        self.rec_format_combo.Enable(not self.match_source_chk.IsChecked())
-        self.rec_quality_combo.Enable(not self.match_source_chk.IsChecked())
+        self.match_source_chk.Bind(wx.EVT_CHECKBOX, _on_recording_option_changed)
+        self.rec_format_combo.Bind(wx.EVT_COMBOBOX, _on_recording_option_changed)
+        self._update_recording_option_states()
 
         self.split_tracks_chk = wx.CheckBox(self, label="Split recordings into tracks")
         self.split_tracks_chk.SetValue(self.config.get("recordings.split_tracks", default=True))
         sizer.Add(self.split_tracks_chk, 0, wx.ALL, 5)
 
+        self.skip_short_ads_chk = wx.CheckBox(
+            self, label="Skip likely advertisements based on short segment duration"
+        )
+        self.skip_short_ads_chk.SetValue(
+            self.config.get("recordings.skip_short_ads", default=True)
+        )
+        sizer.Add(self.skip_short_ads_chk, 0, wx.ALL, 5)
+
+        sizer.Add(
+            wx.StaticText(self, label="Maximum likely advertisement duration (seconds):"),
+            0, wx.ALL, 5,
+        )
+        self.ad_max_duration_spin = wx.SpinCtrl(
+            self,
+            value=str(self.config.get("recordings.ad_max_duration", default=30)),
+            min=1, max=300,
+        )
+        set_accessible_name(
+            self.ad_max_duration_spin,
+            "Maximum likely advertisement duration in seconds",
+        )
+        sizer.Add(
+            self.ad_max_duration_spin,
+            0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5,
+        )
+
+        def _on_ad_detection_changed(event: wx.CommandEvent) -> None:
+            self._update_ad_detection_states()
+            event.Skip()
+
+        self.split_tracks_chk.Bind(wx.EVT_CHECKBOX, _on_ad_detection_changed)
+        self.skip_short_ads_chk.Bind(wx.EVT_CHECKBOX, _on_ad_detection_changed)
+        self._update_ad_detection_states()
+
         self.add_metadata_chk = wx.CheckBox(self, label="Add metadata to recordings")
         self.add_metadata_chk.SetValue(self.config.get("recordings.add_metadata", default=True))
         sizer.Add(self.add_metadata_chk, 0, wx.ALL, 5)
+
+    def _update_recording_option_states(self) -> None:
+        custom_format = not self.match_source_chk.IsChecked()
+        self.rec_format_combo.Enable(custom_format)
+        quality_applies = self.rec_format_combo.GetStringSelection().lower() in {
+            "mp3", "aac", "ogg", "opus",
+        }
+        self.rec_quality_combo.Enable(custom_format and quality_applies)
+
+    def _update_ad_detection_states(self) -> None:
+        splitting = self.split_tracks_chk.IsChecked()
+        self.skip_short_ads_chk.Enable(splitting)
+        self.ad_max_duration_spin.Enable(
+            splitting and self.skip_short_ads_chk.IsChecked()
+        )
 
     def _browse(self, ctrl: wx.TextCtrl) -> None:
         dlg = wx.DirDialog(self, "Choose directory", ctrl.GetValue())
@@ -617,12 +741,27 @@ class RecordingsPanel(SettingsPanel):
         dlg.Destroy()
 
     def onSave(self) -> None:
-        self.config.set("recordings.recording_path", value=path_for_storage(self.recording_path_txt.GetValue()))
+        self.config.set(
+            "recordings.recording_path",
+            value=path_for_storage(self.recording_path_txt.GetValue()),
+        )
         self.config.set("recordings.match_source_format", value=self.match_source_chk.IsChecked())
-        self.config.set("recordings.recording_format", value=self.rec_format_combo.GetStringSelection().lower())
-        self.config.set("recordings.recording_quality", value=self.rec_quality_combo.GetStringSelection())
+        self.config.set(
+            "recordings.recording_format",
+            value=self.rec_format_combo.GetStringSelection().lower(),
+        )
+        self.config.set(
+            "recordings.recording_quality",
+            value=self.rec_quality_combo.GetStringSelection().lower(),
+        )
         self.config.set("recordings.split_tracks", value=self.split_tracks_chk.IsChecked())
         self.config.set("recordings.add_metadata", value=self.add_metadata_chk.IsChecked())
+        self.config.set(
+            "recordings.skip_short_ads", value=self.skip_short_ads_chk.IsChecked()
+        )
+        self.config.set(
+            "recordings.ad_max_duration", value=self.ad_max_duration_spin.GetValue()
+        )
 
 
 class NetworkPanel(SettingsPanel):
@@ -637,6 +776,7 @@ class NetworkPanel(SettingsPanel):
         self.proxy_host_txt = wx.TextCtrl(
             self, value=self.config.get("network.proxy_host", default=""),
         )
+        set_accessible_name(self.proxy_host_txt, "Proxy Host")
         sizer.Add(self.proxy_host_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Proxy Port:"), 0, wx.ALL, 5)
@@ -644,6 +784,7 @@ class NetworkPanel(SettingsPanel):
             self, value=str(self.config.get("network.proxy_port", default=8080)),
             min=1, max=65535,
         )
+        set_accessible_name(self.proxy_port_spin, "Proxy Port")
         sizer.Add(self.proxy_port_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Connection Timeout (seconds):"), 0, wx.ALL, 5)
@@ -651,20 +792,39 @@ class NetworkPanel(SettingsPanel):
             self, value=str(self.config.get("network.timeout", default=30)),
             min=5, max=300,
         )
+        set_accessible_name(self.timeout_spin, "Connection Timeout in seconds")
         sizer.Add(self.timeout_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        sizer.Add(wx.StaticText(self, label="User Agent:"), 0, wx.ALL, 5)
+        sizer.Add(
+            wx.StaticText(self, label="Custom User Agent (blank uses the application default):"),
+            0, wx.ALL, 5,
+        )
         self.user_agent_txt = wx.TextCtrl(
-            self, value=self.config.get("network.user_agent", default="RadioMaster+/5.33.20"),
+            self, value=self.config.get("network.user_agent", default=""),
+        )
+        set_accessible_name(
+            self.user_agent_txt, "Custom User Agent; blank uses the application default"
         )
         sizer.Add(self.user_agent_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        self.proxy_enabled_chk.Bind(wx.EVT_CHECKBOX, self._on_proxy_enabled_changed)
+        self._update_proxy_control_states()
+
+    def _on_proxy_enabled_changed(self, event: wx.CommandEvent) -> None:
+        self._update_proxy_control_states()
+        event.Skip()
+
+    def _update_proxy_control_states(self) -> None:
+        enabled = self.proxy_enabled_chk.IsChecked()
+        self.proxy_host_txt.Enable(enabled)
+        self.proxy_port_spin.Enable(enabled)
 
     def onSave(self) -> None:
         self.config.set("network.proxy_enabled", value=self.proxy_enabled_chk.IsChecked())
         self.config.set("network.proxy_host", value=self.proxy_host_txt.GetValue().strip())
         self.config.set("network.proxy_port", value=self.proxy_port_spin.GetValue())
         self.config.set("network.timeout", value=self.timeout_spin.GetValue())
-        self.config.set("network.user_agent", value=self.user_agent_txt.GetValue())
+        self.config.set("network.user_agent", value=self.user_agent_txt.GetValue().strip())
 
 
 class AccessibilityPanel(SettingsPanel):

@@ -11,8 +11,11 @@ logger = logging.getLogger("radiomaster")
 class SchedulerService:
     """Manages recording schedules and executes recordings."""
 
-    def __init__(self, recordings_dir: str) -> None:
+    def __init__(self, recordings_dir: str, download_manager: Any = None,
+                 database: Any = None) -> None:
         self._recordings_dir = recordings_dir
+        self._download_manager = download_manager
+        self._database = database
         self._schedules: list[dict[str, Any]] = []
         self._active_recordings: dict[int, Any] = {}
         self._duration_timers: dict[int, threading.Timer] = {}
@@ -52,6 +55,10 @@ class SchedulerService:
         """
         self._schedules = list(schedules)
 
+    def set_recordings_dir(self, recordings_dir: str) -> None:
+        """Apply a new output folder to recordings started from now on."""
+        self._recordings_dir = recordings_dir
+
     def start_recording(self, schedule_id: int, url: str, station_name: str,
                         format: str = "auto", duration: int = 0) -> None:
         """Start recording a stream -- uses the same split-track-capable
@@ -69,17 +76,32 @@ class SchedulerService:
         str(duration)` passed it to ffmpeg as raw SECONDS instead, so a
         "record for 60 minutes" schedule was actually only ever
         recording for 60 seconds."""
-        from radiomaster.services.recording_session import RecordingSession
+        from radiomaster.services.recording_session import (
+            RecordingSession,
+            normalize_recording_format,
+            normalize_recording_quality,
+        )
         from radiomaster.services.stream_prober import probe_stream_format
         from radiomaster.utils.config import ConfigManager
         config = ConfigManager.get_instance()
-        rec_format = format if format and format != "auto" else config.get(
-            "recordings.recording_format", default="mp3")
-        quality = config.get("recordings.recording_quality", default="320k")
+        rec_format = normalize_recording_format(
+            format if format and format != "auto" else config.get(
+                "recordings.recording_format", default="mp3"
+            )
+        )
+        quality = normalize_recording_quality(
+            config.get("recordings.recording_quality", default="320k")
+        )
         add_metadata = config.get("recordings.add_metadata", default=True)
         split_tracks = config.get("recordings.split_tracks", default=True)
+        skip_short_ads = config.get("recordings.skip_short_ads", default=True)
+        ad_max_duration = config.get("recordings.ad_max_duration", default=30)
         match_source = config.get("recordings.match_source_format", default=True)
-        source_format = probe_stream_format(url, timeout=6.0) if match_source else None
+        source_format = (
+            probe_stream_format(url, timeout=6.0)
+            if match_source or quality == "best"
+            else None
+        )
 
         def _on_segment(file_path: str, title: str) -> None:
             logger.info(f"Recording segment finalized: {file_path}")
@@ -88,7 +110,9 @@ class SchedulerService:
             session = RecordingSession(
                 station_url=url, station_name=station_name, output_dir=self._recordings_dir,
                 rec_format=rec_format, quality=quality, add_metadata=add_metadata,
-                split_tracks=split_tracks, match_source=match_source, source_format=source_format,
+                split_tracks=split_tracks, skip_short_ads=skip_short_ads,
+                ad_max_duration=ad_max_duration, match_source=match_source,
+                source_format=source_format,
                 on_segment_finalized=_on_segment,
             )
             session.start()
@@ -198,14 +222,36 @@ class SchedulerService:
         try:
             from radiomaster.utils.config import ConfigManager
             config = ConfigManager.get_instance()
-            if not config.get("podcasts.auto_download", default=False):
-                return
-            download_limit = config.get("podcasts.download_limit", default=3)
             from radiomaster.database.connection import DatabaseManager
             from radiomaster.utils.paths import get_paths
-            paths = get_paths()
-            db = DatabaseManager(paths["data"])
-            db.initialize()
+            owns_db = self._database is None
+            db = self._database or DatabaseManager(get_paths()["data"])
+            if owns_db:
+                db.initialize()
+
+            self._enforce_episode_retention(
+                db, int(config.get("podcasts.keep_episodes", default=10))
+            )
+            if not config.get("podcasts.auto_download", default=False):
+                if owns_db:
+                    db.close()
+                return
+            if self._download_manager is None:
+                logger.warning(
+                    "Podcast auto-download is enabled but no download manager is available"
+                )
+                if owns_db:
+                    db.close()
+                return
+            download_limit = int(config.get("podcasts.download_limit", default=3))
+            from radiomaster.services.download_manager import normalize_audio_format
+            audio_format = normalize_audio_format(
+                config.get("downloads.audio_format", default="mp3")
+            )
+            quality_setting = config.get("downloads.audio_quality", default="192k")
+            audio_quality = (
+                "0" if quality_setting.lower() == "best" else quality_setting.upper()
+            )
             pending_podcast_ids = db.fetchall(
                 "SELECT DISTINCT podcast_id FROM episodes "
                 "WHERE download_status = 'none' AND audio_url IS NOT NULL"
@@ -214,20 +260,77 @@ class SchedulerService:
             repo = DownloadRepository(db)
             for row in pending_podcast_ids:
                 episodes = db.fetchall(
-                    "SELECT * FROM episodes WHERE podcast_id = ? AND download_status = 'none' "
-                    "AND audio_url IS NOT NULL ORDER BY published_date DESC LIMIT ?",
+                    "SELECT e.*, p.title AS podcast_title FROM episodes e "
+                    "JOIN podcasts p ON p.id = e.podcast_id "
+                    "WHERE e.podcast_id = ? AND e.download_status = 'none' "
+                    "AND e.audio_url IS NOT NULL ORDER BY e.published_date DESC LIMIT ?",
                     (row["podcast_id"], download_limit),
                 )
                 for ep in episodes:
-                    repo.add(ep.get("audio_url", ""), title=ep.get("title", ""), source_type="podcast")
+                    import os
+                    from radiomaster.utils.helpers import sanitize_filename
+                    from radiomaster.utils.paths import get_podcasts_dir
+                    title = ep.get("title", "Podcast Episode")
+                    feed_dir = os.path.join(
+                        get_podcasts_dir(), sanitize_filename(ep.get("podcast_title", "Podcast"))
+                    )
+                    filename_base = sanitize_filename(title)[:150]
+                    download_id = repo.add(
+                        ep.get("audio_url", ""), title=title, source_type="podcast",
+                        format=audio_format, quality=quality_setting,
+                        output_dir=feed_dir, extract_audio=True,
+                        filename_base=filename_base,
+                    )
+                    self._download_manager.add_download(
+                        download_id, ep.get("audio_url", ""), output_dir=feed_dir,
+                        title=title, extract_audio=True, format=audio_format,
+                        audio_quality=audio_quality,
+                        filename_base=filename_base,
+                    )
                     db.execute(
                         "UPDATE episodes SET download_status = 'queued' WHERE id = ?",
                         (ep["id"],),
                     )
             db.commit()
-            db.close()
+            if owns_db:
+                db.close()
         except Exception as e:
             logger.debug(f"Auto-download check failed: {e}")
+
+    @staticmethod
+    def _enforce_episode_retention(db: Any, keep: int) -> None:
+        """Remove local files older than each podcast's newest ``keep`` downloads."""
+        import os
+        from radiomaster.utils.paths import resolve_stored_path
+        keep = max(1, keep)
+        podcast_ids = db.fetchall(
+            "SELECT DISTINCT podcast_id FROM episodes "
+            "WHERE download_status = 'completed' AND file_path IS NOT NULL"
+        )
+        for row in podcast_ids:
+            episodes = db.fetchall(
+                "SELECT id, audio_url, file_path FROM episodes "
+                "WHERE podcast_id = ? AND download_status = 'completed' "
+                "AND file_path IS NOT NULL ORDER BY published_date DESC, id DESC",
+                (row["podcast_id"],),
+            )
+            for episode in episodes[keep:]:
+                path = resolve_stored_path(episode.get("file_path", ""))
+                for target in (path, os.path.splitext(path)[0] + ".txt" if path else ""):
+                    if target and os.path.isfile(target):
+                        try:
+                            os.remove(target)
+                        except OSError as exc:
+                            logger.warning("Could not remove old podcast file %s: %s", target, exc)
+                db.execute(
+                    "UPDATE episodes SET file_path = NULL, download_status = 'pruned' WHERE id = ?",
+                    (episode["id"],),
+                )
+                db.execute(
+                    "DELETE FROM downloads WHERE source_type = 'podcast' AND url = ?",
+                    (episode.get("audio_url", ""),),
+                )
+        db.commit()
 
     @staticmethod
     def _compute_next_recurrence(current: datetime, recurrence: str) -> datetime | None:

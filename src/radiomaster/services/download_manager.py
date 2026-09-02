@@ -12,6 +12,16 @@ logger = logging.getLogger("radiomaster")
 
 from radiomaster.utils.tools import get_ffmpeg, get_ytdlp
 
+AUDIO_FORMATS = ("mp3", "aac", "flac", "m4a", "opus", "wav")
+
+
+def normalize_audio_format(value: str) -> str:
+    """Return a yt-dlp audio format, including migration of old OGG settings."""
+    normalized = (value or "").strip().lower()
+    if normalized == "ogg":
+        normalized = "opus"
+    return normalized if normalized in AUDIO_FORMATS else "mp3"
+
 
 class DownloadManager:
     """Manages download queue with concurrent execution."""
@@ -42,10 +52,23 @@ class DownloadManager:
         """Start the download manager."""
         self._running = True
         self._paused_flag = False
-        for _ in range(self._max_concurrent):
-            t = threading.Thread(target=self._worker, daemon=True)
-            t.start()
-            self._threads.append(t)
+        with self._lock:
+            for _ in range(self._max_concurrent - len(self._threads)):
+                self._start_worker_locked()
+
+    def set_max_concurrent(self, maximum: int) -> None:
+        """Apply a new worker limit without restarting active downloads."""
+        maximum = max(1, min(10, int(maximum)))
+        with self._lock:
+            self._max_concurrent = maximum
+            if self._running:
+                for _ in range(maximum - len(self._threads)):
+                    self._start_worker_locked()
+
+    def _start_worker_locked(self) -> None:
+        thread = threading.Thread(target=self._worker, daemon=True)
+        self._threads.append(thread)
+        thread.start()
 
     def stop(self) -> None:
         """Stop the download manager."""
@@ -106,6 +129,12 @@ class DownloadManager:
     def _worker(self) -> None:
         """Worker thread that processes downloads from the queue."""
         while self._running:
+            # A reduced concurrency setting retires surplus workers only
+            # between jobs, so an in-progress download is never interrupted.
+            with self._lock:
+                if len(self._threads) > self._max_concurrent:
+                    self._threads.remove(threading.current_thread())
+                    return
             if self._paused_flag:
                 threading.Event().wait(1)
                 continue

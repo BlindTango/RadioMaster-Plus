@@ -261,6 +261,124 @@ class TestPlaybackSettings:
             panel._playlist.DeleteAllItems()
 
 
+class TestDownloadsSettings:
+    def test_controls_are_named_and_formats_match_youtube(self, app_and_window) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
+        try:
+            dlg._switch_to(4)
+            panel = dlg._panel_map[4]
+            assert panel.download_path_txt.GetName() == "Download Location"
+            assert panel.max_concurrent_spin.GetName() == "Maximum Concurrent Downloads"
+            assert panel.format_combo.GetName() == "Audio Format"
+            assert panel.quality_combo.GetName() == "Audio Quality"
+            assert panel.format_combo.GetItems() == [
+                item.upper() for item in win._youtube_panel._audio_format_choices
+            ]
+        finally:
+            dlg.Destroy()
+
+    def test_live_apply_updates_manager_and_youtube_format(self, app_and_window) -> None:
+        app, win = app_and_window
+        old_max = win._config.get("downloads.max_concurrent", default=3)
+        old_format = win._config.get("downloads.audio_format", default="mp3")
+        original_set_max = app.download_manager.set_max_concurrent
+        try:
+            win._config.set("downloads.max_concurrent", value=4)
+            win._config.set("downloads.audio_format", value="flac")
+            app.download_manager.set_max_concurrent = MagicMock()
+
+            with patch.object(win._config, "load"):
+                win._apply_settings_changes()
+
+            app.download_manager.set_max_concurrent.assert_called_with(4)
+            assert win._youtube_panel._audio_format_choice.GetStringSelection() == "flac"
+        finally:
+            app.download_manager.set_max_concurrent = original_set_max
+            win._config.set("downloads.max_concurrent", value=old_max)
+            win._config.set("downloads.audio_format", value=old_format)
+            win._youtube_panel.refresh_download_settings()
+
+
+class TestRecordingsSettings:
+    def test_controls_are_named_and_only_applicable_options_are_enabled(
+        self, app_and_window
+    ) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
+        try:
+            dlg._switch_to(5)
+            panel = dlg._panel_map[5]
+            assert panel.recording_path_txt.GetName() == "Recording Location"
+            assert panel.rec_format_combo.GetName() == "Recording Format"
+            assert panel.rec_quality_combo.GetName() == "Recording Quality"
+
+            panel.match_source_chk.SetValue(False)
+            panel.rec_format_combo.SetStringSelection("FLAC")
+            panel._update_recording_option_states()
+            assert panel.rec_format_combo.IsEnabled() is True
+            assert panel.rec_quality_combo.IsEnabled() is False
+
+            panel.rec_format_combo.SetStringSelection("MP3")
+            panel._update_recording_option_states()
+            assert panel.rec_quality_combo.IsEnabled() is True
+
+            panel.match_source_chk.SetValue(True)
+            panel._update_recording_option_states()
+            assert panel.rec_format_combo.IsEnabled() is False
+            assert panel.rec_quality_combo.IsEnabled() is False
+            assert "Best" in panel.rec_quality_combo.GetItems()
+
+            assert panel.skip_short_ads_chk.IsChecked() is True
+            assert panel.ad_max_duration_spin.GetValue() == 30
+            assert panel.ad_max_duration_spin.GetName() == (
+                "Maximum likely advertisement duration in seconds"
+            )
+            panel.skip_short_ads_chk.SetValue(False)
+            panel._update_ad_detection_states()
+            assert panel.ad_max_duration_spin.IsEnabled() is False
+            panel.skip_short_ads_chk.SetValue(True)
+            panel.split_tracks_chk.SetValue(False)
+            panel._update_ad_detection_states()
+            assert panel.skip_short_ads_chk.IsEnabled() is False
+        finally:
+            dlg.Destroy()
+
+
+class TestNetworkSettings:
+    def test_controls_are_named_and_proxy_dependencies_are_truthful(
+        self, app_and_window
+    ) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
+        try:
+            dlg._switch_to(6)
+            panel = dlg._panel_map[6]
+            assert panel.proxy_host_txt.GetName() == "Proxy Host"
+            assert panel.proxy_port_spin.GetName() == "Proxy Port"
+            assert panel.timeout_spin.GetName() == "Connection Timeout in seconds"
+            assert panel.user_agent_txt.GetName() == (
+                "Custom User Agent; blank uses the application default"
+            )
+
+            panel.proxy_enabled_chk.SetValue(False)
+            panel._update_proxy_control_states()
+            assert panel.proxy_host_txt.IsEnabled() is False
+            assert panel.proxy_port_spin.IsEnabled() is False
+            panel.proxy_enabled_chk.SetValue(True)
+            panel._update_proxy_control_states()
+            assert panel.proxy_host_txt.IsEnabled() is True
+            assert panel.proxy_port_spin.IsEnabled() is True
+        finally:
+            dlg.Destroy()
+
+
 class TestRadioSettings:
     def test_radio_controls_save_all_runtime_settings(self, app_and_window) -> None:
         _app, win = app_and_window
@@ -716,8 +834,21 @@ class TestRecording:
                     return list_ctrl.GetItemText(i, 2)
             return None
 
+        # This assertion covers the single-file recording row. Split-track
+        # mode intentionally replaces it with one row per finalized track.
+        from radiomaster.utils.config import ConfigManager
+        config = ConfigManager.get_instance()
+        real_get = config.get
         with patch("subprocess.Popen") as mock_popen, \
-                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
+                patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None), \
+                patch.object(
+                    config, "get",
+                    side_effect=lambda *args, **kwargs: (
+                        False
+                        if args and args[0] == "recordings.split_tracks"
+                        else real_get(*args, **kwargs)
+                    ),
+                ):
             mock_popen.return_value = MagicMock()
             panel._on_record()
 

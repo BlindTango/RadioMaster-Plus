@@ -203,13 +203,17 @@ class YouTubePanel(wx.Panel):
         set_accessible_name(self._quality_choice, "Download Quality")
         qual_sizer.Add(self._quality_choice, 0, wx.LEFT, 4)
         qual_sizer.Add(wx.StaticText(self, label="Audio Format:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
-        audio_format_choices = ["mp3", "opus", "flac", "m4a"]
+        from radiomaster.services.download_manager import AUDIO_FORMATS, normalize_audio_format
+        audio_format_choices = list(AUDIO_FORMATS)
+        self._audio_format_choices = audio_format_choices
         self._audio_format_choice = wx.Choice(self, choices=audio_format_choices)
         # Settings > Downloads > Audio Format previously only seeded the
         # download's DB row label -- the panel's own dropdown (what
         # actually drives yt-dlp) always started back at "mp3" regardless.
         from radiomaster.utils.config import ConfigManager
-        default_format = ConfigManager.get_instance().get("downloads.audio_format", default="mp3")
+        default_format = normalize_audio_format(
+            ConfigManager.get_instance().get("downloads.audio_format", default="mp3")
+        )
         self._audio_format_choice.SetSelection(
             audio_format_choices.index(default_format) if default_format in audio_format_choices else 0
         )
@@ -239,6 +243,20 @@ class YouTubePanel(wx.Panel):
         self._channels_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_channel_activated)
 
         self._load_channels()
+
+    def refresh_download_settings(self) -> None:
+        """Apply Downloads settings to controls that persist for the session."""
+        from radiomaster.utils.config import ConfigManager
+        from radiomaster.services.download_manager import normalize_audio_format
+        audio_format = normalize_audio_format(
+            ConfigManager.get_instance().get("downloads.audio_format", default="mp3")
+        )
+        selection = (
+            self._audio_format_choices.index(audio_format)
+            if audio_format in self._audio_format_choices
+            else 0
+        )
+        self._audio_format_choice.SetSelection(selection)
 
     def _on_search(self, event: wx.Event) -> None:
         """Search YouTube using yt-dlp, off the UI thread.

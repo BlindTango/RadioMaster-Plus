@@ -16,6 +16,11 @@ import subprocess
 from typing import Optional, TypedDict
 
 from radiomaster.utils.tools import get_ffprobe
+from radiomaster.utils.network import (
+    get_ffmpeg_input_args,
+    get_ffplay_http_proxy_env,
+    get_timeout,
+)
 
 logger = logging.getLogger("radiomaster")
 
@@ -33,16 +38,22 @@ def probe_stream_format(url: str, timeout: float = 8.0) -> Optional[StreamFormat
     (station unreachable, ffprobe timed out, or no audio stream found).
     Bounded analyzeduration/probesize keep this from hanging on a slow
     or silent stream -- worst case it just gives up within *timeout*."""
+    configured_timeout = get_timeout(default=timeout)
+    input_args = get_ffmpeg_input_args() if url.startswith(("http://", "https://")) else []
     cmd = [
         get_ffprobe(), "-v", "quiet", "-print_format", "json",
         "-show_streams", "-show_format", "-select_streams", "a:0",
         "-analyzeduration", "3000000", "-probesize", "500000",
+        *input_args,
         url,
     ]
+    proxy_env = get_ffplay_http_proxy_env()
+    env = dict(os.environ, **proxy_env) if proxy_env else None
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
+            cmd, capture_output=True, text=True, timeout=configured_timeout,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            env=env,
         )
     except Exception as e:
         # Probing is always best-effort (falls back to the configured

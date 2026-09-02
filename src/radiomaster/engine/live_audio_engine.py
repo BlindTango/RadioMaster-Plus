@@ -909,7 +909,18 @@ class LiveAudioEngine:
     def _decode_loop(self, url: str) -> None:
         from radiomaster.utils.logging_setup import log_io
         log_io(logger, "av.open %s", url)
-        container = av.open(url, timeout=10, metadata_errors="replace")
+        from radiomaster.utils.network import get_proxies, get_timeout, get_user_agent
+        timeout = get_timeout(default=10)
+        options = None
+        if url.startswith(("http://", "https://")):
+            options = {"user_agent": get_user_agent("RadioMaster+/1.0")}
+            proxies = get_proxies()
+            if proxies:
+                options["http_proxy"] = proxies["http"]
+        container = av.open(
+            url, timeout=timeout, options=options,
+            metadata_errors="replace",
+        )
         try:
             stream = next((s for s in container.streams if s.type == "audio"), None)
             if stream is None:

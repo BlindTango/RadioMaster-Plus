@@ -37,6 +37,129 @@ class TestPodcastManager:
         assert "http://test/feed.xml" in opml
 
 
+class TestDownloadManagerSettings:
+    def test_legacy_and_invalid_audio_formats_are_normalized(self) -> None:
+        from radiomaster.services.download_manager import normalize_audio_format
+
+        assert normalize_audio_format("OGG") == "opus"
+        assert normalize_audio_format("not-a-format") == "mp3"
+
+    def test_concurrency_can_be_increased_live(self) -> None:
+        from radiomaster.services.download_manager import DownloadManager
+
+        manager = DownloadManager(2)
+        fake_threads = []
+
+        def make_thread(*args, **kwargs):
+            thread = MagicMock()
+            fake_threads.append(thread)
+            return thread
+
+        with patch(
+            "radiomaster.services.download_manager.threading.Thread",
+            side_effect=make_thread,
+        ):
+            manager.start()
+            manager.set_max_concurrent(4)
+
+        assert len(fake_threads) == 4
+        assert all(thread.start.call_count == 1 for thread in fake_threads)
+        assert manager._max_concurrent == 4
+
+    def test_concurrency_setting_is_clamped(self) -> None:
+        from radiomaster.services.download_manager import DownloadManager
+
+        manager = DownloadManager(3)
+        with patch("radiomaster.services.download_manager.threading.Thread"):
+            manager.set_max_concurrent(0)
+            assert manager._max_concurrent == 1
+            manager.set_max_concurrent(99)
+            assert manager._max_concurrent == 10
+
+
+class TestRecordingSettings:
+    def test_legacy_best_quality_and_invalid_format_are_normalized(self) -> None:
+        from radiomaster.services.recording_session import (
+            normalize_recording_format,
+            normalize_recording_quality,
+        )
+
+        assert normalize_recording_quality("Best") == "best"
+        assert normalize_recording_quality("invalid") == "320k"
+        assert normalize_recording_format("invalid") == "mp3"
+        assert normalize_recording_format("opus") == "opus"
+
+    def test_best_recording_quality_uses_station_bitrate(self, tmp_path) -> None:
+        from radiomaster.services.recording_session import RecordingSession
+
+        session = RecordingSession(
+            "https://radio.test/stream", "Test Station", str(tmp_path),
+            quality="best", match_source=False,
+            source_format={"codec": "aac", "bit_rate": 192000},
+        )
+        command = session._recording_ffmpeg_args(str(tmp_path / "recording.mp3"), None)
+        assert command[command.index("-b:a") + 1] == "192000"
+
+    def test_split_encoder_embeds_track_metadata(self, tmp_path) -> None:
+        from radiomaster.services.recording_session import RecordingSession
+
+        session = RecordingSession(
+            "https://radio.test/stream", "Test Station", str(tmp_path),
+            split_tracks=True, add_metadata=True,
+        )
+        session._last_song = "Test Artist - Test Track"
+        with patch("radiomaster.services.recording_session.subprocess.Popen") as popen:
+            session._start_encode_segment(str(tmp_path / "track.mp3"))
+
+        command = popen.call_args.args[0]
+        assert "title=Test Track" in command
+        assert "artist=Test Artist" in command
+
+    def test_scheduler_recording_folder_updates_live(self) -> None:
+        from radiomaster.services.scheduler_service import SchedulerService
+
+        scheduler = SchedulerService("old")
+        scheduler.set_recordings_dir("new")
+        assert scheduler._recordings_dir == "new"
+
+    def test_short_metadata_segment_is_discarded_as_likely_ad(self, tmp_path) -> None:
+        import time
+        from pathlib import Path
+
+        from radiomaster.services.recording_session import RecordingSession
+
+        finalized = MagicMock()
+        session = RecordingSession(
+            "https://radio.test/stream", "Test Station", str(tmp_path),
+            split_tracks=True, skip_short_ads=True, ad_max_duration=30,
+            on_segment_finalized=finalized,
+        )
+        Path(session.temp_path).write_bytes(b"short segment")
+        session._segment_started_at = time.monotonic() - 10
+        session._finalize_encode_segment(check_for_short_ad=True)
+
+        assert not Path(session.temp_path).exists()
+        finalized.assert_not_called()
+
+    def test_short_segment_is_kept_when_override_is_off(self, tmp_path) -> None:
+        import time
+        from pathlib import Path
+
+        from radiomaster.services.recording_session import RecordingSession
+
+        finalized = MagicMock()
+        session = RecordingSession(
+            "https://radio.test/stream", "Test Station", str(tmp_path),
+            split_tracks=True, skip_short_ads=False, ad_max_duration=30,
+            on_segment_finalized=finalized,
+        )
+        Path(session.temp_path).write_bytes(b"short segment")
+        session._segment_started_at = time.monotonic() - 10
+        session._finalize_encode_segment(check_for_short_ad=True)
+
+        finalized.assert_called_once()
+
+
 class TestYouTubePlaybackQuality:
     """YouTube playback must select separate adaptive streams; the best
     combined stream is commonly limited to low resolution and bitrate."""

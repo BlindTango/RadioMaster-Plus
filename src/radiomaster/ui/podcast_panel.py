@@ -173,8 +173,8 @@ class PodcastPanel(wx.Panel):
         self._btn_add_feed = wx.Button(col3, label="Add RSS Feed...")
         set_accessible_name(self._btn_add_feed, "Add RSS Feed")
         btn2_sizer.Add(self._btn_add_feed, 1, wx.RIGHT, 2)
-        self._btn_sync_gpodder = wx.Button(col3, label="Sync gpodder.net")
-        set_accessible_name(self._btn_sync_gpodder, "Sync gpodder.net")
+        self._btn_sync_gpodder = wx.Button(col3, label="Import gPodder Subscriptions")
+        set_accessible_name(self._btn_sync_gpodder, "Import gpodder.net Subscriptions")
         btn2_sizer.Add(self._btn_sync_gpodder, 1, wx.LEFT, 2)
         col3_sizer.Add(btn2_sizer, 0, wx.EXPAND | wx.ALL, 4)
 
@@ -471,14 +471,14 @@ class PodcastPanel(wx.Panel):
         config = ConfigManager.get_instance()
         username = config.get("podcasts.gpodder_username", default="")
         if not username:
-            wx.MessageBox("Please configure your gpodder.net username in Settings first.",
-                         "gpodder.net Sync", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox("Please configure your gPodder username in Settings first.",
+                         "gPodder Import", wx.OK | wx.ICON_WARNING)
             return
         from radiomaster.services.gpodder_sync import GpodderSync
         from radiomaster.database.repository import PodcastRepository
         import threading
         self._btn_sync_gpodder.Disable()
-        self._btn_sync_gpodder.SetLabel("Syncing...")
+        self._btn_sync_gpodder.SetLabel("Importing...")
         def _do_sync():
             try:
                 sync = GpodderSync(username)
@@ -490,14 +490,14 @@ class PodcastPanel(wx.Panel):
                     if not existing:
                         repo.add(s.get("url", ""), title=s.get("title", ""), is_custom=True)
                         count += 1
-                wx.CallAfter(wx.MessageBox, f"Synced {count} new subscriptions from gpodder.net.",
-                            "Sync Complete", wx.OK | wx.ICON_INFORMATION)
+                wx.CallAfter(wx.MessageBox, f"Imported {count} new subscriptions from gpodder.net.",
+                            "Import Complete", wx.OK | wx.ICON_INFORMATION)
             except Exception as e:
                 wx.CallAfter(wx.MessageBox, f"gpodder.net sync failed: {e}",
-                            "Sync Error", wx.OK | wx.ICON_ERROR)
+                            "Import Error", wx.OK | wx.ICON_ERROR)
             finally:
                 wx.CallAfter(self._btn_sync_gpodder.Enable)
-                wx.CallAfter(self._btn_sync_gpodder.SetLabel, "Sync gpodder.net")
+                wx.CallAfter(self._btn_sync_gpodder.SetLabel, "Import gPodder Subscriptions")
         threading.Thread(target=_do_sync, daemon=True).start()
 
     def _on_download(self, event: wx.CommandEvent) -> None:
@@ -551,6 +551,7 @@ class PodcastPanel(wx.Panel):
         from radiomaster.database.repository import DownloadRepository
         from radiomaster.utils.helpers import sanitize_filename
         from radiomaster.utils.paths import get_podcasts_dir
+        from radiomaster.utils.config import ConfigManager
         import os
 
         title = ep.get("title", "Podcast Episode")
@@ -558,10 +559,24 @@ class PodcastPanel(wx.Panel):
 
         feed_dir = os.path.join(get_podcasts_dir(), sanitize_filename(podcast_title))
         filename_base = sanitize_filename(title)[:150]  # avoid MAX_PATH issues on very long titles
+        config = ConfigManager.get_instance()
+        from radiomaster.services.download_manager import normalize_audio_format
+        audio_format = normalize_audio_format(
+            config.get("downloads.audio_format", default="mp3")
+        )
+        quality_setting = config.get("downloads.audio_quality", default="192k")
+        audio_quality = "0" if quality_setting.lower() == "best" else quality_setting.upper()
 
         repo = DownloadRepository(self._db)
-        download_id = repo.add(url, title=title, source_type="podcast", format="mp3",
-                                output_dir=feed_dir, extract_audio=True, filename_base=filename_base)
+        download_id = repo.add(
+            url, title=title, source_type="podcast", format=audio_format,
+            quality=quality_setting, output_dir=feed_dir, extract_audio=True,
+            filename_base=filename_base,
+        )
+        self._db.execute(
+            "UPDATE episodes SET download_status = 'queued' WHERE id = ?", (ep.get("id"),)
+        )
+        self._db.commit()
         # Inserting the DB row alone was the whole bug: nothing ever
         # actually told DownloadManager to fetch the file, so the row sat
         # at its insert-time "queued" status forever and never moved to
@@ -571,7 +586,8 @@ class PodcastPanel(wx.Panel):
         if hasattr(app, "download_manager") and hasattr(app.download_manager, "add_download"):
             app.download_manager.add_download(
                 download_id, url, output_dir=feed_dir, title=title,
-                extract_audio=True, format="mp3", filename_base=filename_base,
+                extract_audio=True, format=audio_format, audio_quality=audio_quality,
+                filename_base=filename_base,
             )
         self._write_show_notes(feed_dir, filename_base, podcast_title, ep)
         if show_confirmation:

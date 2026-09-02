@@ -50,9 +50,11 @@ class StreamReader:
         forever getting nothing).
         """
         try:
+            from radiomaster.utils.network import get_proxies, get_timeout, get_user_agent
             response = requests.get(
-                url, headers={"Icy-MetaData": "1", "User-Agent": ICY_USER_AGENT},
-                stream=True, timeout=timeout,
+                url,
+                headers={"Icy-MetaData": "1", "User-Agent": get_user_agent(ICY_USER_AGENT)},
+                proxies=get_proxies(), stream=True, timeout=get_timeout(default=timeout),
             )
         except Exception:
             return None, 0
@@ -126,11 +128,11 @@ class StreamReader:
             return metadata
 
         try:
+            from radiomaster.utils.network import get_proxies, get_timeout, get_user_agent
             response = requests.get(
                 url,
-                headers={"Icy-MetaData": "1", "User-Agent": ICY_USER_AGENT},
-                stream=True,
-                timeout=timeout,
+                headers={"Icy-MetaData": "1", "User-Agent": get_user_agent(ICY_USER_AGENT)},
+                proxies=get_proxies(), stream=True, timeout=get_timeout(default=timeout),
             )
             # Read headers
             metadata["name"] = response.headers.get("icy-name", "")

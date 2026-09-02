@@ -16,7 +16,11 @@ class PodcastManager:
     def parse_feed(url: str) -> dict[str, Any] | None:
         """Parse an RSS/Atom podcast feed."""
         try:
-            feed = feedparser.parse(url)
+            import requests
+            from radiomaster.utils.network import request_kwargs
+            response = requests.get(url, **request_kwargs("RadioMaster+/1.0"))
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
             if feed.bozo and not feed.entries:
                 logger.warning(f"Failed to parse feed: {url}")
                 return None

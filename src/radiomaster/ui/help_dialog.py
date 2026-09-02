@@ -446,6 +446,20 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.71", (
+        "Completed the Podcasts, Downloads, Recordings, and Network settings wiring. "
+        "Saved choices now reach their live services, dependent controls accurately follow "
+        "their parent options, and controls have clear accessible names and behavior.\n\n"
+        "Recording can preserve the source stream's actual format and bitrate, split tracks, "
+        "and optionally discard likely advertisement segments at or below a configurable "
+        "duration. Manual recordings now appear in Downloads, finalize cleanly during shutdown, "
+        "and refresh completed tracks without waiting for a later poll.\n\n"
+        "Proxy, timeout, and custom User-Agent settings now apply consistently to station and "
+        "podcast APIs, playback, metadata, YouTube, downloads, updates, stream probing, and "
+        "FFmpeg recording. Proxy URLs are normalized safely, and a blank User-Agent uses the "
+        "current application version. Recording and wxPython shutdown tests are now isolated "
+        "from background stream connections and late event-loop callbacks."
+    )),
     ("Version 1.1.70", (
         "Completed the Playback settings wiring. Output device, crossfade, gapless playback, "
         "ReplayGain, normalization, position memory, and AcoustID configuration now have "

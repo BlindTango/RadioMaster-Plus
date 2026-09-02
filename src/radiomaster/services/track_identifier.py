@@ -61,10 +61,11 @@ class TrackIdentifier:
         """Look up track metadata on Deezer."""
         try:
             import requests
+            from radiomaster.utils.network import request_kwargs
             resp = requests.get(
                 "https://api.deezer.com/search",
                 params={"q": f"{artist} {title}"},
-                timeout=10,
+                **request_kwargs("RadioMaster+/1.0"),
             )
             if resp.status_code == 200:
                 data = resp.json()

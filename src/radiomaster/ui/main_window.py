@@ -731,6 +731,7 @@ class MainWindow(wx.Frame):
             self._hide_to_tray()
             return
 
+        self._radio_panel.shutdown_recordings()
         self._engine.stop(wait=False)
         self._station_update_scheduler.shutdown()
         self._config.save()
@@ -924,8 +925,7 @@ class MainWindow(wx.Frame):
         # Re-apply network settings (proxy, user agent) -- StationAPI was
         # constructed once at startup, so a change here would otherwise only
         # take effect after restarting the app.
-        from radiomaster.utils.network import get_proxies
-        self._station_api.set_proxies(get_proxies())
+        self._station_api.refresh_network_settings()
 
         # Re-apply radio browsing preferences (default country, duplicate filtering)
         self._radio_panel._apply_sections()
@@ -934,6 +934,18 @@ class MainWindow(wx.Frame):
         # match Settings > Podcasts > Episode order right away instead of
         # only the next time that podcast happens to get (re)selected.
         self._podcast_panel.refresh_episode_order()
+
+        # Downloads settings are live: resize the worker pool for future
+        # jobs and update the persistent YouTube audio-format selector.
+        wx.GetApp().download_manager.set_max_concurrent(
+            self._config.get('downloads.max_concurrent', default=3)
+        )
+        self._youtube_panel.refresh_download_settings()
+
+        # Scheduled recordings previously kept the folder captured at
+        # startup even though manual recordings used the changed setting.
+        from radiomaster.utils.paths import get_recordings_dir
+        self._scheduler_service.set_recordings_dir(get_recordings_dir())
 
         # Re-apply the station-list update schedule -- takes effect
         # immediately rather than only on the next launch.

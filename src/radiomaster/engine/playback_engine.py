@@ -776,6 +776,14 @@ class PlaybackEngine:
         # picking the download back up. These are demuxer-level input
         # options, so they must come immediately before the URL.
         if url.startswith(("http://", "https://")):
+            from radiomaster.utils.network import get_ffmpeg_input_args
+            network_args = get_ffmpeg_input_args()
+            # A resolved YouTube stream carries a User-Agent selected by
+            # yt-dlp. Preserve that below instead of adding two competing
+            # -user_agent options here.
+            if is_video and self._http_headers and self._http_headers.get("User-Agent"):
+                network_args = network_args[:2]
+            cmd.extend(network_args)
             cmd.extend([
                 "-reconnect", "1",
                 "-reconnect_at_eof", "1",
@@ -902,7 +910,7 @@ class PlaybackEngine:
             self._on_error(message)
 
     # Callback setters
-    def on_state_change(self, cb: Callable[[str], None]) -> None:
+    def on_state_change(self, cb: Callable[[str], None] | None) -> None:
         self._on_state_change = cb
 
     def on_position_update(self, cb: Callable[[float, float], None]) -> None:

@@ -10,6 +10,7 @@ values.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 def _config():
@@ -31,8 +32,28 @@ def get_proxies() -> dict[str, str] | None:
     host = config.get("network.proxy_host", default="").strip()
     if not host:
         return None
-    port = config.get("network.proxy_port", default=8080)
-    proxy_url = f"http://{host}:{port}"
+    port = int(config.get("network.proxy_port", default=8080))
+    candidate = host if "://" in host else f"http://{host}"
+    parsed = urlsplit(candidate)
+    hostname = parsed.hostname
+    if not hostname:
+        return None
+    scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "http"
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return None
+    if parsed_port is not None:
+        netloc = parsed.netloc
+    else:
+        credentials = ""
+        if parsed.username:
+            credentials = parsed.username
+            if parsed.password:
+                credentials += f":{parsed.password}"
+            credentials += "@"
+        netloc = f"{credentials}{hostname}:{port}"
+    proxy_url = urlunsplit((scheme, netloc, "", "", ""))
     return {"http": proxy_url, "https": proxy_url}
 
 
@@ -41,15 +62,38 @@ def get_user_agent(fallback: str) -> str:
     identifying UA) if the user hasn't set one."""
     config = _config()
     value = config.get("network.user_agent", default="").strip()
-    return value or fallback
+    if value:
+        return value
+    try:
+        from radiomaster import __app_name__, __version__
+        return f"{__app_name__}/{__version__}"
+    except ImportError:
+        return fallback
 
 
 def get_yt_dlp_proxy_args() -> list[str]:
-    """--proxy args for a yt-dlp command line, or [] if not configured."""
+    """Network arguments for a yt-dlp command line."""
+    args = [
+        "--socket-timeout", str(get_timeout(default=10)),
+        "--user-agent", get_user_agent("RadioMaster+/1.0"),
+    ]
     proxies = get_proxies()
-    if not proxies:
-        return []
-    return ["--proxy", proxies["http"]]
+    if proxies:
+        args.extend(["--proxy", proxies["http"]])
+    return args
+
+
+def get_ffmpeg_input_args(user_agent_fallback: str = "RadioMaster+/1.0") -> list[str]:
+    """FFmpeg/FFplay input options for HTTP timeout and User-Agent.
+
+    These options must be placed before the input URL. Proxy routing is
+    supplied separately through :func:`get_ffplay_http_proxy_env` because
+    FFmpeg's HTTP handlers read the conventional proxy environment variables.
+    """
+    return [
+        "-rw_timeout", str(int(get_timeout(default=10) * 1_000_000)),
+        "-user_agent", get_user_agent(user_agent_fallback),
+    ]
 
 
 def get_ffplay_http_proxy_env() -> dict[str, str]:
@@ -68,3 +112,17 @@ def apply_to_session(session: Any, user_agent_fallback: str) -> None:
     proxies = get_proxies()
     if proxies:
         session.proxies.update(proxies)
+    else:
+        session.proxies.clear()
+
+
+def request_kwargs(user_agent_fallback: str, timeout_default: float = 10.0) -> dict[str, Any]:
+    """Common keyword arguments for one-off ``requests`` calls."""
+    kwargs: dict[str, Any] = {
+        "timeout": get_timeout(default=timeout_default),
+        "headers": {"User-Agent": get_user_agent(user_agent_fallback)},
+    }
+    proxies = get_proxies()
+    if proxies:
+        kwargs["proxies"] = proxies
+    return kwargs

@@ -154,6 +154,11 @@ class StationAPI:
     def set_proxies(self, proxies: Optional[dict]) -> None:
         self.proxies = proxies
 
+    def refresh_network_settings(self) -> None:
+        from radiomaster.utils.network import get_proxies, get_user_agent
+        self.proxies = get_proxies()
+        self._session.headers["User-Agent"] = get_user_agent(USER_AGENT)
+
     def _get(self, path: str, params: Optional[dict] = None, timeout: Optional[int] = None,
              retries: int = 1, retry_delay: float = 5.0,
              progress_cb: Optional[Callable[[int, Optional[int]], None]] = None) -> list:

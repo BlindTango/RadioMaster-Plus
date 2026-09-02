@@ -596,16 +596,26 @@ class RadioPanel(scrolled.ScrolledPanel):
             self._stop_recording(existing_id)
             return
 
-        from radiomaster.services.recording_session import RecordingSession
+        from radiomaster.services.recording_session import (
+            RecordingSession,
+            normalize_recording_format,
+            normalize_recording_quality,
+        )
         from radiomaster.services.stream_prober import probe_stream_format
         from radiomaster.utils.config import ConfigManager
         from radiomaster.utils.paths import get_recordings_dir
         config = ConfigManager.get_instance()
         recordings_dir = get_recordings_dir()
-        rec_format = config.get("recordings.recording_format", default="mp3")
-        quality = config.get("recordings.recording_quality", default="320k")
+        rec_format = normalize_recording_format(
+            config.get("recordings.recording_format", default="mp3")
+        )
+        quality = normalize_recording_quality(
+            config.get("recordings.recording_quality", default="320k")
+        )
         add_metadata = config.get("recordings.add_metadata", default=True)
         split_tracks = config.get("recordings.split_tracks", default=True)
+        skip_short_ads = config.get("recordings.skip_short_ads", default=True)
+        ad_max_duration = config.get("recordings.ad_max_duration", default=30)
         match_source = config.get("recordings.match_source_format", default=True)
 
         # Probing blocks briefly here (bounded by timeout) -- acceptable
@@ -613,7 +623,11 @@ class RadioPanel(scrolled.ScrolledPanel):
         # latency, and skipping it would mean every match_source
         # recording silently falls back to the configured format instead
         # of the station's real one.
-        source_format = probe_stream_format(station.url, timeout=6.0) if match_source else None
+        source_format = (
+            probe_stream_format(station.url, timeout=6.0)
+            if match_source or quality == "best"
+            else None
+        )
 
         download_id: Optional[int] = None
         if self._db:
@@ -657,12 +671,22 @@ class RadioPanel(scrolled.ScrolledPanel):
                 # Backfilling it now is what makes a plain (non-split)
                 # recording playable from Download History at all.
                 repo.set_file_path(key_id, file_path)
+            # Segment finalization runs on the recording worker thread.
+            # Refresh the Downloads panel promptly on the UI thread instead
+            # of leaving the completed track invisible until its next poll.
+            if self.on_recording_changed and wx.GetApp() is not None:
+                wx.CallAfter(
+                    self.on_recording_changed,
+                    self.is_station_recording(self._selected_station),
+                )
 
         try:
             session = RecordingSession(
                 station_url=station.url, station_name=station.name, output_dir=recordings_dir,
                 rec_format=rec_format, quality=quality, add_metadata=add_metadata,
-                split_tracks=split_tracks, match_source=match_source, source_format=source_format,
+                split_tracks=split_tracks, skip_short_ads=skip_short_ads,
+                ad_max_duration=ad_max_duration, match_source=match_source,
+                source_format=source_format,
                 on_segment_finalized=_on_segment,
             )
             session.start()
@@ -683,7 +707,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         if self.on_recording_changed:
             self.on_recording_changed(self.is_station_recording(self._selected_station))
 
-    def _stop_recording(self, key_id: int) -> None:
+    def _stop_recording(self, key_id: int, wait: bool = False) -> None:
         entry = self._recordings.pop(key_id, None)
         if entry is None:
             return
@@ -705,10 +729,19 @@ class RadioPanel(scrolled.ScrolledPanel):
                 repo.update_progress(key_id, 100, status="completed")
         if self.on_recording_changed:
             self.on_recording_changed(self.is_station_recording(self._selected_station))
-        # session.stop() can block for several seconds finalizing the
-        # in-progress ffmpeg process(es) -- keep that off the UI thread.
-        threading.Thread(target=entry["session"].stop, daemon=True).start()
+        # An ordinary button click stays responsive while ffmpeg finalizes.
+        # Application shutdown uses wait=True so recordings are closed and
+        # their final database callbacks finish before the database is closed.
+        if wait:
+            entry["session"].stop()
+        else:
+            threading.Thread(target=entry["session"].stop, daemon=True).start()
         self.set_status(f"Status: Stopped recording {station_name}")
+
+    def shutdown_recordings(self) -> None:
+        """Finalize every manual recording before application teardown."""
+        for download_id in list(self._recordings):
+            self._stop_recording(download_id, wait=True)
 
     def stop_recording_by_download_id(self, download_id: int) -> bool:
         """Public entry point for the Downloads tab's "Stop Recording"

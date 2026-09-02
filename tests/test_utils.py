@@ -1,6 +1,7 @@
 """Tests for utility functions."""
 
 import os
+from unittest.mock import MagicMock, patch
 import pytest
 from radiomaster.utils.helpers import format_time, parse_time, sanitize_filename, truncate
 from radiomaster.utils import paths
@@ -87,3 +88,62 @@ class TestPortablePaths:
         monkeypatch.setattr(paths.os.path, "exists", lambda _path: False)
         assert paths.resolve_stored_path(r"E:\RadioMaster+\data\downloads\Podcasts") == \
             os.path.normpath(r"F:\RadioMaster+\data\downloads\Podcasts")
+
+
+class TestNetworkSettings:
+    def test_proxy_accepts_bare_host_or_full_url(self) -> None:
+        from radiomaster.utils import network
+
+        config = MagicMock()
+        values = {
+            "network.proxy_enabled": True,
+            "network.proxy_host": "proxy.example",
+            "network.proxy_port": 3128,
+        }
+        config.get.side_effect = lambda key, default=None: values.get(key, default)
+        with patch.object(network, "_config", return_value=config):
+            assert network.get_proxies() == {
+                "http": "http://proxy.example:3128",
+                "https": "http://proxy.example:3128",
+            }
+            values["network.proxy_host"] = "https://proxy.example:8443"
+            assert network.get_proxies()["https"] == "https://proxy.example:8443"
+
+    def test_request_kwargs_include_all_network_settings(self) -> None:
+        from radiomaster.utils import network
+
+        config = MagicMock()
+        values = {
+            "network.proxy_enabled": True,
+            "network.proxy_host": "proxy.example",
+            "network.proxy_port": 8080,
+            "network.timeout": 45,
+            "network.user_agent": "Custom Agent",
+        }
+        config.get.side_effect = lambda key, default=None: values.get(key, default)
+        with patch.object(network, "_config", return_value=config):
+            kwargs = network.request_kwargs("fallback")
+        assert kwargs["timeout"] == 45
+        assert kwargs["headers"]["User-Agent"] == "Custom Agent"
+        assert kwargs["proxies"]["http"] == "http://proxy.example:8080"
+
+    def test_subprocess_args_include_timeout_user_agent_and_proxy(self) -> None:
+        from radiomaster.utils import network
+
+        values = {
+            "network.proxy_enabled": True,
+            "network.proxy_host": "proxy.example",
+            "network.proxy_port": 3128,
+            "network.timeout": 12,
+            "network.user_agent": "Custom Agent",
+        }
+        config = MagicMock()
+        config.get.side_effect = lambda key, default=None: values.get(key, default)
+        with patch.object(network, "_config", return_value=config):
+            assert network.get_ffmpeg_input_args() == [
+                "-rw_timeout", "12000000", "-user_agent", "Custom Agent",
+            ]
+            assert network.get_yt_dlp_proxy_args() == [
+                "--socket-timeout", "12.0", "--user-agent", "Custom Agent",
+                "--proxy", "http://proxy.example:3128",
+            ]

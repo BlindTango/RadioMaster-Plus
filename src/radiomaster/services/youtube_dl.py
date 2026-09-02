@@ -239,7 +239,10 @@ class YouTubeService:
     def download(self, url: str, output_dir: str, format: str = "best",
                  extract_audio: bool = False) -> bool:
         """Download a video or audio."""
-        cmd = [get_ytdlp(), "--no-playlist", "-o", f"{output_dir}/%(title)s.%(ext)s"]
+        cmd = [
+            get_ytdlp(), *get_yt_dlp_proxy_args(),
+            "--no-playlist", "-o", f"{output_dir}/%(title)s.%(ext)s",
+        ]
         if extract_audio:
             cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
         else:
@@ -335,11 +338,12 @@ class YouTubeService:
             return False, ""
         try:
             import requests
+            from radiomaster.utils.network import request_kwargs
+            kwargs = request_kwargs("RadioMasterPlus-Updater")
+            kwargs["headers"]["Accept"] = "application/vnd.github+json"
             resp = requests.get(
                 "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
-                timeout=10,
-                headers={"Accept": "application/vnd.github+json",
-                         "User-Agent": "RadioMasterPlus-Updater"},
+                **kwargs,
             )
             if resp.status_code != 200:
                 return False, ""
@@ -386,7 +390,11 @@ class YouTubeService:
         url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
         try:
             import requests
-            resp = requests.get(url, timeout=30, stream=True)
+            from radiomaster.utils.network import request_kwargs
+            resp = requests.get(
+                url, stream=True,
+                **request_kwargs("RadioMasterPlus-Updater", timeout_default=30),
+            )
             resp.raise_for_status()
         except Exception as e:
             return False, f"Could not download the update: {e}"

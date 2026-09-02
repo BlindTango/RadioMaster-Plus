@@ -32,9 +32,25 @@ RECORDING_CODECS: dict[str, tuple[str, str]] = {
     "mp3": (".mp3", "libmp3lame"),
     "aac": (".aac", "aac"),
     "ogg": (".ogg", "libvorbis"),
+    "opus": (".opus", "libopus"),
     "flac": (".flac", "flac"),
     "wav": (".wav", "pcm_s16le"),
 }
+RECORDING_FORMATS = tuple(RECORDING_CODECS)
+RECORDING_QUALITIES = ("128k", "192k", "256k", "320k", "best")
+
+
+def normalize_recording_format(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in RECORDING_CODECS else "mp3"
+
+
+def normalize_recording_quality(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized == "best":
+        return "best"
+    valid = {quality.lower() for quality in RECORDING_QUALITIES}
+    return normalized if normalized in valid else "320k"
 
 # Maps a probed source codec (ffprobe's codec_name -- see
 # stream_prober.py) to an output extension and ffmpeg encoder, for
@@ -99,6 +115,7 @@ class RecordingSession:
     def __init__(self, station_url: str, station_name: str, output_dir: str,
                  rec_format: str = "mp3", quality: str = "320k",
                  add_metadata: bool = True, split_tracks: bool = False,
+                 skip_short_ads: bool = True, ad_max_duration: int = 30,
                  match_source: bool = False, source_format: Optional[dict] = None,
                  on_segment_finalized: Optional[Callable[[str, str], None]] = None) -> None:
         """*match_source*, when True and *source_format* (see
@@ -112,28 +129,31 @@ class RecordingSession:
         (SOURCE_CODEC_MAP)."""
         self.station_url = station_url
         self.station_name = station_name
-        self.rec_format = rec_format
-        self.quality = quality
+        self.rec_format = normalize_recording_format(rec_format)
+        self.quality = normalize_recording_quality(quality)
         self.add_metadata = add_metadata
         self.split_tracks = split_tracks
+        self.skip_short_ads = skip_short_ads
+        self.ad_max_duration = max(1, int(ad_max_duration))
         self.on_segment_finalized = on_segment_finalized
 
         self.match_source = False
         self._source_sample_rate = _DECODE_SAMPLE_RATE
         self._source_channels = _DECODE_CHANNELS
         self._source_bit_rate: Optional[int] = None
+        if source_format:
+            if source_format.get("sample_rate"):
+                self._source_sample_rate = source_format["sample_rate"]
+            if source_format.get("channels"):
+                self._source_channels = source_format["channels"]
+            self._source_bit_rate = source_format.get("bit_rate") or None
         if match_source and source_format and source_format.get("codec"):
             mapped = SOURCE_CODEC_MAP.get(source_format["codec"])
             if mapped is not None:
                 self.ext, self._codec = mapped
                 self.match_source = True
-                if source_format.get("sample_rate"):
-                    self._source_sample_rate = source_format["sample_rate"]
-                if source_format.get("channels"):
-                    self._source_channels = source_format["channels"]
-                self._source_bit_rate = source_format.get("bit_rate") or None
         if not self.match_source:
-            self.ext, self._codec = RECORDING_CODECS.get(rec_format, (".mp3", "libmp3lame"))
+            self.ext, self._codec = RECORDING_CODECS[self.rec_format]
 
         safe_station_name = re.sub(r'[<>:"/\\|?*]', "_", station_name).strip() or "station"
         self.station_dir = os.path.join(output_dir, safe_station_name)
@@ -149,6 +169,7 @@ class RecordingSession:
         self._last_song: Optional[str] = None
         self._pending_title: Optional[str] = None
         self._split_timer: Optional[threading.Timer] = None
+        self._segment_started_at = time.monotonic()
         self._stopped = False
 
     # ------------------------------------------------------------------
@@ -187,15 +208,26 @@ class RecordingSession:
     # ------------------------------------------------------------------
     # Non-split path
     # ------------------------------------------------------------------
+    def _target_bitrate(self) -> str:
+        """Resolve Best to the stream's advertised bitrate when available."""
+        if self.quality == "best":
+            return str(self._source_bit_rate) if self._source_bit_rate else "320k"
+        return self.quality
+
     def _recording_ffmpeg_args(self, output_path: str, song: Optional[str]) -> list[str]:
         # match_source uses stream copy -- no re-encode at all, so the
         # recording is bit-for-bit the station's own broadcast (same
         # codec, bitrate, sample rate, channels) rather than a
         # transcoded approximation of it.
         codec_arg = "copy" if self.match_source else self._codec
-        cmd = [get_ffmpeg(), "-y", "-i", self.station_url, "-c:a", codec_arg]
-        if not self.match_source and self.rec_format in ("mp3", "aac", "ogg"):
-            cmd += ["-b:a", "320k" if self.quality.lower() == "best" else self.quality]
+        from radiomaster.utils.network import get_ffmpeg_input_args
+        network_args = (
+            get_ffmpeg_input_args()
+            if self.station_url.startswith(("http://", "https://")) else []
+        )
+        cmd = [get_ffmpeg(), "-y", *network_args, "-i", self.station_url, "-c:a", codec_arg]
+        if not self.match_source and self.rec_format in ("mp3", "aac", "ogg", "opus"):
+            cmd += ["-b:a", self._target_bitrate()]
         if self.add_metadata:
             artist, title = parse_icy_song(song) if song else ("", "")
             cmd += ["-metadata", f"title={title or self.station_name}",
@@ -207,9 +239,13 @@ class RecordingSession:
         """stdin is a pipe (not DEVNULL) so it can be told to quit
         gracefully -- see _stop_ffmpeg_gracefully."""
         cmd = self._recording_ffmpeg_args(output_path, song)
+        from radiomaster.utils.network import get_ffplay_http_proxy_env
+        proxy_env = get_ffplay_http_proxy_env()
+        env = dict(os.environ, **proxy_env) if proxy_env else None
         return subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            env=env,
         )
 
     @staticmethod
@@ -282,17 +318,26 @@ class RecordingSession:
         44.1kHz/stereo) so the PCM->re-encode roundtrip doesn't quietly
         resample or downmix a station that isn't already 44.1kHz
         stereo."""
+        from radiomaster.utils.network import get_ffmpeg_input_args, get_ffplay_http_proxy_env
+        network_args = (
+            get_ffmpeg_input_args()
+            if self.station_url.startswith(("http://", "https://")) else []
+        )
         cmd = [
             get_ffmpeg(), "-hide_banner", "-loglevel", "error",
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+            *network_args,
             "-i", self.station_url,
             "-vn", "-f", "s16le", "-acodec", "pcm_s16le",
             "-ac", str(self._source_channels), "-ar", str(self._source_sample_rate),
             "pipe:1",
         ]
+        proxy_env = get_ffplay_http_proxy_env()
+        env = dict(os.environ, **proxy_env) if proxy_env else None
         return subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            env=env,
         )
 
     def _start_encode_segment(self, output_path: str) -> subprocess.Popen:
@@ -301,6 +346,7 @@ class RecordingSession:
         match_source mode, the station's own) format/quality out.
         Closing stdin is a clean EOF that makes ffmpeg finish encoding
         and exit on its own."""
+        self._segment_started_at = time.monotonic()
         cmd = [
             get_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
             "-f", "s16le", "-ar", str(self._source_sample_rate), "-ac", str(self._source_channels),
@@ -309,8 +355,14 @@ class RecordingSession:
         if self.match_source:
             if self._codec not in _LOSSLESS_CODECS and self._source_bit_rate:
                 cmd += ["-b:a", f"{self._source_bit_rate // 1000}k"]
-        elif self.rec_format in ("mp3", "aac", "ogg"):
-            cmd += ["-b:a", "320k" if self.quality.lower() == "best" else self.quality]
+        elif self.rec_format in ("mp3", "aac", "ogg", "opus"):
+            cmd += ["-b:a", self._target_bitrate()]
+        if self.add_metadata:
+            artist, title = parse_icy_song(self._last_song or "")
+            cmd += [
+                "-metadata", f"title={title or self.station_name}",
+                "-metadata", f"artist={artist or self.station_name}",
+            ]
         cmd.append(output_path)
         return subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -341,8 +393,9 @@ class RecordingSession:
         except Exception as e:
             logger.error(f"Recording feed loop for {self.station_name} ended: {e}")
 
-    def _finalize_encode_segment(self) -> None:
+    def _finalize_encode_segment(self, check_for_short_ad: bool = False) -> None:
         """Caller holds self._lock."""
+        segment_duration = time.monotonic() - self._segment_started_at
         encode_proc = self._encode_proc
         if encode_proc is not None:
             try:
@@ -357,6 +410,20 @@ class RecordingSession:
                     encode_proc.kill()
         temp_path = self.temp_path
         if os.path.exists(temp_path):
+            if (
+                check_for_short_ad
+                and self.skip_short_ads
+                and segment_duration <= self.ad_max_duration
+            ):
+                try:
+                    os.remove(temp_path)
+                    logger.info(
+                        "Skipped likely advertisement in %s (%.1f seconds)",
+                        self.station_name, segment_duration,
+                    )
+                except OSError as e:
+                    logger.error("Could not discard likely advertisement %s: %s", temp_path, e)
+                return
             final_path = self._finalize_segment_path(self._last_song)
             try:
                 os.replace(temp_path, final_path)
@@ -366,14 +433,17 @@ class RecordingSession:
             if self.on_segment_finalized:
                 self.on_segment_finalized(final_path, self._last_song or "")
 
-    def _split_segment(self) -> None:
+    def _split_segment(self, next_title: str) -> None:
         with self._lock:
             if self._stopped:
                 return
-            self._finalize_encode_segment()
+            self._finalize_encode_segment(check_for_short_ad=True)
             if self._stopped:
                 return
             try:
+                # Finalization above needed the old title; the new encoder
+                # needs the next title so its embedded metadata is correct.
+                self._last_song = next_title
                 self._encode_proc = self._start_encode_segment(self.temp_path)
             except Exception as e:
                 logger.error(f"Could not start next recording segment: {e}")
@@ -407,8 +477,7 @@ class RecordingSession:
             # already recording just learns its own name.
             self._last_song = title
             return
-        self._split_segment()
-        self._last_song = title
+        self._split_segment(title)
 
     def _track_watcher(self) -> None:
         """Watches ICY metadata over a SECOND connection to the station,

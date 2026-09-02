@@ -54,9 +54,14 @@ class UpdateChecker:
     def check(self, current_version: str, timeout: float = 10.0) -> Optional[UpdateInfo]:
         url = f"https://api.github.com/repos/{self.repo}/releases/latest"
         try:
+            from radiomaster.utils.network import get_proxies, get_timeout, get_user_agent
             resp = requests.get(
-                url, timeout=timeout, proxies=self.proxies,
-                headers={"Accept": "application/vnd.github+json", "User-Agent": _USER_AGENT},
+                url, timeout=get_timeout(default=timeout),
+                proxies=self.proxies if self.proxies is not None else get_proxies(),
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": get_user_agent(_USER_AGENT),
+                },
             )
             if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
                 # GitHub's unauthenticated API allows only 60 requests/hour
@@ -112,7 +117,12 @@ class UpdateChecker:
         if not info.download_url:
             raise UpdateCheckError("This release has no downloadable installer asset.")
         try:
-            resp = requests.get(info.download_url, timeout=30, proxies=self.proxies, stream=True)
+            from radiomaster.utils.network import get_proxies, get_timeout, get_user_agent
+            resp = requests.get(
+                info.download_url, timeout=get_timeout(default=30),
+                proxies=self.proxies if self.proxies is not None else get_proxies(),
+                headers={"User-Agent": get_user_agent(_USER_AGENT)}, stream=True,
+            )
             resp.raise_for_status()
         except requests.RequestException as exc:
             raise UpdateCheckError(f"Could not download the update: {exc}") from exc
