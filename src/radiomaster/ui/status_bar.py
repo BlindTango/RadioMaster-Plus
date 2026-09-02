@@ -2,6 +2,8 @@
 
 import wx
 
+from radiomaster.utils.accessibility import set_accessible_name
+
 
 def _format_hms(seconds: float) -> str:
     """0:00 / 12:34 / 1:02:03 -- hours only shown once actually needed,
@@ -28,6 +30,9 @@ class StatusBar(wx.StatusBar):
         # set_time_info) instead of the bitrate/quality text its name
         # suggests -- that needs more room than the other three fields.
         self.SetStatusWidths([-2, -1, -3, -2, -2])
+        self._announcements_enabled = False
+        self._last_announced = ""
+        self._accessible = set_accessible_name(self, "Status: Ready")
 
         self._set_defaults()
 
@@ -42,6 +47,23 @@ class StatusBar(wx.StatusBar):
     def set_status(self, text: str) -> None:
         """Set the main status field."""
         self.SetStatusText(text, self.FIELD_STATUS)
+        if self._announcements_enabled and text and text != self._last_announced:
+            self._last_announced = text
+            self._accessible.set_name(f"Status: {text}")
+            try:
+                wx.Accessible.NotifyEvent(
+                    wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 0
+                )
+            except (AttributeError, RuntimeError):
+                # Some non-Windows wx builds do not expose MSAA events. The
+                # status remains available through the accessible object.
+                pass
+
+    def set_screen_reader_announcements(self, enabled: bool) -> None:
+        """Enable concise announcements for meaningful status changes."""
+        self._announcements_enabled = bool(enabled)
+        if not enabled:
+            self._last_announced = ""
 
     def set_buffering(self, percent: int) -> None:
         """Set buffering percentage."""

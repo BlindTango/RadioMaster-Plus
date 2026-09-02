@@ -322,7 +322,7 @@ class TestLiveAudioEngine:
         assert engine.rate == 1.0
         assert engine.pan == 0.0
 
-    def test_underrun_uses_larger_recovery_cushion(self) -> None:
+    def test_underrun_uses_configured_recovery_cushion(self) -> None:
         from radiomaster.engine.live_audio_engine import (
             CHANNELS, LiveAudioEngine, REBUFFER_CHUNKS,
         )
@@ -520,20 +520,15 @@ class TestLiveAudioEngine:
         stream.close.assert_called_once()
         assert engine._output_stream is None
 
-    def test_system_default_prefers_wasapi_on_windows(self) -> None:
-        """Avoid PortAudio's legacy MME default when shared WASAPI exists."""
+    def test_system_default_is_not_replaced_with_another_host_api(self) -> None:
+        """System Default must retain the stable v1.1.70 device selection."""
         from radiomaster.engine.live_audio_engine import LiveAudioEngine
 
-        host_apis = [
-            {"name": "MME", "default_output_device": 7},
-            {"name": "Windows WASAPI", "default_output_device": 23},
-        ]
-        with patch("radiomaster.engine.live_audio_engine.sd.query_hostapis", return_value=host_apis), \
-             patch("radiomaster.engine.live_audio_engine.sd.OutputStream") as stream_cls:
+        with patch("radiomaster.engine.live_audio_engine.sd.OutputStream") as stream_cls:
             stream_cls.return_value = MagicMock()
             LiveAudioEngine()._start_output_stream()
 
-        assert stream_cls.call_args.kwargs["device"] == 23
+        assert stream_cls.call_args.kwargs["device"] is None
 
     def test_decode_loop_does_not_start_output_after_stop(self) -> None:
         """_decode_loop() opens the container (can take real seconds --

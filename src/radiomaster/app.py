@@ -58,14 +58,6 @@ class RadioMasterApp(wx.App):
             self.logger = logging.getLogger(__app_name__)
             self.logger.warning("Could not create single-instance mutex", exc_info=True)
 
-        # OnInit() runs before MainLoop() starts, so nothing is pumping
-        # events yet -- wx.Yield() forces the splash to actually paint
-        # once before the (potentially slow: SQLite station catalog,
-        # service startup) synchronous init below blocks the thread.
-        from radiomaster.ui.splash import show_splash
-        splash = show_splash()
-        wx.Yield()
-
         # Initialize paths
         self._paths = get_paths()
 
@@ -76,6 +68,15 @@ class RadioMasterApp(wx.App):
         # handed a reference directly) must see this exact object -- see
         # ConfigManager.set_instance()'s docstring for why this matters.
         ConfigManager.set_instance(self._config)
+
+        # Read accessibility preferences before presenting anything. When
+        # reduced motion is enabled, startup proceeds without the timed
+        # splash; otherwise Yield ensures it paints before synchronous init.
+        splash = None
+        if not self._config.get("accessibility.reduce_motion", default=False):
+            from radiomaster.ui.splash import show_splash
+            splash = show_splash()
+            wx.Yield()
 
         # Setup logging
         setup_logging(
@@ -159,7 +160,8 @@ class RadioMasterApp(wx.App):
         )
         self._main_window.Show()
         self.SetTopWindow(self._main_window)
-        splash.Close()
+        if splash:
+            splash.Close()
 
         return True
 

@@ -117,6 +117,10 @@ class YouTubeService:
                     "http_headers": info.get("http_headers") or {},
                     "title": info.get("title", ""),
                     "duration": float(info.get("duration") or 0.0),
+                    "description": info.get("description") or "",
+                    "channel": info.get("channel") or info.get("uploader") or "",
+                    "upload_date": info.get("upload_date") or "",
+                    "view_count": info.get("view_count"),
                 }
         except Exception as e:
             logger.error(f"Failed to get stream info: {e}")

@@ -843,12 +843,45 @@ class AccessibilityPanel(SettingsPanel):
         self.dyslexia_font_chk.SetValue(self.config.get("accessibility.dyslexia_font", default=False))
         sizer.Add(self.dyslexia_font_chk, 0, wx.ALL, 5)
 
+        self.screen_reader_chk = wx.CheckBox(
+            self, label="Announce status changes to screen readers"
+        )
+        self.screen_reader_chk.SetValue(self.config.get(
+            "accessibility.screen_reader_optimized", default=True
+        ))
+        sizer.Add(self.screen_reader_chk, 0, wx.ALL, 5)
+
+        self.keyboard_nav_chk = wx.CheckBox(
+            self, label="Use F6 and Shift+F6 to move between major regions"
+        )
+        self.keyboard_nav_chk.SetValue(self.config.get(
+            "accessibility.keyboard_navigation", default=True
+        ))
+        sizer.Add(self.keyboard_nav_chk, 0, wx.ALL, 5)
+
+        self.focus_indicators_chk = wx.CheckBox(
+            self, label="Enhance keyboard focus with high contrast highlighting"
+        )
+        self.focus_indicators_chk.SetValue(self.config.get(
+            "accessibility.focus_indicators", default=True
+        ))
+        sizer.Add(self.focus_indicators_chk, 0, wx.ALL, 5)
+
+        self.reduce_motion_chk = wx.CheckBox(
+            self, label="Reduce motion by skipping the startup splash"
+        )
+        self.reduce_motion_chk.SetValue(self.config.get(
+            "accessibility.reduce_motion", default=False
+        ))
+        sizer.Add(self.reduce_motion_chk, 0, wx.ALL, 5)
+
         info = wx.StaticText(
             self,
             label=(
-                "Screen reader support, keyboard navigation, and native focus indicators "
-                "are always enabled. These settings take effect immediately when you choose "
-                "Apply or OK. OpenDyslexic must be installed in Windows; otherwise Windows "
+                "Control names, standard keyboard navigation, and native focus indicators "
+                "are always enabled. These options add extra assistance. All but reduced "
+                "motion take effect when you choose Apply or OK; reduced motion applies on "
+                "the next launch. OpenDyslexic must be installed in Windows; otherwise Windows "
                 "uses its default interface font."
             ),
         )
@@ -858,6 +891,10 @@ class AccessibilityPanel(SettingsPanel):
     def onSave(self) -> None:
         self.config.set("accessibility.high_contrast", value=self.high_contrast_chk.IsChecked())
         self.config.set("accessibility.dyslexia_font", value=self.dyslexia_font_chk.IsChecked())
+        self.config.set("accessibility.screen_reader_optimized", value=self.screen_reader_chk.IsChecked())
+        self.config.set("accessibility.keyboard_navigation", value=self.keyboard_nav_chk.IsChecked())
+        self.config.set("accessibility.focus_indicators", value=self.focus_indicators_chk.IsChecked())
+        self.config.set("accessibility.reduce_motion", value=self.reduce_motion_chk.IsChecked())
 
 
 class AdvancedPanel(SettingsPanel):
@@ -895,9 +932,10 @@ class AdvancedPanel(SettingsPanel):
 
         ytdlp_info = wx.StaticText(
             self,
-            label="Checks for a newer yt-dlp on startup (at most weekly) and updates it "
-                  "silently. Keeping it current is the best way to keep YouTube playback "
-                  "working. You can always update manually via Help > Update YouTube Library.",
+            label="Checks for a newer yt-dlp when enabled and on future startups (at most "
+                  "weekly), then updates it silently. Keeping it current is the best way "
+                  "to keep YouTube playback working. You can always update manually via "
+                  "Help > Update YouTube Library.",
         )
         ytdlp_info.Wrap(600)
         sizer.Add(ytdlp_info, 0, wx.ALL, 5)

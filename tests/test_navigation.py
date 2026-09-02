@@ -96,6 +96,18 @@ class TestHelpSystem:
 
 
 class TestPanelControls:
+    def test_startup_settings_skip_duplicate_panel_refreshes(self, app_and_window) -> None:
+        """Large panel collections are already loaded by their constructors."""
+        _app, win = app_and_window
+        with patch.object(win._radio_panel, "_apply_sections") as radio_refresh, \
+             patch.object(win._podcast_panel, "refresh_episode_order") as podcast_refresh, \
+             patch.object(win._youtube_panel, "refresh_download_settings") as youtube_refresh:
+            win._apply_settings_changes(refresh_panels=False)
+
+        radio_refresh.assert_not_called()
+        podcast_refresh.assert_not_called()
+        youtube_refresh.assert_not_called()
+
     def test_audiobook_uses_chapter_activation_without_play_button(
         self, app_and_window
     ) -> None:
@@ -380,7 +392,7 @@ class TestNetworkSettings:
 
 
 class TestAccessibilitySettings:
-    def test_only_real_accessibility_options_are_shown_and_apply_immediately(
+    def test_accessibility_options_are_wired_and_apply_immediately(
         self, app_and_window
     ) -> None:
         _app, win = app_and_window
@@ -388,6 +400,15 @@ class TestAccessibilitySettings:
 
         original_high_contrast = win._config.get("accessibility.high_contrast", default=False)
         original_dyslexia_font = win._config.get("accessibility.dyslexia_font", default=False)
+        original_extras = {
+            key: win._config.get(f"accessibility.{key}", default=default)
+            for key, default in (
+                ("screen_reader_optimized", True),
+                ("keyboard_navigation", True),
+                ("focus_indicators", True),
+                ("reduce_motion", False),
+            )
+        }
         dlg = SettingsDialog(
             win, win._config, theme_manager=win._theme_manager,
             on_apply=win._apply_settings_changes,
@@ -401,10 +422,10 @@ class TestAccessibilitySettings:
             assert panel.dyslexia_font_chk.GetLabelText() == (
                 "Use OpenDyslexic font when installed"
             )
-            assert not hasattr(panel, "screen_reader_chk")
-            assert not hasattr(panel, "keyboard_nav_chk")
-            assert not hasattr(panel, "focus_indicators_chk")
-            assert not hasattr(panel, "reduce_motion_chk")
+            panel.screen_reader_chk.SetValue(False)
+            panel.keyboard_nav_chk.SetValue(False)
+            panel.focus_indicators_chk.SetValue(False)
+            panel.reduce_motion_chk.SetValue(True)
 
             panel.high_contrast_chk.SetValue(True)
             panel.dyslexia_font_chk.SetValue(True)
@@ -412,6 +433,11 @@ class TestAccessibilitySettings:
             win._apply_settings_changes()
             assert win._config.get("accessibility.high_contrast") is True
             assert win._config.get("accessibility.dyslexia_font") is True
+            assert win._config.get("accessibility.screen_reader_optimized") is False
+            assert win._config.get("accessibility.keyboard_navigation") is False
+            assert win._config.get("accessibility.focus_indicators") is False
+            assert win._config.get("accessibility.reduce_motion") is True
+            assert win._status_bar._announcements_enabled is False
             assert win.GetBackgroundColour() == wx.Colour(0, 0, 0)
             assert win.GetForegroundColour() == wx.Colour(255, 255, 255)
         finally:
@@ -421,9 +447,133 @@ class TestAccessibilitySettings:
             win._config.set(
                 "accessibility.dyslexia_font", value=original_dyslexia_font
             )
+            for key, value in original_extras.items():
+                win._config.set(f"accessibility.{key}", value=value)
             win._config.save()
             win._apply_settings_changes()
             dlg.Destroy()
+
+    def test_f6_cycles_major_regions_when_enabled(self, app_and_window) -> None:
+        _app, win = app_and_window
+        original = win._config.get("accessibility.keyboard_navigation", default=True)
+        try:
+            win._config.set("accessibility.keyboard_navigation", value=True)
+            win._search_bar._search_ctrl.SetFocus()
+            wx.Yield()
+            win._cycle_focus_region()
+            wx.Yield()
+            assert wx.Window.FindFocus() == win._listbook.GetListView()
+            win._cycle_focus_region(backward=True)
+            wx.Yield()
+            focus = wx.Window.FindFocus()
+            assert focus == win._search_bar._search_ctrl or (
+                focus and focus.GetParent() == win._search_bar._search_ctrl
+            )
+        finally:
+            win._config.set("accessibility.keyboard_navigation", value=original)
+
+    def test_status_announcements_are_deduplicated(self, app_and_window) -> None:
+        _app, win = app_and_window
+        bar = win._status_bar
+        with patch.object(wx.Accessible, "NotifyEvent") as notify:
+            bar.set_screen_reader_announcements(True)
+            bar.set_status("Accessibility test")
+            bar.set_status("Accessibility test")
+        notify.assert_called_once()
+        assert bar._accessible.GetName(0) == (wx.ACC_OK, "Status: Accessibility test")
+
+
+class TestSharedContentPane:
+    def test_podcast_selection_shows_plain_text_notes(self, app_and_window) -> None:
+        _app, win = app_and_window
+        panel = win._podcast_panel
+        panel._current_podcast_title = "Example Podcast"
+        panel._episode_data = [{
+            "title": "Episode One", "published_date": "2026-09-02",
+            "duration": 125, "description": "<p>Hello <strong>listener</strong>.</p>",
+        }]
+        panel._episode_list.DeleteAllItems()
+        panel._episode_list.InsertItem(0, "Episode One")
+        panel._episode_list.Select(0)
+        panel.show_selected_notes()
+
+        value = win._lyrics_panel._text_ctrl.GetValue()
+        assert "Episode One" in value
+        assert "Example Podcast" in value
+        assert "Hello listener" in value
+        assert "<strong>" not in value
+
+    def test_youtube_selection_shows_video_information(self, app_and_window) -> None:
+        _app, win = app_and_window
+        panel = win._youtube_panel
+        panel._search_results = [{
+            "title": "Accessible Video", "channel": "Example Channel",
+            "duration": 65, "view_count": 1234, "description": "Video description",
+        }]
+        panel._results_list.DeleteAllItems()
+        row = panel._results_list.InsertItem(0, "Accessible Video")
+        panel._results_list.SetItemData(row, 0)
+        panel._results_list.Select(row)
+        panel.show_selected_info()
+
+        value = win._lyrics_panel._text_ctrl.GetValue()
+        assert "Accessible Video" in value
+        assert "Channel: Example Channel" in value
+        assert "Duration: 1:05" in value
+        assert "Views: 1,234" in value
+        assert "Video description" in value
+
+
+class TestAdvancedSettings:
+    def test_logging_modes_and_ytdlp_option_save_and_apply(self, app_and_window) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        original_level = win._config.get("logging.level", default="info")
+        original_auto = win._config.get("updates.ytdlp_auto_update", default=True)
+        dlg = SettingsDialog(win, win._config, on_apply=win._apply_settings_changes)
+        try:
+            dlg._switch_to(8)
+            panel = dlg._panel_map[8]
+            assert panel.logging_combo.GetName() == "Logging Level"
+            assert panel._log_level_values == ["off", "info", "debug", "io"]
+
+            for index, expected in enumerate(panel._log_level_values):
+                panel.logging_combo.SetSelection(index)
+                win._config.set("logging.level", value="different")
+                with patch("radiomaster.utils.logging_setup.setup_logging") as setup:
+                    panel.onSave()
+                assert win._config.get("logging.level") == expected
+                setup.assert_called_once_with(level=expected, log_dir=win._paths["logs"])
+
+            panel.ytdlp_auto_update_chk.SetValue(False)
+            panel.onSave()
+            assert win._config.get("updates.ytdlp_auto_update") is False
+        finally:
+            win._config.set("logging.level", value=original_level)
+            win._config.set("updates.ytdlp_auto_update", value=original_auto)
+            win._config.save()
+            dlg.Destroy()
+
+    def test_enabling_due_ytdlp_update_applies_without_restart(self, app_and_window) -> None:
+        _app, win = app_and_window
+        original_auto = win._config.get("updates.ytdlp_auto_update", default=True)
+        original_last = win._config.get("updates.ytdlp_last_check_timestamp", default=0)
+        try:
+            win._config.set("updates.ytdlp_auto_update", value=True)
+            win._config.set("updates.ytdlp_last_check_timestamp", value=0)
+            with patch.object(win, "_auto_update_ytdlp") as update:
+                win._maybe_auto_update_ytdlp()
+            update.assert_called_once_with()
+
+            win._config.set("updates.ytdlp_auto_update", value=False)
+            with patch.object(win, "_auto_update_ytdlp") as update:
+                win._maybe_auto_update_ytdlp()
+            update.assert_not_called()
+        finally:
+            win._config.set("updates.ytdlp_auto_update", value=original_auto)
+            win._config.set("updates.ytdlp_last_check_timestamp", value=original_last)
+            win._config.save()
 
 
 class TestRadioSettings:

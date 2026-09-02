@@ -87,6 +87,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "font_size": 12,
         "font_family": "",
         "dyslexia_font": False,
+        # These options enhance the application's always-available native
+        # accessibility; turning one off never removes labels, normal Tab
+        # traversal, or the operating system's focus indicator.
+        "screen_reader_optimized": True,
+        "keyboard_navigation": True,
+        "focus_indicators": True,
+        "reduce_motion": False,
         "sapi_screen_reader_mode": "coexist",
     },
     "updates": {

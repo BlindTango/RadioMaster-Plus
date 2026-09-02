@@ -13,6 +13,9 @@ class _NamedAccessible(wx.Accessible):
     def GetName(self, childId):
         return (wx.ACC_OK, self._name)
 
+    def set_name(self, name: str) -> None:
+        self._name = name
+
 
 # wx.Window.SetAccessible() does not take a reference-counted hold on the
 # Python object it's given, so without keeping one alive somewhere, a
@@ -31,7 +34,7 @@ class _NamedAccessible(wx.Accessible):
 _KEEPALIVE: list[wx.Accessible] = []
 
 
-def set_accessible_name(window: wx.Window, name: str) -> None:
+def set_accessible_name(window: wx.Window, name: str) -> _NamedAccessible:
     """Set the name a screen reader announces for *window*.
 
     wx.Window.SetName() only sets wx's internal window name (used for
@@ -46,6 +49,7 @@ def set_accessible_name(window: wx.Window, name: str) -> None:
     window.SetAccessible(accessible)
     _KEEPALIVE.append(accessible)  # see _KEEPALIVE's comment above
     window.SetName(name)
+    return accessible
 
 
 def context_menu_pos(ctrl: wx.Window, event: wx.ContextMenuEvent) -> wx.Point:

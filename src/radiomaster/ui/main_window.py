@@ -133,7 +133,12 @@ class MainWindow(wx.Frame):
         # ReplayGain, radio browsing preferences...) now that the UI exists
         # to apply them to, instead of only taking effect the first time
         # Settings happens to be opened and saved.
-        self._apply_settings_changes()
+        # Every panel constructor has already populated itself from the same
+        # config. Do not immediately rebuild those collections a second time:
+        # the radio tree can contain 50,000+ stations, and that duplicate
+        # synchronous pass delayed both the window and queued last-station
+        # autoplay by many seconds.
+        self._apply_settings_changes(refresh_panels=False)
 
         # Restore last session's volume/rate/pan. Deliberately separate
         # from _apply_settings_changes() above -- that function also runs
@@ -159,12 +164,6 @@ class MainWindow(wx.Frame):
 
         if self._config.get("updates.check_on_startup", default=True) and self._update_check_due():
             self._check_updates(silent=True)
-
-        # Background auto-update of the bundled yt-dlp.exe (the "YouTube
-        # library") -- see _auto_update_ytdlp. Runs off the UI thread and
-        # only if the user hasn't turned it off in Settings > Advanced.
-        if self._config.get("updates.ytdlp_auto_update", default=True) and self._ytdlp_update_due():
-            self._auto_update_ytdlp()
 
         self.Centre()
 
@@ -408,6 +407,8 @@ class MainWindow(wx.Frame):
         self._audiobook_panel = AudiobookPanel(self._listbook, self._db, self._engine)
         self._media_panel = MediaPlayerPanel(self._listbook, self._db, self._engine)
         self._youtube_panel = YouTubePanel(self._listbook, self._db, self._engine)
+        self._podcast_panel.on_content_changed = self._show_context_content
+        self._youtube_panel.on_content_changed = self._show_context_content
         self._downloads_panel = DownloadsPanel(self._listbook, self._db, self._engine)
         self._downloads_panel.on_stop_recording = self._radio_panel.stop_recording_by_download_id
         self._downloads_panel.on_check_recording_active = self._radio_panel.is_recording_active
@@ -511,6 +512,10 @@ class MainWindow(wx.Frame):
         idx = evt.GetSelection()
         page_text = self._listbook.GetPageText(idx)
         self._status_bar.set_status(f"Switched to {page_text}")
+        if idx == 1:
+            self._podcast_panel.show_selected_notes()
+        elif idx == 4:
+            self._youtube_panel.show_selected_info()
         self._update_transport_button_states()
 
     def _update_transport_button_states(self) -> None:
@@ -625,6 +630,14 @@ class MainWindow(wx.Frame):
         self._register_global_hotkeys()
 
     def _on_char_hook(self, evt: wx.KeyEvent) -> None:
+        if (
+            evt.GetKeyCode() == wx.WXK_F6
+            and not evt.ControlDown()
+            and not evt.AltDown()
+            and self._config.get("accessibility.keyboard_navigation", default=True)
+        ):
+            self._cycle_focus_region(backward=evt.ShiftDown())
+            return
         from radiomaster.ui.shortcut_editor import shortcut_signature
         modifiers = []
         if evt.ControlDown(): modifiers.append("Ctrl")
@@ -648,6 +661,34 @@ class MainWindow(wx.Frame):
                 self._switch_tab(new_idx)
         else:
             evt.Skip()
+
+    def _cycle_focus_region(self, backward: bool = False) -> None:
+        """Move focus among the main window's major regions."""
+        regions = [
+            ("Global Search", self._search_bar, self._search_bar._search_ctrl),
+            ("Tab List", self._listbook.GetListView(), self._listbook.GetListView()),
+            (self._listbook.GetPageText(self._listbook.GetSelection()),
+             self._listbook.GetCurrentPage(), self._listbook.GetCurrentPage()),
+            ("Transport Controls", self._now_playing, self._now_playing._btn_play),
+            ("Content Display", self._lyrics_panel, self._lyrics_panel._text_ctrl),
+        ]
+        focus = wx.Window.FindFocus()
+
+        def contains(root: wx.Window, child: wx.Window | None) -> bool:
+            while child:
+                if child == root:
+                    return True
+                child = child.GetParent()
+            return False
+
+        current = next(
+            (i for i, (_, root, _) in enumerate(regions) if contains(root, focus)), -1
+        )
+        step = -1 if backward else 1
+        index = (current + step) % len(regions)
+        name, _, target = regions[index]
+        target.SetFocusFromKbd()
+        self._status_bar.set_status(f"Focus: {name}")
 
     def _on_stop_accel(self) -> None:
         """Handle the global Stop accelerator (default Ctrl+Shift+S)."""
@@ -860,8 +901,13 @@ class MainWindow(wx.Frame):
             self._apply_settings_changes()
         dlg.Destroy()
     
-    def _apply_settings_changes(self) -> None:
-        """Apply settings changes after dialog closes."""
+    def _apply_settings_changes(self, refresh_panels: bool = True) -> None:
+        """Apply settings, optionally refreshing already-built panel data.
+
+        ``refresh_panels=False`` is used only during initial construction,
+        when each panel has just loaded the same settings and data already.
+        Apply/OK keeps the default so visible lists update immediately.
+        """
         # Reload config
         self._config.load()
         
@@ -875,6 +921,9 @@ class MainWindow(wx.Frame):
         # also startup -- unconditionally.
         high_contrast = self._config.get('accessibility.high_contrast', default=False)
         dyslexia_font = self._config.get('accessibility.dyslexia_font', default=False)
+        self._status_bar.set_screen_reader_announcements(
+            self._config.get('accessibility.screen_reader_optimized', default=True)
+        )
 
         # Language is applied in app.py before the UI is constructed. wx
         # controls do not retranslate their existing native labels, so
@@ -914,6 +963,9 @@ class MainWindow(wx.Frame):
         font = wx.Font(font_size, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                         wx.FONTWEIGHT_NORMAL, False, face_name)
         self._apply_font_recursive(self, font)
+        self._set_enhanced_focus_indicators(
+            self._config.get('accessibility.focus_indicators', default=True)
+        )
 
         # Apply sound output device (restarts the current stream if playing)
         self._engine.set_output_device(self._config.get('playback.output_device', default=''))
@@ -932,20 +984,31 @@ class MainWindow(wx.Frame):
         # take effect after restarting the app.
         self._station_api.refresh_network_settings()
 
-        # Re-apply radio browsing preferences (default country, duplicate filtering)
-        self._radio_panel._apply_sections()
+        if refresh_panels:
+            # Re-apply radio browsing preferences (default country, duplicate
+            # filtering) only after a live settings change. At startup the
+            # RadioPanel constructor has just done this expensive load.
+            self._radio_panel._apply_sections()
 
-        # If a podcast's episodes are currently on screen, re-sort them to
-        # match Settings > Podcasts > Episode order right away instead of
-        # only the next time that podcast happens to get (re)selected.
-        self._podcast_panel.refresh_episode_order()
+            # If a podcast's episodes are currently on screen, re-sort them
+            # after a live settings change. Its constructor already used the
+            # saved order during startup.
+            self._podcast_panel.refresh_episode_order()
 
         # Downloads settings are live: resize the worker pool for future
         # jobs and update the persistent YouTube audio-format selector.
         wx.GetApp().download_manager.set_max_concurrent(
             self._config.get('downloads.max_concurrent', default=3)
         )
-        self._youtube_panel.refresh_download_settings()
+        if refresh_panels:
+            self._youtube_panel.refresh_download_settings()
+
+        # Settings > Advanced is live too. Enabling background yt-dlp
+        # updates should perform a due check now rather than silently doing
+        # nothing until the next restart. _auto_update_ytdlp records its
+        # timestamp before starting the worker, preventing duplicate workers
+        # if Apply is pressed repeatedly.
+        self._maybe_auto_update_ytdlp()
 
         # Scheduled recordings previously kept the folder captured at
         # startup even though manual recordings used the changed setting.
@@ -967,6 +1030,52 @@ class MainWindow(wx.Frame):
 
         # Refresh UI
         self.Refresh()
+
+    def _set_enhanced_focus_indicators(self, enabled: bool) -> None:
+        """Add an optional colour cue without suppressing native focus."""
+        self._enhanced_focus_indicators = bool(enabled)
+        if not hasattr(self, "_focus_indicator_bound"):
+            self._focus_indicator_bound = set()
+            self._focus_original_colours = {}
+
+        def bind_tree(window: wx.Window) -> None:
+            handle = window.GetHandle()
+            if handle and handle not in self._focus_indicator_bound:
+                window.Bind(wx.EVT_SET_FOCUS, self._on_accessible_focus)
+                window.Bind(wx.EVT_KILL_FOCUS, self._on_accessible_blur)
+                self._focus_indicator_bound.add(handle)
+            for child in window.GetChildren():
+                bind_tree(child)
+
+        bind_tree(self)
+        if not enabled:
+            focus = wx.Window.FindFocus()
+            if focus:
+                self._restore_focus_colours(focus)
+
+    def _on_accessible_focus(self, event: wx.FocusEvent) -> None:
+        control = event.GetEventObject()
+        if self._enhanced_focus_indicators and control.IsEnabled():
+            handle = control.GetHandle()
+            self._focus_original_colours[handle] = (
+                control.GetBackgroundColour(), control.GetForegroundColour()
+            )
+            colour = self._config.get('accessibility.highlight_color', default='#FFFF00')
+            control.SetBackgroundColour(wx.Colour(colour))
+            control.SetForegroundColour(wx.BLACK)
+            control.Refresh()
+        event.Skip()
+
+    def _restore_focus_colours(self, control: wx.Window) -> None:
+        original = self._focus_original_colours.pop(control.GetHandle(), None)
+        if original:
+            control.SetBackgroundColour(original[0])
+            control.SetForegroundColour(original[1])
+            control.Refresh()
+
+    def _on_accessible_blur(self, event: wx.FocusEvent) -> None:
+        self._restore_focus_colours(event.GetEventObject())
+        event.Skip()
 
     def _show_about(self) -> None:
         """Show the about dialog."""
@@ -1101,7 +1210,8 @@ class MainWindow(wx.Frame):
         # to a radio station's song changing mid-stream, which doesn't
         # call play() again -- see _on_radio_now_playing_changed) that's
         # also correctly "seconds into this song" with no offset needed.
-        if state == "playing" and self._engine._current_title:
+        if (state == "playing" and self._engine._current_title
+                and self._listbook.GetSelection() not in (1, 4)):
             self._lyrics_song_start_position = 0.0
             self._fetch_lyrics_for_current()
 
@@ -1219,6 +1329,12 @@ class MainWindow(wx.Frame):
                 )
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_context_content(self, text: str) -> None:
+        """Show podcast notes/video information instead of song lyrics."""
+        self._lyrics_request_generation += 1
+        self._lyrics_request_key = None
+        self._lyrics_panel.set_content(text)
 
     def _apply_lyrics_result(self, generation: int, request_key: tuple[str, str, str],
                              setter: Any, value: Any) -> None:
@@ -1575,6 +1691,12 @@ class MainWindow(wx.Frame):
         days = self._config.get("updates.ytdlp_check_frequency_days", default=7)
         last_check = self._config.get("updates.ytdlp_last_check_timestamp", default=0)
         return time.time() - last_check >= days * 86400
+
+    def _maybe_auto_update_ytdlp(self) -> None:
+        """Start one due background check when the advanced option is on."""
+        if (self._config.get("updates.ytdlp_auto_update", default=True)
+                and self._ytdlp_update_due()):
+            self._auto_update_ytdlp()
 
     def _auto_update_ytdlp(self) -> None:
         """Background auto-update of the bundled yt-dlp.exe (the "YouTube

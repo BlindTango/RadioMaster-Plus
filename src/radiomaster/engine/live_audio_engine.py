@@ -42,39 +42,20 @@ logger = logging.getLogger("radiomaster")
 SAMPLE_RATE = 48000
 CHANNELS = 2
 BLOCKSIZE = 1024
-QUEUE_MAXSIZE = 384  # ~8s of audio at 1024-sample blocks/48kHz
+QUEUE_MAXSIZE = 200  # ~4s of audio at 1024-sample blocks/48kHz
 # A live network stream needs enough decoded audio in hand to ride through
 # ordinary packet-arrival jitter.  Starting the device on the first decoded
 # frame (and resuming on every isolated frame after an underrun) turns that
-# jitter into the repeated audio/silence breakup users hear. Two seconds at
-# startup and a deeper recovery cushion keep bursty high-bitrate streams stable.
-PREBUFFER_CHUNKS = 96  # ~2s before initial playback
-REBUFFER_CHUNKS = 192  # ~4s after a real underrun; avoid rapid stop/start cycles
+# jitter into repeated audio/silence breakup. One second was the proven stable
+# policy through v1.1.70. The v1.1.72 four-second recovery made each isolated
+# underrun become a long audible dropout and delayed live-stream startup.
+PREBUFFER_CHUNKS = 48  # ~1s before initial playback
+REBUFFER_CHUNKS = PREBUFFER_CHUNKS
 FADE_SAMPLES = 64  # ~1.3ms at 48kHz -- inaudible as a level change, but
 # long enough that a fade through it (instead of a raw sample-value jump)
 # eliminates the audible "click" a buffer-underrun boundary produces,
 # whether from real network jitter or a rate/effects change flushing the
 # queue for an immediate-feeling change (see _drain_queue_for_immediate_effect).
-
-
-def _preferred_default_output_device() -> Optional[int]:
-    """Use Windows' shared WASAPI default instead of PortAudio's MME default.
-
-    PortAudio reports MME as the global default on many Windows systems even
-    when a matching WASAPI default is available. During a real failure on the
-    user's machine, the MME output thread spun at 100% CPU and raised a native
-    access violation. Shared WASAPI is the current Windows audio path and also
-    reports device changes and callback timing errors more reliably.
-    """
-    try:
-        for host_api in sd.query_hostapis():
-            if "WASAPI" in str(host_api.get("name", "")).upper():
-                index = int(host_api.get("default_output_device", -1))
-                if index >= 0:
-                    return index
-    except Exception:
-        pass
-    return None
 
 
 def _describe_stream_error(exc: Exception) -> str:
@@ -1094,8 +1075,6 @@ class LiveAudioEngine:
             # replacement; overlapping teardown/startup produced a confirmed
             # Windows heap-corruption crash (0xc0000374).
             self._close_output_stream(abort=True)
-            output_device = (self._output_device_index if self._output_device_index is not None
-                             else _preferred_default_output_device())
             new = None
             try:
                 new = sd.OutputStream(
@@ -1104,7 +1083,12 @@ class LiveAudioEngine:
                     dtype="float32",
                     blocksize=BLOCKSIZE,
                     latency="high",
-                    device=output_device,
+                    # None deliberately means PortAudio's real system
+                    # default. v1.1.72 substituted a WASAPI device here,
+                    # which was not equivalent on affected machines and
+                    # introduced recurring output starvation. Users can
+                    # still choose a specific WASAPI device in Settings.
+                    device=self._output_device_index,
                     callback=self._audio_callback,
                 )
                 new.start()

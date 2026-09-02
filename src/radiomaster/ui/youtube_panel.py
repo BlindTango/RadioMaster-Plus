@@ -54,6 +54,8 @@ class YouTubePanel(wx.Panel):
         # muxed stream URL (modern YouTube splits video/audio). Kept so it
         # can be deleted once playback moves on or the panel is destroyed.
         self._temp_playback_file: str | None = None
+        self.on_content_changed = None
+        self._video_info_seq = 0
         self._engine.on_stream_rejected(self._on_stream_rejected)
         self._setup_ui()
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
@@ -240,6 +242,7 @@ class YouTubePanel(wx.Panel):
         # videos, or its entries) instead of trying to play it directly --
         # see _on_result_activated.
         self._results_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_result_activated)
+        self._results_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_result_selected)
         self._channels_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_channel_activated)
 
         self._load_channels()
@@ -383,6 +386,51 @@ class YouTubePanel(wx.Panel):
         # Fallback – return minimal info
         title = self._results_list.GetItemText(idx)
         return {'title': title, 'url': ''}
+
+    @staticmethod
+    def _video_info_text(video: dict) -> str:
+        """Format yt-dlp metadata as screen-reader-friendly plain text."""
+        title = video.get("title") or "YouTube Video"
+        channel = video.get("channel") or video.get("uploader") or ""
+        duration = int(video.get("duration") or 0)
+        parts = [title]
+        if channel:
+            parts.append(f"Channel: {channel}")
+        if duration:
+            hours, remainder = divmod(duration, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            formatted = (f"{hours}:{minutes:02d}:{seconds:02d}" if hours
+                         else f"{minutes}:{seconds:02d}")
+            parts.append(f"Duration: {formatted}")
+        if video.get("upload_date"):
+            parts.append(f"Uploaded: {video['upload_date']}")
+        if video.get("view_count") is not None:
+            parts.append(f"Views: {video['view_count']:,}")
+        description = (video.get("description") or "").strip()
+        parts.extend(["", description or "No video description is available."])
+        return "\n".join(parts)
+
+    def _publish_video_info(self, video: dict, seq: int | None = None) -> None:
+        if seq is not None and seq != self._video_info_seq:
+            return
+        if self.on_content_changed:
+            self.on_content_changed(self._video_info_text(video))
+
+    def _on_result_selected(self, event: wx.ListEvent) -> None:
+        self._publish_video_info(self._get_selected_video() or {})
+        event.Skip()
+
+    def show_selected_info(self) -> None:
+        """Restore selected video information when returning to this tab."""
+        video = self._get_selected_video()
+        if video:
+            self._publish_video_info(video)
+
+    def _load_full_video_info(self, service, url: str, fallback: dict, seq: int) -> dict:
+        """Fetch the description for playback without touching wx off-thread."""
+        info = service.get_info(url) or fallback
+        wx.CallAfter(self._publish_video_info, info, seq)
+        return info
 
     def _on_result_activated(self, event: wx.CommandEvent) -> None:
         """Enter/double-click on a results-list row: plays a video result
@@ -536,6 +584,8 @@ class YouTubePanel(wx.Panel):
                     stream = service.get_stream_info(url)
                     title = (stream or {}).get('title') or url
                     duration = (stream or {}).get('duration', 0.0)
+                    if stream:
+                        wx.CallAfter(self._publish_video_info, stream)
                     self._current_source_title = title
                     self._current_source_duration = duration
                     self._resolve_and_play(url, title, duration, seq, stream)
@@ -577,9 +627,19 @@ class YouTubePanel(wx.Panel):
         self._current_source_title = title
         self._current_source_duration = duration
         self._stream_rejected_retried = False
+        self._video_info_seq += 1
+        info_seq = self._video_info_seq
+        self._publish_video_info(video)
 
         def worker():
-            self._resolve_and_play(video_url, title, duration, seq)
+            from radiomaster.services.youtube_dl import YouTubeService
+            service = YouTubeService()
+            info = self._load_full_video_info(service, video_url, video, info_seq)
+            resolved_title = info.get("title") or title
+            resolved_duration = float(info.get("duration") or duration)
+            self._current_source_title = resolved_title
+            self._current_source_duration = resolved_duration
+            self._resolve_and_play(video_url, resolved_title, resolved_duration, seq)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()

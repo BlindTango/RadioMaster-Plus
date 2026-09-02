@@ -438,14 +438,29 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "menus, Enter activates, Shift+F10 opens a context menu, and Escape backs "
         f"out. {_key('next_tab')} changes main tabs. Tools > Keyboard Shortcuts manages both "
         "in-app and optional global keys from one accessible list. "
-        "Settings > Accessibility contains black-and-white high contrast and an "
-        "OpenDyslexic font option. Screen reader support, keyboard navigation, and "
-        "native focus indicators are always enabled rather than optional modes."
+        "Settings > Accessibility contains black-and-white high contrast, an "
+        "OpenDyslexic font option, concise screen-reader status announcements, F6 and "
+        "Shift+F6 region navigation, enhanced focus highlighting, and reduced-motion "
+        "startup. Standard labels, Tab navigation, and native focus remain available "
+        "regardless of those extra options."
     )),
 ]
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.73", (
+        "Restored the proven v1.1.70 live-stream output-device and buffering policy, "
+        "fixing recurring radio and YouTube audio breakups introduced in v1.1.72 while "
+        "retaining the native PortAudio shutdown and crash protection.\n\n"
+        "Implemented the parked accessibility options as working enhancements: concise "
+        "screen-reader status announcements, F6 and Shift+F6 navigation between major "
+        "regions, high-contrast focus highlighting, and a reduced-motion startup option.\n\n"
+        "The shared content pane now shows readable podcast episode notes and YouTube "
+        "video information, including descriptions and available metadata. Podcast RSS "
+        "content:encoded notes are retained for newly imported episodes.\n\n"
+        "Improved launch time by avoiding a duplicate station-catalog rebuild, and made "
+        "Advanced settings apply YouTube-library auto-update changes immediately."
+    )),
     ("Version 1.1.72", (
         "Stabilized radio and YouTube audio on bursty network streams with a larger "
         "decode-ahead queue, a two-second startup cushion, and a four-second recovery "

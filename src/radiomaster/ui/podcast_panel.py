@@ -65,6 +65,7 @@ class PodcastPanel(wx.Panel):
         # from one show ended up filed under a different show's folder.
         self._current_podcast_title = "Unknown Podcast"
         self._search_seq = 0
+        self.on_content_changed = None
         self._setup_ui()
 
         # Periodically persist play progress for the currently-playing
@@ -202,6 +203,7 @@ class PodcastPanel(wx.Panel):
         self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
         self._btn_unsubscribe.Bind(wx.EVT_BUTTON, self._on_unsubscribe)
         self._episode_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
+        self._episode_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_episode_selected)
         self._episode_list.Bind(wx.EVT_CONTEXT_MENU, self._on_episode_context_menu)
         self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
         self._btn_add_feed.Bind(wx.EVT_BUTTON, self._on_add_feed)
@@ -387,10 +389,12 @@ class PodcastPanel(wx.Panel):
                 for ep in episodes:
                     self._db.execute(
                         """INSERT OR IGNORE INTO episodes
-                        (podcast_id, guid, title, description, duration, published_date, audio_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (podcast_id, guid, title, description, content_encoded,
+                         duration, published_date, audio_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                         (podcast_id, ep.get("guid", ""), ep.get("title", ""),
-                         ep.get("description", ""), ep.get("duration", 0),
+                         ep.get("description", ""), ep.get("content_encoded", ""),
+                         ep.get("duration", 0),
                          ep.get("published_date", ""), ep.get("audio_url", "")),
                     )
                 self._db.commit()
@@ -703,6 +707,44 @@ class PodcastPanel(wx.Panel):
 
         self._load_episodes_for_index(idx)
 
+    @staticmethod
+    def _episode_notes_text(podcast_title: str, ep: dict[str, Any]) -> str:
+        """Return readable show notes for the shared content pane."""
+        raw = ep.get("content_encoded") or ep.get("description") or ""
+        try:
+            from bs4 import BeautifulSoup
+            # A space separator preserves natural sentences across inline
+            # tags (<strong>, <a>, etc.); a newline separator turns
+            # "Hello <strong>listener</strong>." into three broken lines.
+            notes = BeautifulSoup(raw, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            notes = raw
+        parts = [ep.get("title") or "Podcast Episode", podcast_title]
+        if ep.get("published_date"):
+            parts.append(f"Published: {ep['published_date']}")
+        if ep.get("duration"):
+            parts.append(f"Duration: {ep['duration']}")
+        parts.extend(["", notes.strip() or "This episode has no show notes."])
+        return "\n".join(parts)
+
+    def _on_episode_selected(self, event: wx.ListEvent) -> None:
+        idx = event.GetIndex()
+        if (self.on_content_changed and hasattr(self, "_episode_data")
+                and 0 <= idx < len(self._episode_data)):
+            self.on_content_changed(self._episode_notes_text(
+                self._current_podcast_title, self._episode_data[idx]
+            ))
+        event.Skip()
+
+    def show_selected_notes(self) -> None:
+        """Restore the selected episode's notes when returning to this tab."""
+        idx = self._episode_list.GetFirstSelected()
+        if (self.on_content_changed and hasattr(self, "_episode_data")
+                and 0 <= idx < len(self._episode_data)):
+            self.on_content_changed(self._episode_notes_text(
+                self._current_podcast_title, self._episode_data[idx]
+            ))
+
     def _load_episodes_for_index(self, idx: int) -> None:
         from radiomaster.database.repository import PodcastRepository
         from radiomaster.utils.config import ConfigManager
@@ -779,6 +821,8 @@ class PodcastPanel(wx.Panel):
         url = ep.get("audio_url", "")
         if not url:
             return
+        if self.on_content_changed:
+            self.on_content_changed(self._episode_notes_text(self._current_podcast_title, ep))
 
         # Save progress on whatever was playing before switching episodes.
         self._save_position()
@@ -929,10 +973,12 @@ class PodcastPanel(wx.Panel):
                             for ep in episodes:
                                 self._db.execute(
                                     """INSERT OR IGNORE INTO episodes
-                                    (podcast_id, guid, title, description, duration, published_date, audio_url)
-                                    VALUES ((SELECT id FROM podcasts WHERE feed_url = ?), ?, ?, ?, ?, ?, ?)""",
+                                    (podcast_id, guid, title, description, content_encoded,
+                                     duration, published_date, audio_url)
+                                    VALUES ((SELECT id FROM podcasts WHERE feed_url = ?), ?, ?, ?, ?, ?, ?, ?)""",
                                     (url, ep.get("guid", ""), ep.get("title", ""),
-                                     ep.get("description", ""), ep.get("duration", 0),
+                                     ep.get("description", ""), ep.get("content_encoded", ""),
+                                     ep.get("duration", 0),
                                      ep.get("published_date", ""), ep.get("audio_url", "")),
                                 )
                             self._db.commit()

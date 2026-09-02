@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "radiomaster-plus"
-version = "1.1.72"
+version = "1.1.73"
 description = "A unified media player for radio, podcasts, YouTube, audiobooks, and local media with full accessibility support"
 readme = "README.md"
 license = { text = "MIT" }
