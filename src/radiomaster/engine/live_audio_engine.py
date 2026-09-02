@@ -42,19 +42,39 @@ logger = logging.getLogger("radiomaster")
 SAMPLE_RATE = 48000
 CHANNELS = 2
 BLOCKSIZE = 1024
-QUEUE_MAXSIZE = 200  # ~4s of audio at 1024-sample blocks/48kHz
+QUEUE_MAXSIZE = 384  # ~8s of audio at 1024-sample blocks/48kHz
 # A live network stream needs enough decoded audio in hand to ride through
 # ordinary packet-arrival jitter.  Starting the device on the first decoded
 # frame (and resuming on every isolated frame after an underrun) turns that
-# jitter into the repeated audio/silence breakup users hear.  One second is a
-# useful compromise: stable even for high-bitrate FLAC/YouTube sources without
-# making Play feel unresponsive.
-PREBUFFER_CHUNKS = 48
+# jitter into the repeated audio/silence breakup users hear. Two seconds at
+# startup and a deeper recovery cushion keep bursty high-bitrate streams stable.
+PREBUFFER_CHUNKS = 96  # ~2s before initial playback
+REBUFFER_CHUNKS = 192  # ~4s after a real underrun; avoid rapid stop/start cycles
 FADE_SAMPLES = 64  # ~1.3ms at 48kHz -- inaudible as a level change, but
 # long enough that a fade through it (instead of a raw sample-value jump)
 # eliminates the audible "click" a buffer-underrun boundary produces,
 # whether from real network jitter or a rate/effects change flushing the
 # queue for an immediate-feeling change (see _drain_queue_for_immediate_effect).
+
+
+def _preferred_default_output_device() -> Optional[int]:
+    """Use Windows' shared WASAPI default instead of PortAudio's MME default.
+
+    PortAudio reports MME as the global default on many Windows systems even
+    when a matching WASAPI default is available. During a real failure on the
+    user's machine, the MME output thread spun at 100% CPU and raised a native
+    access violation. Shared WASAPI is the current Windows audio path and also
+    reports device changes and callback timing errors more reliably.
+    """
+    try:
+        for host_api in sd.query_hostapis():
+            if "WASAPI" in str(host_api.get("name", "")).upper():
+                index = int(host_api.get("default_output_device", -1))
+                if index >= 0:
+                    return index
+    except Exception:
+        pass
+    return None
 
 
 def _describe_stream_error(exc: Exception) -> str:
@@ -421,6 +441,11 @@ class LiveAudioEngine:
         self._pcm_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=QUEUE_MAXSIZE)
         self._decode_thread: Optional[threading.Thread] = None
         self._output_stream: Optional[sd.OutputStream] = None
+        # PortAudio stream creation/destruction is native heap work. A user
+        # Stop, decoder failure, device change, and reconnect can arrive on
+        # different threads; never let two of them close or replace the same
+        # native stream concurrently.
+        self._stream_lock = threading.RLock()
         self._stop_flag = threading.Event()
         self._pause_flag = threading.Event()
         self._seek_request: Optional[float] = None
@@ -436,6 +461,12 @@ class LiveAudioEngine:
         self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
         self._leftover_was_padded = False
         self._rebuffering = True
+        self._rebuffer_target_chunks = PREBUFFER_CHUNKS
+        self._underrun_count = 0
+        self._reported_underrun_count = 0
+        self._output_status_count = 0
+        self._reported_output_status_count = 0
+        self._last_output_status = ""
         self._callback_lock = threading.Lock()
 
         # Every effect except pitch_tempo (which still needs a real
@@ -500,6 +531,12 @@ class LiveAudioEngine:
         self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
         self._leftover_was_padded = False
         self._rebuffering = True
+        self._rebuffer_target_chunks = PREBUFFER_CHUNKS
+        self._underrun_count = 0
+        self._reported_underrun_count = 0
+        self._output_status_count = 0
+        self._reported_output_status_count = 0
+        self._last_output_status = ""
 
         self._state = self.STATE_BUFFERING
         self._notify_state()
@@ -518,6 +555,20 @@ class LiveAudioEngine:
         notification cadence to decode iterations would fire a burst of
         stale updates instead of tracking real playback over time."""
         while not self._stop_flag.is_set():
+            # Never log from PortAudio's callback: formatting and I/O there
+            # can itself miss the next audio deadline. The callback only
+            # increments counters; this ordinary worker reports them.
+            if self._underrun_count != self._reported_underrun_count:
+                delta = self._underrun_count - self._reported_underrun_count
+                self._reported_underrun_count = self._underrun_count
+                logger.warning(
+                    "Audio buffer underrun%s; recovery buffer %d/%d chunks",
+                    f" (+{delta})" if delta > 1 else "",
+                    self._pcm_queue.qsize(), self._rebuffer_target_chunks,
+                )
+            if self._output_status_count != self._reported_output_status_count:
+                self._reported_output_status_count = self._output_status_count
+                logger.warning("Audio output status: %s", self._last_output_status)
             # State callbacks are deliberately emitted here, not from the
             # real-time PortAudio callback.  A network underrun changes the
             # flag there; this low-rate thread safely tells the UI when the
@@ -553,18 +604,10 @@ class LiveAudioEngine:
         if self._state == self.STATE_STOPPED and self._decode_thread is None:
             return
         self._stop_flag.set()
-        if self._output_stream is not None:
-            try:
-                # abort(), not stop(): PortAudio's stop() is a *graceful*
-                # stop that finishes playing whatever's already buffered
-                # in the driver before returning -- audibly, Stop kept
-                # playing for a bit before actually going silent. abort()
-                # discards it and halts immediately.
-                self._output_stream.abort()
-                self._output_stream.close()
-            except Exception:
-                pass
-            self._output_stream = None
+        # abort(), not stop(): PortAudio's stop() is a graceful stop that
+        # drains driver audio. This atomically detaches the stream first so a
+        # simultaneous decoder failure cannot close the same native pointer.
+        self._close_output_stream(abort=True)
         # Otherwise this stream's callback keeps running in the driver's
         # own thread even after the reference above is gone, and a
         # reconnect attempt already past its "am I stopped?" check when
@@ -577,6 +620,7 @@ class LiveAudioEngine:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
             self._leftover_was_padded = False
             self._rebuffering = True
+            self._rebuffer_target_chunks = PREBUFFER_CHUNKS
         if self._decode_thread is not None:
             if wait:
                 self._decode_thread.join(timeout=3)
@@ -891,13 +935,7 @@ class LiveAudioEngine:
         # abort()-not-stop() teardown (immediate, not the tail end of
         # whatever's buffered) -- just without the decode-thread join,
         # since we *are* that thread and joining ourselves would deadlock.
-        if self._output_stream is not None:
-            try:
-                self._output_stream.abort()
-                self._output_stream.close()
-            except Exception:
-                pass
-            self._output_stream = None
+        self._close_output_stream(abort=True)
         self._pcm_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
         with self._callback_lock:
             self._leftover = np.zeros((0, CHANNELS), dtype=np.float32)
@@ -1003,6 +1041,25 @@ class LiveAudioEngine:
     # ------------------------------------------------------------------
     # Output stream (sounddevice / WASAPI)
     # ------------------------------------------------------------------
+    def _close_output_stream(self, *, abort: bool) -> None:
+        """Detach and close the current PortAudio stream exactly once."""
+        with self._stream_lock:
+            stream = self._output_stream
+            self._output_stream = None
+            if stream is None:
+                return
+            try:
+                if abort:
+                    stream.abort()
+                else:
+                    stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+
     def _begin_output_if_buffered(self, force: bool = False) -> None:
         """Start playback only after a useful decode-ahead cushion exists.
 
@@ -1012,7 +1069,7 @@ class LiveAudioEngine:
         """
         if self._output_stream is not None:
             return
-        if not force and self._pcm_queue.qsize() < PREBUFFER_CHUNKS:
+        if not force and self._pcm_queue.qsize() < self._rebuffer_target_chunks:
             return
         if self._pcm_queue.empty() or self._stop_flag.is_set():
             return
@@ -1031,41 +1088,38 @@ class LiveAudioEngine:
         # incrementing self._position concurrently, which looked like
         # position racing ahead of real time (each reconnect compounded
         # it further).
-        old = self._output_stream
-        self._output_stream = sd.OutputStream(
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="float32",
-            blocksize=BLOCKSIZE,
-            latency="high",
-            device=self._output_device_index,
-            callback=self._audio_callback,
-        )
-        self._output_stream.start()
-        if old is not None:
+        with self._stream_lock:
+            # Do not run two callbacks against the same engine state. Close
+            # the old native object completely before constructing its
+            # replacement; overlapping teardown/startup produced a confirmed
+            # Windows heap-corruption crash (0xc0000374).
+            self._close_output_stream(abort=True)
+            output_device = (self._output_device_index if self._output_device_index is not None
+                             else _preferred_default_output_device())
+            new = None
             try:
-                old.stop()
-                old.close()
+                new = sd.OutputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="float32",
+                    blocksize=BLOCKSIZE,
+                    latency="high",
+                    device=output_device,
+                    callback=self._audio_callback,
+                )
+                new.start()
+                self._output_stream = new
             except Exception:
-                pass
+                if new is not None:
+                    try:
+                        new.close()
+                    except Exception:
+                        pass
+                raise
 
     def _rebuild_output_stream(self) -> None:
-        old = self._output_stream
         try:
-            new = sd.OutputStream(
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="float32",
-                blocksize=BLOCKSIZE,
-                latency="high",
-                device=self._output_device_index,
-                callback=self._audio_callback,
-            )
-            new.start()
-            self._output_stream = new
-            if old is not None:
-                old.stop()
-                old.close()
+            self._start_output_stream()
         except Exception as e:
             self._notify_error(f"Failed to switch output device: {e}")
 
@@ -1102,12 +1156,15 @@ class LiveAudioEngine:
         return block
 
     def _audio_callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
+        if status:
+            self._output_status_count += 1
+            self._last_output_status = str(status)
         with self._callback_lock:
             if self._pause_flag.is_set():
                 outdata.fill(0.0)
                 return
             if self._rebuffering:
-                if self._pcm_queue.qsize() < PREBUFFER_CHUNKS:
+                if self._pcm_queue.qsize() < self._rebuffer_target_chunks:
                     outdata.fill(0.0)
                     return
                 self._rebuffering = False
@@ -1122,7 +1179,10 @@ class LiveAudioEngine:
                 except queue.Empty:
                     chunk = np.zeros((need - have, CHANNELS), dtype=np.float32)
                     pad_flags.append(True)
+                    if not self._rebuffering:
+                        self._underrun_count += 1
                     self._rebuffering = True
+                    self._rebuffer_target_chunks = REBUFFER_CHUNKS
                 chunks.append(chunk)
                 have += chunk.shape[0]
             combined = np.concatenate(chunks, axis=0)

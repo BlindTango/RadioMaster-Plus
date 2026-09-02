@@ -82,6 +82,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "buffer_size": 4096,
     },
     "accessibility": {
+        "high_contrast": False,
         "highlight_color": "#FFFF00",
         "font_size": 12,
         "font_family": "",

@@ -322,6 +322,22 @@ class TestLiveAudioEngine:
         assert engine.rate == 1.0
         assert engine.pan == 0.0
 
+    def test_underrun_uses_larger_recovery_cushion(self) -> None:
+        from radiomaster.engine.live_audio_engine import (
+            CHANNELS, LiveAudioEngine, REBUFFER_CHUNKS,
+        )
+        engine = LiveAudioEngine()
+        engine._volume = 1.0
+        engine._rebuffering = False
+        outdata = np.empty((1024, CHANNELS), dtype=np.float32)
+
+        engine._audio_callback(outdata, 1024, None, None)
+
+        assert engine._underrun_count == 1
+        assert engine._rebuffering is True
+        assert engine._rebuffer_target_chunks == REBUFFER_CHUNKS
+        assert np.all(outdata == 0.0)
+
     def test_volume_pan_rate_apply_without_playback(self) -> None:
         """These are just numpy-gain/filter-spec parameters -- setting them
         with nothing playing must not error or require a process/session."""
@@ -487,8 +503,37 @@ class TestLiveAudioEngine:
 
             engine._start_output_stream()
             assert engine._output_stream is second
-            first.stop.assert_called_once()
+            first.abort.assert_called_once()
             first.close.assert_called_once()
+
+    def test_output_stream_close_is_idempotent(self) -> None:
+        """Stop and decoder failure must not free one native stream twice."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine
+
+        engine = LiveAudioEngine()
+        stream = MagicMock()
+        engine._output_stream = stream
+        engine._close_output_stream(abort=True)
+        engine._close_output_stream(abort=True)
+
+        stream.abort.assert_called_once()
+        stream.close.assert_called_once()
+        assert engine._output_stream is None
+
+    def test_system_default_prefers_wasapi_on_windows(self) -> None:
+        """Avoid PortAudio's legacy MME default when shared WASAPI exists."""
+        from radiomaster.engine.live_audio_engine import LiveAudioEngine
+
+        host_apis = [
+            {"name": "MME", "default_output_device": 7},
+            {"name": "Windows WASAPI", "default_output_device": 23},
+        ]
+        with patch("radiomaster.engine.live_audio_engine.sd.query_hostapis", return_value=host_apis), \
+             patch("radiomaster.engine.live_audio_engine.sd.OutputStream") as stream_cls:
+            stream_cls.return_value = MagicMock()
+            LiveAudioEngine()._start_output_stream()
+
+        assert stream_cls.call_args.kwargs["device"] == 23
 
     def test_decode_loop_does_not_start_output_after_stop(self) -> None:
         """_decode_loop() opens the container (can take real seconds --

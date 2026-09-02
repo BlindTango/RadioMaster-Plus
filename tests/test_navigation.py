@@ -379,6 +379,53 @@ class TestNetworkSettings:
             dlg.Destroy()
 
 
+class TestAccessibilitySettings:
+    def test_only_real_accessibility_options_are_shown_and_apply_immediately(
+        self, app_and_window
+    ) -> None:
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        original_high_contrast = win._config.get("accessibility.high_contrast", default=False)
+        original_dyslexia_font = win._config.get("accessibility.dyslexia_font", default=False)
+        dlg = SettingsDialog(
+            win, win._config, theme_manager=win._theme_manager,
+            on_apply=win._apply_settings_changes,
+        )
+        try:
+            dlg._switch_to(7)
+            panel = dlg._panel_map[7]
+            assert panel.high_contrast_chk.GetLabelText() == (
+                "Use black and white high contrast colors"
+            )
+            assert panel.dyslexia_font_chk.GetLabelText() == (
+                "Use OpenDyslexic font when installed"
+            )
+            assert not hasattr(panel, "screen_reader_chk")
+            assert not hasattr(panel, "keyboard_nav_chk")
+            assert not hasattr(panel, "focus_indicators_chk")
+            assert not hasattr(panel, "reduce_motion_chk")
+
+            panel.high_contrast_chk.SetValue(True)
+            panel.dyslexia_font_chk.SetValue(True)
+            dlg._save_all()
+            win._apply_settings_changes()
+            assert win._config.get("accessibility.high_contrast") is True
+            assert win._config.get("accessibility.dyslexia_font") is True
+            assert win.GetBackgroundColour() == wx.Colour(0, 0, 0)
+            assert win.GetForegroundColour() == wx.Colour(255, 255, 255)
+        finally:
+            win._config.set(
+                "accessibility.high_contrast", value=original_high_contrast
+            )
+            win._config.set(
+                "accessibility.dyslexia_font", value=original_dyslexia_font
+            )
+            win._config.save()
+            win._apply_settings_changes()
+            dlg.Destroy()
+
+
 class TestRadioSettings:
     def test_radio_controls_save_all_runtime_settings(self, app_and_window) -> None:
         _app, win = app_and_window
@@ -765,6 +812,21 @@ class TestLyricsFetch:
             win._fetch_lyrics_for_current()
             wx.Yield()
         mock_fetch.assert_not_called()
+
+    def test_rebuffer_state_does_not_refetch_same_track(self, app_and_window) -> None:
+        """Recovering from an audio underrun is not a new song."""
+        app, win = app_and_window
+        win._engine._current_url = "https://radio.test/live"
+        win._engine._current_artist = "Artist"
+        win._engine._current_title = "Song"
+        with patch("radiomaster.services.lyrics_service.LyricsService.fetch_lyrics", return_value=None) as fetch:
+            win._on_engine_state("playing")
+            win._on_engine_state("buffering")
+            win._on_engine_state("playing")
+            deadline = time.time() + 2
+            while time.time() < deadline and fetch.call_count == 0:
+                time.sleep(0.02)
+        assert fetch.call_count == 1
 
 
 class TestRecording:

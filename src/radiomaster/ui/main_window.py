@@ -67,6 +67,11 @@ class MainWindow(wx.Frame):
         # _on_lyrics_timer so LRC highlighting compares against seconds
         # into the current SONG, not seconds since the station was tuned in.
         self._lyrics_song_start_position = 0.0
+        # An underrun changes the engine state buffering -> playing again,
+        # but it is not a new song. Keep one request per current track so a
+        # weak stream cannot create an ever-growing swarm of lyrics threads.
+        self._lyrics_request_key: tuple[str, str, str] | None = None
+        self._lyrics_request_generation = 0
         # Playback-related settings (output device, normalization,
         # ReplayGain, auto-reconnect, radio browsing prefs, accessibility)
         # are all applied together at the end of __init__ via
@@ -1069,6 +1074,10 @@ class MainWindow(wx.Frame):
             # instead of leaving the last track's numbers stuck on screen.
             self._status_bar.set_time_info(0.0, 0.0)
             self._status_bar.set_buffering(100)
+            # Permit replaying the same URL/title to fetch again, and make
+            # any result still in flight from the stopped item stale.
+            self._lyrics_request_key = None
+            self._lyrics_request_generation += 1
         self._now_playing.set_playing(state == "playing")
         self._update_transport_button_states()
         # Video is rendered by ffplay's own native window (the engine
@@ -1179,11 +1188,18 @@ class MainWindow(wx.Frame):
         title = self._engine._current_title or ""
         if not title:
             return
+        request_key = (self._engine._current_url or "", artist, title)
+        if request_key == self._lyrics_request_key:
+            return
+        self._lyrics_request_key = request_key
+        self._lyrics_request_generation += 1
+        generation = self._lyrics_request_generation
         self._lyrics_panel.clear()
 
         def worker() -> None:
             result = LyricsService.fetch_lyrics(artist, title)
-            if not result:
+            if (not result or generation != self._lyrics_request_generation
+                    or request_key != self._lyrics_request_key):
                 return
             text = result.get("lyrics", "")
             synced = result.get("lrc", "")
@@ -1191,14 +1207,25 @@ class MainWindow(wx.Frame):
                 lines = LyricsService.parse_lrc(synced)
                 if lines:
                     wx.CallAfter(
+                        self._apply_lyrics_result, generation, request_key,
                         self._lyrics_panel.set_lrc_lines,
                         [(l["time"], l["text"]) for l in lines],
                     )
                     return
             if text:
-                wx.CallAfter(self._lyrics_panel.set_content, text)
+                wx.CallAfter(
+                    self._apply_lyrics_result, generation, request_key,
+                    self._lyrics_panel.set_content, text,
+                )
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_lyrics_result(self, generation: int, request_key: tuple[str, str, str],
+                             setter: Any, value: Any) -> None:
+        """Apply a worker result only if its track is still current."""
+        if (generation == self._lyrics_request_generation
+                and request_key == self._lyrics_request_key):
+            setter(value)
 
     def _on_engine_position(self, position: float, duration: float) -> None:
         """Handle playback position updates."""

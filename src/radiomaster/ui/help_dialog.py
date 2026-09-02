@@ -438,14 +438,30 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "menus, Enter activates, Shift+F10 opens a context menu, and Escape backs "
         f"out. {_key('next_tab')} changes main tabs. Tools > Keyboard Shortcuts manages both "
         "in-app and optional global keys from one accessible list. "
-        "Settings > Accessibility contains high contrast, dyslexia font, screen "
-        "reader optimization, enhanced keyboard navigation, focus indicators, and "
-        "reduced motion."
+        "Settings > Accessibility contains black-and-white high contrast and an "
+        "OpenDyslexic font option. Screen reader support, keyboard navigation, and "
+        "native focus indicators are always enabled rather than optional modes."
     )),
 ]
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.72", (
+        "Stabilized radio and YouTube audio on bursty network streams with a larger "
+        "decode-ahead queue, a two-second startup cushion, and a four-second recovery "
+        "cushion after a real underrun. Audio underruns and output-device status faults "
+        "are now recorded safely outside the real-time callback.\n\n"
+        "Fixed a lyrics-request storm that could start duplicate network workers every "
+        "time playback recovered from buffering. Stale results are now ignored when a "
+        "track changes or stops.\n\n"
+        "Fixed a confirmed native heap-corruption crash in audio shutdown by serializing "
+        "PortAudio stream creation and destruction, preventing double-close races and "
+        "overlapping callbacks. System Default now prefers Windows shared WASAPI instead "
+        "of the legacy MME output path when available.\n\n"
+        "Simplified Accessibility settings to functional visual preferences: high contrast "
+        "and OpenDyslexic. Screen-reader support, full keyboard navigation, and native focus "
+        "indicators remain always enabled throughout the application."
+    )),
     ("Version 1.1.71", (
         "Completed the Podcasts, Downloads, Recordings, and Network settings wiring. "
         "Saved choices now reach their live services, dependent controls accurately follow "

@@ -831,41 +831,33 @@ class AccessibilityPanel(SettingsPanel):
     title = "Accessibility"
 
     def makeSettings(self, sizer: wx.BoxSizer) -> None:
-        self.high_contrast_chk = wx.CheckBox(self, label="High contrast mode")
+        self.high_contrast_chk = wx.CheckBox(
+            self, label="Use black and white high contrast colors"
+        )
         self.high_contrast_chk.SetValue(self.config.get("accessibility.high_contrast", default=False))
         sizer.Add(self.high_contrast_chk, 0, wx.ALL, 5)
 
-        self.dyslexia_font_chk = wx.CheckBox(self, label="Use dyslexia-friendly font (OpenDyslexic)")
+        self.dyslexia_font_chk = wx.CheckBox(
+            self, label="Use OpenDyslexic font when installed"
+        )
         self.dyslexia_font_chk.SetValue(self.config.get("accessibility.dyslexia_font", default=False))
         sizer.Add(self.dyslexia_font_chk, 0, wx.ALL, 5)
 
-        self.screen_reader_chk = wx.CheckBox(self, label="Screen reader optimized mode")
-        self.screen_reader_chk.SetValue(self.config.get("accessibility.screen_reader_optimized", default=True))
-        sizer.Add(self.screen_reader_chk, 0, wx.ALL, 5)
-
-        self.keyboard_nav_chk = wx.CheckBox(self, label="Enhanced keyboard navigation")
-        self.keyboard_nav_chk.SetValue(self.config.get("accessibility.keyboard_navigation", default=True))
-        sizer.Add(self.keyboard_nav_chk, 0, wx.ALL, 5)
-
-        self.focus_indicators_chk = wx.CheckBox(self, label="Show focus indicators")
-        self.focus_indicators_chk.SetValue(self.config.get("accessibility.focus_indicators", default=True))
-        sizer.Add(self.focus_indicators_chk, 0, wx.ALL, 5)
-
-        self.reduce_motion_chk = wx.CheckBox(self, label="Reduce motion and animations")
-        self.reduce_motion_chk.SetValue(self.config.get("accessibility.reduce_motion", default=False))
-        sizer.Add(self.reduce_motion_chk, 0, wx.ALL, 5)
-
-        info = wx.StaticText(self, label="Changes to accessibility settings may require restarting the application.")
+        info = wx.StaticText(
+            self,
+            label=(
+                "Screen reader support, keyboard navigation, and native focus indicators "
+                "are always enabled. These settings take effect immediately when you choose "
+                "Apply or OK. OpenDyslexic must be installed in Windows; otherwise Windows "
+                "uses its default interface font."
+            ),
+        )
         info.Wrap(600)
         sizer.Add(info, 0, wx.ALL, 5)
 
     def onSave(self) -> None:
         self.config.set("accessibility.high_contrast", value=self.high_contrast_chk.IsChecked())
         self.config.set("accessibility.dyslexia_font", value=self.dyslexia_font_chk.IsChecked())
-        self.config.set("accessibility.screen_reader_optimized", value=self.screen_reader_chk.IsChecked())
-        self.config.set("accessibility.keyboard_navigation", value=self.keyboard_nav_chk.IsChecked())
-        self.config.set("accessibility.focus_indicators", value=self.focus_indicators_chk.IsChecked())
-        self.config.set("accessibility.reduce_motion", value=self.reduce_motion_chk.IsChecked())
 
 
 class AdvancedPanel(SettingsPanel):
