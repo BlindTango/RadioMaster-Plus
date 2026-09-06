@@ -153,6 +153,32 @@ class TestDownload:
         assert row["output_dir"] == os.path.join(".", "data", "downloads")
         assert row["file_path"] == os.path.join(".", "data", "downloads", "video.webm")
 
+    def test_delete_history_removes_only_finished_rows(self, db: DatabaseManager) -> None:
+        """Remove All on the Downloads tab's History context menu must
+        clear completed/failed rows while leaving anything still queued
+        or downloading (the Active list) completely untouched."""
+        repo = DownloadRepository(db)
+        done_id = repo.add("http://test/done.mp3", "Done")
+        repo.update_progress(done_id, 100.0, "completed")
+        failed_id = repo.add("http://test/failed.mp3", "Failed")
+        repo.update_progress(failed_id, 40.0, "failed")
+        active_id = repo.add("http://test/active.mp3", "Still Going")
+        repo.update_progress(active_id, 50.0, "downloading")
+
+        removed = repo.delete_history()
+
+        assert removed == 2
+        assert repo.get(done_id) is None
+        assert repo.get(failed_id) is None
+        assert repo.get(active_id) is not None
+        assert repo.get(active_id)["status"] == "downloading"
+
+    def test_delete_history_on_empty_history_returns_zero(self, db: DatabaseManager) -> None:
+        repo = DownloadRepository(db)
+        active_id = repo.add("http://test/queued.mp3", "Queued")
+        assert repo.delete_history() == 0
+        assert repo.get(active_id) is not None
+
 
 class TestSchedule:
     """Test schedule operations."""

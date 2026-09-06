@@ -72,3 +72,4 @@ tools/*.exe
 .pytest_cache/
 @AutomationLog.txt
 acclog.txt
+msg.txt

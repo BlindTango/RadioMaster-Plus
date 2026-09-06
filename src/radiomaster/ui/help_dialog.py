@@ -184,8 +184,9 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "The context menu can also restart supported work.\n\n"
         "Download History contains completed, failed, and stopped items. Play opens "
         "a completed file, Retry resubmits a failed item, and Remove removes its "
-        "history entry. Removing a list entry does not silently delete an unrelated "
-        "source file. Refresh reloads both lists from the database."
+        "history entry. The context menu's Remove All clears every history entry at "
+        "once after confirmation. Removing a list entry does not silently delete an "
+        "unrelated source file. Refresh reloads both lists from the database."
     )),
     ("Scheduler Tab", (
         "The Scheduler tab lists planned recordings with station, start time, "
@@ -449,6 +450,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.76", (
+        "Effect parameter sliders now update the active BASS effect in real time for "
+        "chorus, echo, flanger, gargle, compressor, and distortion, not just reverb -- "
+        "so dragging a slider while creating or editing a preset is audible "
+        "immediately. The Downloads tab's Download History context menu gained a "
+        "Remove All action that clears every completed and failed entry at once "
+        "after confirmation, without deleting the downloaded files or touching "
+        "active downloads."
+    )),
     ("Version 1.1.75", (
         "Disabled playback rate controls on the Radio tab, including its context menu "
         "and rate shortcuts. Reverb preset changes now update the active BASS effect "

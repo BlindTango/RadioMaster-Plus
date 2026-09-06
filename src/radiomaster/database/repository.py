@@ -296,6 +296,18 @@ class DownloadRepository:
         self._db.execute("DELETE FROM downloads WHERE id = ?", (download_id,))
         self._db.commit()
 
+    def delete_history(self) -> int:
+        """Delete every completed/failed download row at once -- the
+        "Remove All" action on the Downloads tab's History context menu.
+        Like the single-row delete() the panel already uses, this only
+        removes database entries; the files on disk are left untouched.
+        Returns the number of rows removed so the caller can report it."""
+        cursor = self._db.execute(
+            "DELETE FROM downloads WHERE status IN ('completed', 'failed')"
+        )
+        self._db.commit()
+        return cursor.rowcount
+
     def mark_completed(self, download_id: int, file_path: str = "") -> None:
         """Marks an existing row completed AND records the real file it
         ended up as -- update_progress() alone (what DownloadManager's

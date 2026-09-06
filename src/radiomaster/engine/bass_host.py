@@ -264,6 +264,183 @@ def _reverb_parameters(params):
     )
 
 
+class _ChorusParameters(ctypes.Structure):
+    """BASS_DX8_CHORUS layout from the BASS SDK (also used for flanger --
+    identical struct, different ranges)."""
+
+    _fields_ = [
+        ("fWetDryMix", ctypes.c_float),
+        ("fDepth", ctypes.c_float),
+        ("fFeedback", ctypes.c_float),
+        ("fFrequency", ctypes.c_float),
+        ("lWaveform", ctypes.c_uint32),
+        ("fDelay", ctypes.c_float),
+        ("lPhase", ctypes.c_uint32),
+    ]
+
+
+def _chorus_parameters(params):
+    """Map the app's chorus controls (effects_data.py: delay 20-100 ms,
+    decay 0-1, speed 0.1-5 Hz, depth 0-10 ms) into BASS_DX8_CHORUS.
+
+    DX8 chorus has no direct "delay ms" control -- its fDelay range is
+    only 0-20 ms -- so the app's longer base delay is folded into
+    fDepth (the LFO modulation percentage, 0-100): depth_ms maps to a
+    percentage of that 20 ms window, and the base delay beyond 20 ms is
+    approximated by widening the modulation. decay (wet/dry character)
+    maps to fWetDryMix; speed maps directly to fFrequency (0-10 Hz)."""
+    delay = max(0.0, min(100.0, float(params.get("delay", 50))))
+    decay = max(0.0, min(1.0, float(params.get("decay", 0.4))))
+    speed = max(0.0, min(10.0, float(params.get("speed", 2.0))))
+    depth = max(0.0, min(10.0, float(params.get("depth", 2.0))))
+    # Base delay beyond DX8's 20 ms window widens the sweep; depth adds
+    # on top, both clamped into fDepth's 0-100 range.
+    depth_pct = min(100.0, (delay - 20.0) * 1.5 + depth * 8.0)
+    return _ChorusParameters(
+        fWetDryMix=max(0.0, min(100.0, 50.0 + 50.0 * decay)),
+        fDepth=depth_pct,
+        fFeedback=0.0,  # chorus is a mixed voice, not regenerative
+        fFrequency=speed,
+        lWaveform=1,    # sine
+        fDelay=min(20.0, delay),
+        lPhase=1,      # BASS_DX8_PHASE_90: stereo spread
+    )
+
+
+def _flanger_parameters(params):
+    """Map the app's flanger controls (delay 0-30 ms, depth 0-10 ms,
+    speed 0.1-10 Hz) into BASS_DX8_FLANGER (fDelay 0-4 ms, fDepth 0-100,
+    fFrequency 0-10, fFeedback -99..99)."""
+    delay = max(0.0, min(30.0, float(params.get("delay", 10))))
+    depth = max(0.0, min(10.0, float(params.get("depth", 2))))
+    speed = max(0.0, min(10.0, float(params.get("speed", 0.5))))
+    return _ChorusParameters(
+        fWetDryMix=50.0,
+        fDepth=min(100.0, depth * 10.0),
+        fFeedback=-50.0,  # DX8 flanger's characteristic regenerative sweep
+        fFrequency=speed,
+        lWaveform=1,      # sine
+        fDelay=min(4.0, delay),
+        lPhase=0,        # BASS_DX8_PHASE_ZERO
+    )
+
+
+class _EchoParameters(ctypes.Structure):
+    """BASS_DX8_ECHO layout from the BASS SDK."""
+
+    _fields_ = [
+        ("fWetDryMix", ctypes.c_float),
+        ("fFeedback", ctypes.c_float),
+        ("fLeftDelay", ctypes.c_float),
+        ("fRightDelay", ctypes.c_float),
+        ("lPanDelay", ctypes.c_uint32),
+    ]
+
+
+def _echo_parameters(params):
+    """Map the app's echo controls (delay 5-1000 ms, decay 0-1, in/out
+    gain 0-1) into BASS_DX8_ECHO (fLeftDelay/fRightDelay 1-2000 ms,
+    fFeedback 0-100, fWetDryMix 0-100). The app's in_gain has no DX8
+    equivalent (DX8 echo has no input gain stage) -- only out_gain maps,
+    to fWetDryMix."""
+    delay = max(1.0, min(2000.0, float(params.get("delay", 500))))
+    decay = max(0.0, min(1.0, float(params.get("decay", 0.4))))
+    out_gain = max(0.0, min(1.0, float(params.get("out_gain", 0.88))))
+    return _EchoParameters(
+        fWetDryMix=max(0.0, min(100.0, 100.0 * out_gain)),
+        fFeedback=max(0.0, min(100.0, decay * 100.0)),
+        fLeftDelay=delay,
+        fRightDelay=delay,
+        lPanDelay=0,
+    )
+
+
+class _GargleParameters(ctypes.Structure):
+    """BASS_DX8_GARGLE layout from the BASS SDK."""
+
+    _fields_ = [
+        ("dwRateHz", ctypes.c_uint32),
+        ("dwWaveShape", ctypes.c_uint32),
+    ]
+
+
+def _gargle_parameters(params):
+    """Map the app's gargle controls (rate 1-40 Hz, depth 0-1) into
+    BASS_DX8_GARGLE (dwRateHz 1-1000). DX8 gargle is a hard amplitude
+    gate with no depth control, so the app's depth slider has no native
+    equivalent here -- rate is mapped, depth is a no-op on the BASS path
+    (the ffmpeg/tremolo fallback path still honors it)."""
+    rate = max(1, min(1000, int(float(params.get("rate", 20)))))
+    return _GargleParameters(dwRateHz=rate, dwWaveShape=0)  # triangle
+
+
+class _CompressorParameters(ctypes.Structure):
+    """BASS_DX8_COMPRESSOR layout from the BASS SDK."""
+
+    _fields_ = [(name, ctypes.c_float) for name in (
+        "fGain", "fAttack", "fRelease", "fThreshold", "fRatio", "fPredelay",
+    )]
+
+
+def _compressor_parameters(params):
+    """Map the app's compressor controls (threshold 0.01-1.0 linear,
+    ratio 1-20, attack 1-200 ms, release 20-2000 ms, makeup 1-10) into
+    BASS_DX8_COMPRESSOR (fThreshold -60..0 dB, fRatio 1-100, fAttack
+    0.01-500 ms, fRelease 50-3000 ms, fGain -60..60 dB)."""
+    threshold = max(0.01, min(1.0, float(params.get("threshold", 0.1))))
+    ratio = max(1.0, min(100.0, float(params.get("ratio", 4))))
+    attack = max(0.01, min(500.0, float(params.get("attack", 20))))
+    release = max(50.0, min(3000.0, float(params.get("release", 250))))
+    makeup = max(1.0, min(10.0, float(params.get("makeup", 1))))
+    return _CompressorParameters(
+        fGain=max(-60.0, min(60.0, 20.0 * math.log10(makeup))),
+        fAttack=attack,
+        fRelease=release,
+        fThreshold=max(-60.0, min(0.0, 20.0 * math.log10(threshold))),
+        fRatio=ratio,
+        fPredelay=4.0,  # DX8 default
+    )
+
+
+class _DistortionParameters(ctypes.Structure):
+    """BASS_DX8_DISTORTION layout from the BASS SDK."""
+
+    _fields_ = [(name, ctypes.c_float) for name in (
+        "fGain", "fEdge", "fPostEQCenterFrequency", "fPostEQBandwidth",
+        "fPreLowpassCutoff",
+    )]
+
+
+def _distortion_parameters(params):
+    """Map the app's distortion controls (bits 2-16, mix 0-1) into
+    BASS_DX8_DISTORTION (fGain -60..0 dB, fEdge 0-100). bits maps
+    inversely to fEdge (fewer bits = harder clip = more edge); mix
+    scales the overall drive via fGain."""
+    bits = max(2.0, min(16.0, float(params.get("bits", 8))))
+    mix = max(0.0, min(1.0, float(params.get("mix", 0.6))))
+    return _DistortionParameters(
+        fGain=max(-60.0, min(0.0, -18.0 - 12.0 * mix)),
+        fEdge=max(0.0, min(100.0, (16.0 - bits) * (100.0 / 14.0))),
+        fPostEQCenterFrequency=2400.0,
+        fPostEQBandwidth=2400.0,
+        fPreLowpassCutoff=8000.0,
+    )
+
+
+# effect name -> (ctypes struct factory, params dict -> struct instance).
+# _apply_fx_params() uses this to push live parameter updates into an
+# already-active DX8 effect handle without removing/re-adding it.
+_FX_PARAM_MAPPERS = {
+    "reverb": _reverb_parameters,
+    "chorus": _chorus_parameters,
+    "flanger": _flanger_parameters,
+    "echo": _echo_parameters,
+    "gargle": _gargle_parameters,
+    "compressor": _compressor_parameters,
+    "distortion": _distortion_parameters,
+}
+
+
 class BassHost:
     def __init__(self, dll_dir, device_index=-1):
         self._dll_dir     = dll_dir
@@ -548,6 +725,21 @@ class BassHost:
             dll.BASS_ChannelSeconds2Bytes.argtypes = [ctypes.c_uint32, ctypes.c_double]
             dll.BASS_ChannelSetPosition.restype  = ctypes.c_int32
             dll.BASS_ChannelSetPosition.argtypes = [ctypes.c_uint32, ctypes.c_int64, ctypes.c_uint32]
+        except Exception:
+            pass
+
+        # FX prototypes: without restype, ctypes assumes a signed c_int
+        # return, so a BASS handle >= 2^31 comes back negative (and
+        # without argtypes, parameters are passed as signed ints too) --
+        # the bits usually survive the round trip by accident, but the
+        # explicit unsigned prototypes make every FX path well-defined.
+        try:
+            dll.BASS_ChannelSetFX.restype = ctypes.c_uint32
+            dll.BASS_ChannelSetFX.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int32]
+            dll.BASS_ChannelRemoveFX.restype = ctypes.c_int32
+            dll.BASS_ChannelRemoveFX.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+            dll.BASS_FXSetParameters.restype = ctypes.c_int32
+            dll.BASS_FXSetParameters.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
         except Exception:
             pass
         return True, "ok"
@@ -1965,11 +2157,21 @@ class BassHost:
 
     def _apply_fx_params(self, name):
         """Update the existing effect without removing it or restarting audio."""
-        if name == "reverb" and name in self._fx_params:
-            params = _reverb_parameters(self._fx_params[name])
+        mapper = _FX_PARAM_MAPPERS.get(name)
+        if mapper is None or name not in self._fx_params:
+            return
+        fx_h = self._fx_handles.get(name)
+        if not fx_h or not self._dll:
+            return
+        params = mapper(self._fx_params[name])
+        try:
             if not self._dll.BASS_FXSetParameters(
-                    self._fx_handles[name], ctypes.byref(params)):
-                raise RuntimeError("BASS could not update reverb parameters")
+                    fx_h, ctypes.byref(params)):
+                raise RuntimeError(f"BASS could not update {name} parameters")
+        except Exception as e:
+            # A failed live update must never take the whole set_fx call
+            # down -- the effect stays active with its previous params.
+            _debug_log(f"_apply_fx_params({name}) failed: {e}")
 
     def set_eq_gain(self, band, gain_db):
         """Set the gain (dB) for one ParamEQ band and re-apply it immediately.

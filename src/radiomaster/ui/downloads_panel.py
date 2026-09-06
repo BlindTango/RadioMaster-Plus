@@ -290,6 +290,28 @@ class DownloadsPanel(wx.Panel):
         DownloadRepository(self._db).delete(row["id"])
         self._load_data()
 
+    def _on_remove_all_history(self, event: wx.Event) -> None:
+        """History context menu > Remove All -- clears every completed/
+        failed entry at once. Same semantics as the single-row Remove:
+        only the database entries go away, the files on disk are left
+        untouched, and anything still queued/downloading stays in the
+        Active list (this deliberately never touches those rows)."""
+        if not self._history_rows:
+            wx.MessageBox("Download History is already empty.", "Nothing to Remove",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        if wx.MessageBox(
+            f"Remove all {len(self._history_rows)} entries from Download History? "
+            "This only removes the entries -- it doesn't delete the downloaded "
+            "files themselves.",
+            "Remove All From History", wx.YES_NO | wx.ICON_QUESTION,
+        ) != wx.YES:
+            return
+        from radiomaster.database.repository import DownloadRepository
+        DownloadRepository(self._db).delete_history()
+        self._playing_history_id = None
+        self._load_data()
+
     # ------------------------------------------------------------------
     # Context menus -- EVT_CONTEXT_MENU covers right-click, the
     # Menu/Applications key, AND Shift+F10 in one binding (see
@@ -337,6 +359,8 @@ class DownloadsPanel(wx.Panel):
         menu.AppendSeparator()
         remove_item = menu.Append(wx.ID_ANY, "R&emove")
         self.Bind(wx.EVT_MENU, lambda e: self._on_remove_history(e), remove_item)
+        remove_all_item = menu.Append(wx.ID_ANY, "Remove &All")
+        self.Bind(wx.EVT_MENU, lambda e: self._on_remove_all_history(e), remove_all_item)
 
         self._history_list.PopupMenu(menu, context_menu_pos(self._history_list, event))
         menu.Destroy()

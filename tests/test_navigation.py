@@ -1157,3 +1157,102 @@ class TestRecording:
         # instead of raising -- e.g. the Downloads panel's own guard
         # against a stale/already-stopped selection.
         assert panel.stop_recording_by_download_id(download_id) is False
+
+
+class TestDownloadsHistoryRemoveAll:
+    """The History context menu's Remove All clears every completed/
+    failed entry at once. app_and_window uses the app's real (not
+    test-isolated) SQLite database, so these tests patch
+    DownloadRepository.delete_history rather than actually clearing the
+    user's real history -- the genuine delete semantics (only
+    completed/failed rows go, queued/downloading stay) are covered
+    against a throwaway database in test_database.py."""
+
+    @staticmethod
+    def _add_history_row(win, title: str, status: str) -> int:
+        from radiomaster.database.repository import DownloadRepository
+        repo = DownloadRepository(win._downloads_panel._db)
+        dl_id = repo.add(f"http://test/{title}", title)
+        repo.update_progress(dl_id, 100.0, status)
+        return dl_id
+
+    @staticmethod
+    def _cleanup_rows(win, ids: list[int]) -> None:
+        from radiomaster.database.repository import DownloadRepository
+        repo = DownloadRepository(win._downloads_panel._db)
+        for dl_id in ids:
+            repo.delete(dl_id)
+
+    def test_remove_all_confirms_then_clears_history(self, app_and_window) -> None:
+        """Remove All asks for confirmation, then delegates to
+        DownloadRepository.delete_history and resets the playing-row
+        tracker (a cleared list can't have a playing row anymore)."""
+        app, win = app_and_window
+        panel = win._downloads_panel
+        marker = f"RemoveAllTest-{id(self)}"
+        history_id = self._add_history_row(win, f"{marker}-history", "completed")
+        try:
+            panel._load_data()
+            assert panel._history_list.GetItemCount() >= 1
+            panel._playing_history_id = history_id
+
+            with patch("radiomaster.ui.downloads_panel.wx.MessageBox",
+                       return_value=wx.YES) as confirm, \
+                    patch("radiomaster.database.repository.DownloadRepository.delete_history",
+                          return_value=1) as delete_all:
+                panel._on_remove_all_history(MagicMock())
+            confirm.assert_called_once()
+            assert confirm.call_args[0][2] == wx.YES_NO | wx.ICON_QUESTION
+            delete_all.assert_called_once()
+            assert panel._playing_history_id is None
+        finally:
+            self._cleanup_rows(win, [history_id])
+
+    def test_remove_all_declined_leaves_history_untouched(
+            self, app_and_window) -> None:
+        """Answering No to the confirmation must change nothing."""
+        app, win = app_and_window
+        panel = win._downloads_panel
+        marker = f"RemoveAllDeclineTest-{id(self)}"
+        history_id = self._add_history_row(win, f"{marker}-history", "completed")
+        try:
+            panel._load_data()
+
+            with patch("radiomaster.ui.downloads_panel.wx.MessageBox",
+                       return_value=wx.NO), \
+                    patch("radiomaster.database.repository.DownloadRepository.delete_history",
+                          return_value=1) as delete_all:
+                panel._on_remove_all_history(MagicMock())
+            delete_all.assert_not_called()
+
+            from radiomaster.database.repository import DownloadRepository
+            assert DownloadRepository(panel._db).get(history_id) is not None
+        finally:
+            self._cleanup_rows(win, [history_id])
+
+    def test_remove_all_on_empty_history_does_not_confirm_or_delete(
+            self, app_and_window) -> None:
+        """With nothing in History, Remove All must not even ask for
+        confirmation -- just an informational 'already empty' notice --
+        and must never reach delete_history()."""
+        app, win = app_and_window
+        panel = win._downloads_panel
+        marker = f"RemoveAllEmptyTest-{id(self)}"
+        active_id = self._add_history_row(win, f"{marker}-active", "queued")
+        try:
+            panel._load_data()
+            # simulate an empty History without touching the real DB
+            real_rows = panel._history_rows
+            panel._history_rows = []
+            try:
+                with patch("radiomaster.ui.downloads_panel.wx.MessageBox") as msgbox, \
+                        patch("radiomaster.database.repository.DownloadRepository.delete_history",
+                              return_value=0) as delete_all:
+                    panel._on_remove_all_history(MagicMock())
+                msgbox.assert_called_once()  # the "already empty" notice, not a confirm
+                assert msgbox.call_args[0][2] == wx.OK | wx.ICON_INFORMATION
+                delete_all.assert_not_called()
+            finally:
+                panel._history_rows = real_rows
+        finally:
+            self._cleanup_rows(win, [active_id])
