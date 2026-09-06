@@ -529,6 +529,9 @@ class MainWindow(wx.Frame):
         Radio tab -- have nowhere to go past either end of that history."""
         self._now_playing.set_stoppable(self._engine.state != "stopped")
         self._now_playing.set_seekable(self._engine.duration > 0)
+        self._now_playing.set_rate_enabled(
+            self._listbook.GetSelection() != self._TAB_RADIO
+        )
         if self._listbook.GetSelection() == 0:
             self._now_playing.set_history_state(
                 self._radio_panel.history_has_previous(),
@@ -1146,6 +1149,8 @@ class MainWindow(wx.Frame):
         self._config.set("playback.volume", value=volume)
 
     def _on_rate_change(self, rate: float) -> None:
+        if self._listbook.GetSelection() == self._TAB_RADIO:
+            return
         self._engine.set_rate(rate)
         self._config.set("playback.rate", value=rate)
 
@@ -1454,6 +1459,8 @@ class MainWindow(wx.Frame):
         value/slider the transport bar's own rate slider uses, +/-0.1 on
         its 0.5x..3.0x scale (matches the reference project's keyboard
         manager exactly -- same scale, same step)."""
+        if self._listbook.GetSelection() == self._TAB_RADIO:
+            return
         new_rate = max(0.5, min(3.0, self._engine.rate + delta))
         self._on_rate_change(new_rate)
         self._now_playing.set_rate(new_rate)

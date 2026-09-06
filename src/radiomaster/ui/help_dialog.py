@@ -122,7 +122,8 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "Custom Station accepts a name and direct stream URL for stations absent "
         "from the public catalog.\n\n"
         "The station context menu provides Play/Pause/Resume, Stop, Favorites, "
-        "Record, Volume, Pan, and Rate commands. Station history supports Previous, "
+        "Record, Volume, and Pan commands. Playback rate controls are disabled "
+        "on the Radio tab. Station history supports Previous, "
         "Next, First, and Last. ICY/SHOUTcast metadata updates the now-playing "
         "artist and title when the station supplies it.\n\n"
         "Settings > Radio controls duplicate visibility, stream reconnection, "
@@ -448,6 +449,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.75", (
+        "Disabled playback rate controls on the Radio tab, including its context menu "
+        "and rate shortcuts. Reverb preset changes now update the active BASS effect "
+        "without toggling it off and on. The status bar shows station-reported codec "
+        "and bitrate while detecting the stream format, retains those details if "
+        "detection fails, and includes every field when read by a screen reader."
+    )),
     ("Version 1.1.74", (
         "Migrated radio, podcasts, audiobooks, downloads, and local audio to an "
         "isolated BASS playback process. This replaces the previous audio engine for "

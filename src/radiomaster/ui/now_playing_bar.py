@@ -291,6 +291,10 @@ class NowPlayingBar(wx.Panel):
         """Set the rate slider position (0.5x to 3.0x)."""
         self._rate_slider.SetValue(int(rate * 100))
 
+    def set_rate_enabled(self, enabled: bool) -> None:
+        """Enable rate adjustment only for panels that support it."""
+        self._rate_slider.Enable(enabled)
+
     def set_pan(self, pan: float) -> None:
         """Set the pan slider position (-1.0 to 1.0)."""
         self._pan_slider.SetValue(int(pan * 100))

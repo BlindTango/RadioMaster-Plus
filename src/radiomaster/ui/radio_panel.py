@@ -298,8 +298,16 @@ class RadioPanel(scrolled.ScrolledPanel):
         # stream itself instead. Same generation guard as Now Playing:
         # a stale probe from a station switched away from before it
         # finished must not overwrite the status bar with old data.
+        reported = []
+        if station.codec:
+            reported.append(station.codec.upper())
+        if station.bitrate:
+            reported.append(f"{station.bitrate} kbps")
+        self._reported_stream_format = (
+            ", ".join(reported) + " (station reported)" if reported else ""
+        )
         if self.on_format_detected:
-            self.on_format_detected("")
+            self.on_format_detected(self._reported_stream_format or "Detecting stream format...")
         threading.Thread(target=self._probe_and_report_format, args=(station.url, generation),
                           daemon=True).start()
 
@@ -308,7 +316,17 @@ class RadioPanel(scrolled.ScrolledPanel):
         fmt = probe_stream_format(url, timeout=10.0)
         if generation != self._now_playing_generation or not self.on_format_detected:
             return  # switched stations (or stopped) while probing
-        wx.CallAfter(self.on_format_detected, format_stream_format(fmt))
+        text = format_stream_format(fmt)
+        wx.CallAfter(self._report_stream_format, text, generation)
+
+    def _report_stream_format(self, text: str, generation: int) -> None:
+        """Recheck station identity on the UI thread before publishing results."""
+        if generation != self._now_playing_generation or not self.on_format_detected:
+            return
+        if text:
+            self.on_format_detected(text)
+        elif not self._reported_stream_format:
+            self.on_format_detected("Stream format unavailable")
 
     # Give up on a station's ICY metadata after this many *consecutive*
     # failed connection attempts (a real drop/refusal, not a timed poll --
@@ -561,7 +579,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.Bind(wx.EVT_MENU, lambda e: self.on_rate_step(-0.1) if self.on_rate_step else None, rate_down)
         self.Bind(wx.EVT_MENU,
                   lambda e: self.on_rate_step(1.0 - self.engine.rate) if self.on_rate_step else None, rate_reset)
-        menu.AppendSubMenu(rate_menu, "&Rate")
+        menu.AppendSubMenu(rate_menu, "&Rate").Enable(False)
 
         self.tree.station_list.PopupMenu(menu, context_menu_pos(self.tree.station_list, event))
         menu.Destroy()

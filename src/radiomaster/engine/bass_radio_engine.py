@@ -266,7 +266,9 @@ class BassRadioEngine:
                 active.add(band)
                 self._request({"cmd": "set_eq_gain", "band": band,
                                "gain_db": gain})
-        self._request({"cmd": "set_fx", "fx": sorted(active)})
+        self._request({"cmd": "set_fx", "fx": sorted(active),
+                       "params": {name: dict(effects.get(name, {}).get("params", {}))
+                                  for name in active}})
 
     def set_output_device(self, device_name: str) -> bool:
         devices = self._request({"cmd": "list_devices"}).get("devices", [])

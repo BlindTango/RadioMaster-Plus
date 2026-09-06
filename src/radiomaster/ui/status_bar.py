@@ -44,12 +44,18 @@ class StatusBar(wx.StatusBar):
         self.SetStatusText("", self.FIELD_SOURCE)
         self.SetStatusText("", self.FIELD_FORMAT)
 
+    def SetStatusText(self, text: str, number: int = 0) -> None:
+        """Keep every field available when a screen reader reads the bar."""
+        super().SetStatusText(text, number)
+        if hasattr(self, "_accessible"):
+            fields = [self.GetStatusText(i) for i in range(self.GetFieldsCount())]
+            self._accessible.set_name("Status: " + "; ".join(filter(None, fields)))
+
     def set_status(self, text: str) -> None:
         """Set the main status field."""
         self.SetStatusText(text, self.FIELD_STATUS)
         if self._announcements_enabled and text and text != self._last_announced:
             self._last_announced = text
-            self._accessible.set_name(f"Status: {text}")
             try:
                 wx.Accessible.NotifyEvent(
                     wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 0

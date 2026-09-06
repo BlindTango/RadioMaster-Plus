@@ -33,6 +33,7 @@ Time-shift (local buffer file) commands:
 
 import ctypes
 import json
+import math
 import os
 import sys
 import tempfile
@@ -244,6 +245,25 @@ def _resolve_playlist_url(url, timeout=8):
 
 
 # BASS engine
+class _ReverbParameters(ctypes.Structure):
+    """BASS_DX8_REVERB layout from the BASS SDK."""
+
+    _fields_ = [(name, ctypes.c_float) for name in (
+        "fInGain", "fReverbMix", "fReverbTime", "fHighFreqRTRatio",
+    )]
+
+
+def _reverb_parameters(params):
+    # Map the app's normalized controls into DX8's dB/ms ranges.
+    room = max(0.1, min(1.0, float(params.get("room_size", 0.4))))
+    decay = max(0.0, min(1.0, float(params.get("decay", 0.4))))
+    mix = max(0.0, min(1.0, float(params.get("mix", 0.3))))
+    return _ReverbParameters(
+        0.0, max(-96.0, 20.0 * math.log10(max(mix, 0.00001))),
+        100.0 + 2900.0 * room * decay, 0.1 + 0.8 * decay,
+    )
+
+
 class BassHost:
     def __init__(self, dll_dir, device_index=-1):
         self._dll_dir     = dll_dir
@@ -283,6 +303,7 @@ class BassHost:
         # FX: set of active effect names and handles returned from BASS_ChannelSetFX
         self._fx_names   = set()   # active effect names
         self._fx_handles = {}      # {fx_name: handle}
+        self._fx_params = {}       # settings retained across stream changes
 
 
     @staticmethod
@@ -1867,7 +1888,7 @@ class BassHost:
                 except Exception:
                     pass
 
-    def set_fx(self, fx_names):
+    def set_fx(self, fx_names, params=None):
         """Replace active DirectX 8 effects.
 
         fx_names: A comma-separated string or list of effect names.
@@ -1882,9 +1903,12 @@ class BassHost:
             new_names = {x.strip().lower() for x in fx_names if x.strip().lower() != "none"}
 
         with self._lock:
-            if new_names == self._fx_names:
+            new_params = (self._fx_params if params is None else
+                          {name: dict(values) for name, values in params.items()})
+            if new_names == self._fx_names and new_params == self._fx_params:
                 return
             self._fx_names = new_names
+            self._fx_params = new_params
             if self._handle and self._dll:
                 self._apply_fx(self._handle)
 
@@ -1906,6 +1930,7 @@ class BassHost:
         # Apply newly added effects
         for name in self._fx_names:
             if name in self._fx_handles:
+                self._apply_fx_params(name)
                 continue  # already active
             fx_type = _FX_NAME_TO_TYPE.get(name)
             if fx_type is None:
@@ -1918,6 +1943,8 @@ class BassHost:
                     continue
             except Exception:
                 continue
+
+            self._apply_fx_params(name)
 
             # Set parameters for ParamEQ presets
             if name in _PARAMEQ_PRESETS:
@@ -1935,6 +1962,14 @@ class BassHost:
                     dll.BASS_FXSetParameters(self._fx_handles[name], ctypes.byref(params))
                 except Exception:
                     pass
+
+    def _apply_fx_params(self, name):
+        """Update the existing effect without removing it or restarting audio."""
+        if name == "reverb" and name in self._fx_params:
+            params = _reverb_parameters(self._fx_params[name])
+            if not self._dll.BASS_FXSetParameters(
+                    self._fx_handles[name], ctypes.byref(params)):
+                raise RuntimeError("BASS could not update reverb parameters")
 
     def set_eq_gain(self, band, gain_db):
         """Set the gain (dB) for one ParamEQ band and re-apply it immediately.
@@ -2315,7 +2350,7 @@ def main():
 
         elif cmd == "set_fx":
             fx = cmd_obj.get("fx", "none")
-            host.set_fx(fx)
+            host.set_fx(fx, cmd_obj.get("params"))
             _ok()
 
         elif cmd == "set_eq_gain":
