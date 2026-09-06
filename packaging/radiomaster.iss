@@ -14,7 +14,7 @@
 ; of that page AND a redundant native one stacked in front of it.
 
 #define MyAppName "RadioMaster+"
-#define MyAppVersion "1.1.73"
+#define MyAppVersion "1.1.74"
 #define MyAppPublisher "RadioMaster+ Team"
 #define MyAppURL "https://radiomaster.app"
 #define MyAppExeName "RadioMaster+.exe"
@@ -59,6 +59,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; Main application
 Source: "..\dist\RadioMaster+\RadioMaster+.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\RadioMaster+\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Resources
 Source: "..\resources\themes\*"; DestDir: "{app}\resources\themes"; Flags: ignoreversion

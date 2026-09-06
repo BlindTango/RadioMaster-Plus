@@ -18,6 +18,8 @@ a = Analysis(
     datas=[
         (resources_dir, 'resources'),
         (os.path.join(project_root, 'tools'), 'tools'),
+        (os.path.join(project_root, 'LICENSE'), '.'),
+        (os.path.join(project_root, 'THIRD_PARTY_NOTICES.md'), '.'),
         (os.path.join(src_dir, 'radiomaster', 'i18n', 'en'), 'radiomaster/i18n/en'),
     ],
     hiddenimports=[

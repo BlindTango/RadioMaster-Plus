@@ -733,7 +733,7 @@ class MainWindow(wx.Frame):
                 self._engine.play(
                     self._engine.current_url, title=self._engine.current_title,
                     artist=self._engine.current_artist, is_video=self._engine.is_video,
-                    duration=self._engine.duration,
+                    duration=self._engine.duration, is_live=self._engine._is_live,
                 )
 
     def _on_play_pause_accel(self) -> None:
@@ -1201,8 +1201,15 @@ class MainWindow(wx.Frame):
         if state == "stopped" and self._engine._current_url:
             self._save_play_progress()
 
-        # Restore play progress when starting
-        if state == "playing" and self._engine._current_url:
+        # Restore play progress when starting. Skip this for the Podcasts
+        # tab (index 1): PodcastPanel._play_episode_at() already handles
+        # episode resume with its own user-prompt dialog and
+        # threading.Timer seek. A second seek from _restore_play_progress
+        # here would race the podcast panel's seek -- both fire ~1s after
+        # playback starts, conflicting with each other and the decode
+        # thread's _seek_request handling.
+        if (state == "playing" and self._engine._current_url
+                and self._listbook.GetSelection() != 1):
             self._restore_play_progress()
 
         # Fetch lyrics when a new track starts playing. play() just reset

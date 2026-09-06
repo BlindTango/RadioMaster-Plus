@@ -77,6 +77,7 @@ class PlaybackEngine:
         self._MAX_RECONNECT_ATTEMPTS = 5
         self._reconnect_interval: float = 2.0
         self._is_video: bool = False
+        self._is_live: bool = False
         self._is_video_active: bool = False  # which backend owns the *current* session
         # HTTP headers (User-Agent above all) to replay on the ffplay
         # request for the current video -- see play()'s http_headers
@@ -118,6 +119,39 @@ class PlaybackEngine:
         # --- Audio (LiveAudioEngine) backend ---
         self._live = LiveAudioEngine()
         self._wire_live_callbacks(self._live)
+        # Started lazily on the first radio request so BASS cannot slow normal
+        # application startup or delay restoring the last non-radio media.
+        self._bass_radio = None
+        self._using_bass_radio = False
+
+    def _ensure_bass_radio(self):
+        if self._bass_radio is not None:
+            return self._bass_radio
+        from radiomaster.engine.bass_radio_engine import BassRadioEngine
+        bass = BassRadioEngine.create_if_available()
+        if bass:
+            bass.on_state_change(lambda _s: self._notify_state())
+            bass.on_position_update(
+                lambda p, d: self._on_position_update(p, d) if self._on_position_update else None
+            )
+            bass.on_error(lambda m: self._notify_error(m))
+            bass.on_track_change(
+                lambda title, artist: self._on_track_change(title, artist)
+                if self._on_track_change else None
+            )
+            bass.on_track_finished(
+                lambda: self._on_track_finished() if self._on_track_finished else None
+            )
+            bass.on_buffering(
+                lambda p: self._on_buffering(p) if self._on_buffering else None
+            )
+            bass.set_pan(self._pan)
+            bass.set_rate(self._rate)
+            bass.apply_effects(self._effects)
+            if self._output_device:
+                bass.set_output_device(self._output_device)
+        self._bass_radio = bass
+        return bass
 
     def _wire_live_callbacks(self, live: LiveAudioEngine) -> None:
         """Hook a LiveAudioEngine instance's callbacks up to this engine's
@@ -137,11 +171,14 @@ class PlaybackEngine:
     @property
     def state(self) -> str:
         """Current playback state (stopped, playing, paused, buffering)."""
+        if self._using_bass_radio and self._bass_radio:
+            return self._bass_radio.state
         return self._state if self._is_video_active else self._live.state
 
     def play(self, url: str, title: str = "", artist: str = "",
               is_video: bool = False, duration: float = 0.0,
-              http_headers: dict[str, str] | None = None) -> None:
+              http_headers: dict[str, str] | None = None,
+              is_live: bool = False) -> None:
         """Start playback of a URL or file.
 
         http_headers (video only): HTTP headers -- User-Agent above all --
@@ -156,6 +193,7 @@ class PlaybackEngine:
         self._current_title = title
         self._current_artist = artist
         self._is_video = is_video
+        self._is_live = is_live
         self._is_video_active = is_video
         self._duration = duration
         self._http_headers = http_headers or {}
@@ -167,16 +205,27 @@ class PlaybackEngine:
             self._state = self.STATE_BUFFERING
             self._notify_state()
             self._start_process(url, is_video)
-        else:
-            self._live.set_auto_reconnect(self._auto_reconnect)
-            self._live.set_replaygain_db(self._replaygain_db)
-            self._live.set_volume(self._volume)
-            self._live.set_pan(self._pan)
-            self._live.set_rate(self._rate)
-            self._live.play(url, title, artist, duration)
+            return
+        bass = self._ensure_bass_radio()
+        if bass is not None:
+            self._using_bass_radio = True
+            effective_volume = min(2.0, self._volume * (10.0 ** (self._replaygain_db / 20.0)))
+            bass.set_volume(effective_volume)
+            bass.set_pan(self._pan)
+            bass.set_rate(self._rate)
+            bass.apply_effects(self._effects)
+            bass.play(url, title, artist, duration, seekable=not is_live)
+            return
+        self._live.set_auto_reconnect(self._auto_reconnect)
+        self._live.set_replaygain_db(self._replaygain_db)
+        self._live.set_volume(self._volume)
+        self._live.set_pan(self._pan)
+        self._live.set_rate(self._rate)
+        self._live.play(url, title, artist, duration)
 
     def crossfade_to(self, url: str, title: str = "", artist: str = "",
-                      duration: float = 0.0, fade_seconds: float = 5.0) -> None:
+                      duration: float = 0.0, fade_seconds: float = 5.0,
+                      is_live: bool = False) -> None:
         """Switch to *url* with a real overlapping crossfade against
         whatever's currently playing, instead of a hard stop/start cut.
 
@@ -190,10 +239,10 @@ class PlaybackEngine:
         same process at the OS level, so no manual PCM mixing is needed
         here, just opposing volume ramps on each engine.
         """
-        if self._is_video_active or fade_seconds <= 0 or self._live.state not in (
+        if self._using_bass_radio or self._is_video_active or fade_seconds <= 0 or self._live.state not in (
             LiveAudioEngine.STATE_PLAYING, LiveAudioEngine.STATE_BUFFERING
         ):
-            self.play(url, title, artist, duration=duration)
+            self.play(url, title, artist, duration=duration, is_live=is_live)
             return
 
         self._crossfade_generation += 1
@@ -249,6 +298,9 @@ class PlaybackEngine:
             if self._is_video_active:
                 if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                     self._schedule_restart()
+            elif self._using_bass_radio and self._bass_radio:
+                effective = min(2.0, self._volume * (10.0 ** (self._replaygain_db / 20.0)))
+                self._bass_radio.set_volume(effective)
             else:
                 self._live.set_replaygain_db(self._replaygain_db)
 
@@ -269,6 +321,9 @@ class PlaybackEngine:
         EVT_CLOSE handler mattered enough to break the installer's
         close-running-app detection."""
         self._crossfade_generation += 1  # let any in-flight ramp exit early
+        if self._bass_radio:
+            self._bass_radio.stop(wait=wait)
+        self._using_bass_radio = False
         self._live.stop(wait=wait)
 
         self._monitor_running = False
@@ -305,8 +360,19 @@ class PlaybackEngine:
         self._position = 0.0
         self._notify_state()
 
+    def close(self, wait: bool = True) -> None:
+        """Stop playback and release any isolated native backend process."""
+        self.stop(wait=wait)
+        bass, self._bass_radio = self._bass_radio, None
+        self._using_bass_radio = False
+        if bass is not None:
+            bass.close()
+
     def pause(self) -> None:
         """Pause playback."""
+        if self._using_bass_radio and self._bass_radio:
+            self._bass_radio.pause()
+            return
         if not self._is_video_active:
             self._live.pause()
             return
@@ -318,6 +384,9 @@ class PlaybackEngine:
 
     def resume(self) -> None:
         """Resume from pause."""
+        if self._using_bass_radio and self._bass_radio:
+            self._bass_radio.resume()
+            return
         if not self._is_video_active:
             self._live.resume()
             return
@@ -337,6 +406,9 @@ class PlaybackEngine:
 
     def seek(self, position_seconds: float) -> None:
         """Seek to a position in the current track."""
+        if self._using_bass_radio and self._bass_radio:
+            self._bass_radio.seek(position_seconds)
+            return
         if not self._is_video_active:
             self._live.seek(position_seconds)
             return
@@ -355,6 +427,10 @@ class PlaybackEngine:
     def set_volume(self, volume: float) -> None:
         """Set volume (0.0 to 1.0), applied live without restarting playback."""
         self._volume = max(0.0, min(1.0, volume))
+        if self._using_bass_radio and self._bass_radio:
+            effective = min(2.0, self._volume * (10.0 ** (self._replaygain_db / 20.0)))
+            self._bass_radio.set_volume(effective)
+            return
         if not self._is_video_active:
             self._live.set_volume(self._volume)
             return
@@ -416,6 +492,9 @@ class PlaybackEngine:
     def set_rate(self, rate: float) -> None:
         """Set playback rate (0.5 to 3.0), applied live for audio."""
         self._rate = max(0.5, min(3.0, rate))
+        if self._using_bass_radio and self._bass_radio:
+            self._bass_radio.set_rate(self._rate)
+            return
         if not self._is_video_active:
             with self._rate_lock:
                 if self._rate_timer is not None:
@@ -432,6 +511,9 @@ class PlaybackEngine:
     def set_pan(self, pan: float) -> None:
         """Set stereo pan (-1.0 to 1.0), applied live for audio."""
         self._pan = max(-1.0, min(1.0, pan))
+        if self._using_bass_radio and self._bass_radio:
+            self._bass_radio.set_pan(self._pan)
+            return
         if not self._is_video_active:
             self._live.set_pan(self._pan)
             return
@@ -457,6 +539,10 @@ class PlaybackEngine:
         """Set the audio output device by name (see utils/audio_devices.py),
         or "" for the system default."""
         self._output_device = device_name
+        if self._bass_radio:
+            self._bass_radio.set_output_device(device_name)
+            if self._using_bass_radio:
+                return
         if self._is_video_active:
             if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                 self._schedule_restart()
@@ -469,6 +555,8 @@ class PlaybackEngine:
         if effect_id in self._effects:
             self._effects[effect_id]["enabled"] = enabled
             self._live.toggle_effect(effect_id, enabled)
+            if self._bass_radio:
+                self._bass_radio.apply_effects(self._effects)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                 self._schedule_restart()
             self._notify_effects_changed(effect_id)
@@ -482,6 +570,8 @@ class PlaybackEngine:
             self._effects[effect_id]["params"] = params
             self._effects[effect_id]["enabled"] = True
             self._live.apply_preset(effect_id, preset_name, params)
+            if self._bass_radio:
+                self._bass_radio.apply_effects(self._effects)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                 self._schedule_restart()
             self._notify_effects_changed(effect_id)
@@ -500,6 +590,8 @@ class PlaybackEngine:
             self._effects[effect_id]["params"] = params
             self._effects[effect_id]["enabled"] = True
             self._live.apply_effect_params(effect_id, params)
+            if self._bass_radio:
+                self._bass_radio.apply_effects(self._effects)
             self._notify_effects_changed(effect_id)
 
     def restore_effects_state(self, saved: dict[str, dict[str, Any]]) -> None:
@@ -951,10 +1043,14 @@ class PlaybackEngine:
 
     @property
     def position(self) -> float:
+        if self._using_bass_radio and self._bass_radio:
+            return self._bass_radio.position
         return self._position if self._is_video_active else self._live.position
 
     @property
     def duration(self) -> float:
+        if self._using_bass_radio:
+            return 0.0
         return self._duration if self._is_video_active else self._live.duration
 
     @property

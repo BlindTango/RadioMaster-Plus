@@ -448,6 +448,20 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.74", (
+        "Migrated radio, podcasts, audiobooks, downloads, and local audio to an "
+        "isolated BASS playback process. This replaces the previous audio engine for "
+        "normal playback, improves buffering resilience, and prevents native decoder "
+        "failures from terminating the main interface. Video pictures continue to use "
+        "ffplay because BASS is audio-only.\n\n"
+        "Connected BASS volume, pan, seeking, duration, completion, playback rate, pitch, "
+        "ReplayGain, equalization, compression, echo, reverb, chorus, distortion, flanger, "
+        "and gargle controls. Live radio remains non-seekable while podcasts, audiobooks, "
+        "downloads, and local media use the seekable BASS path.\n\n"
+        "RadioMaster+ is now licensed under GPL-2.0-or-later. The adapted FreeRadio BASS "
+        "host retains attribution, and bundled Un4seen BASS binaries retain their separate "
+        "free non-commercial-use terms."
+    )),
     ("Version 1.1.73", (
         "Restored the proven v1.1.70 live-stream output-device and buffering policy, "
         "fixing recurring radio and YouTube audio breakups introduced in v1.1.72 while "

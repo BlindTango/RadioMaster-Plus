@@ -183,7 +183,7 @@ class RadioMasterApp(wx.App):
             # path so stopping the backend cannot post to a dead event loop.
             if wx.GetApp() is None:
                 self._main_window.engine.on_state_change(None)
-            self._main_window.engine.stop(wait=False)
+            self._main_window.engine.close(wait=False)
             # Same backstop reasoning for the tray icon: a leftover icon
             # only disappears once the user mouses over it if this doesn't
             # run (e.g. exit via OS session end while hidden to the tray).

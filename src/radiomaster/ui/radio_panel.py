@@ -275,11 +275,12 @@ class RadioPanel(scrolled.ScrolledPanel):
         fade_seconds = config.get("playback.crossfade_duration", default=0)
         if fade_seconds:
             threading.Thread(target=self.engine.crossfade_to, args=(station.url,),
-                              kwargs={"title": station.name, "fade_seconds": fade_seconds},
+                              kwargs={"title": station.name, "fade_seconds": fade_seconds,
+                                      "is_live": True},
                               daemon=True).start()
         else:
             threading.Thread(target=self.engine.play, args=(station.url,),
-                              kwargs={"title": station.name}, daemon=True).start()
+                              kwargs={"title": station.name, "is_live": True}, daemon=True).start()
         threading.Thread(target=self.station_api.click, args=(station.uuid,), daemon=True).start()
 
         # Poll ICY/SHOUTcast metadata in the background so "Now Playing"

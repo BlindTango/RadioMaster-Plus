@@ -15,7 +15,9 @@ class TestPlaybackEngine:
     """Test playback engine state management."""
 
     def test_initial_state(self) -> None:
-        engine = PlaybackEngine()
+        with patch("radiomaster.engine.bass_radio_engine.BassRadioEngine.create_if_available") as create:
+            engine = PlaybackEngine()
+        create.assert_not_called()
         assert engine.state == "stopped"
         assert engine.position == 0.0
         assert engine.volume == 0.8
@@ -46,6 +48,49 @@ class TestPlaybackEngine:
         assert engine.pan == -1.0
         engine.set_pan(2.0)  # Above max
         assert engine.pan == 1.0
+
+    def test_unbounded_http_audio_uses_bass_radio_backend(self) -> None:
+        engine = PlaybackEngine()
+        engine._bass_radio = MagicMock()
+        engine._bass_radio.state = "playing"
+        engine._bass_radio.position = 3.0
+        engine._bass_radio.duration = 0.0
+        engine._live = MagicMock()
+
+        engine.play("http://radio.example/stream", title="Test station", is_live=True)
+
+        engine._bass_radio.play.assert_called_once_with(
+            "http://radio.example/stream", "Test station", "", 0.0,
+            seekable=False,
+        )
+        engine._live.play.assert_not_called()
+        assert engine.state == "playing"
+        assert engine.position == 3.0
+        assert engine.duration == 0.0
+
+    def test_finite_http_audio_uses_seekable_bass_backend(self) -> None:
+        engine = PlaybackEngine()
+        engine._bass_radio = MagicMock()
+        engine._live = MagicMock()
+
+        engine.play("https://media.example/episode.mp3", duration=120.0)
+
+        engine._bass_radio.play.assert_called_once_with(
+            "https://media.example/episode.mp3", "", "", 120.0,
+            seekable=True,
+        )
+        engine._live.play.assert_not_called()
+
+    def test_close_releases_bass_host(self) -> None:
+        engine = PlaybackEngine()
+        bass = MagicMock()
+        engine._bass_radio = bass
+        engine._live = MagicMock()
+
+        engine.close(wait=False)
+
+        assert engine._bass_radio is None
+        bass.close.assert_called_once_with()
 
     def test_rate_change_debounces_live_audio_calls(self) -> None:
         """Dragging the rate slider fires set_rate() on every EVT_SLIDER

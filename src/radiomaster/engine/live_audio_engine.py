@@ -421,6 +421,18 @@ class LiveAudioEngine:
 
         self._pcm_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=QUEUE_MAXSIZE)
         self._decode_thread: Optional[threading.Thread] = None
+        self._notify_thread: Optional[threading.Thread] = None
+        # Monotonically incremented on every play() call. Both the
+        # decode thread and the position-notify loop capture the value
+        # they were started with and compare it against this attribute
+        # each iteration -- if they don't match, a newer play() session
+        # has taken over and the old thread must exit immediately.
+        # Without this, stop() sets _stop_flag and play() clears it for
+        # the new session, so the old _position_notify_loop never saw
+        # a reason to stop -- each episode spawned another immortal
+        # polling thread, eventually flooding the wx event queue and
+        # freezing the UI after a few episodes.
+        self._play_generation = 0
         self._output_stream: Optional[sd.OutputStream] = None
         # PortAudio stream creation/destruction is native heap work. A user
         # Stop, decoder failure, device change, and reconnect can arrive on
@@ -524,18 +536,33 @@ class LiveAudioEngine:
 
         self._stop_flag.clear()
         self._pause_flag.clear()
+        # Increment the generation so any still-running threads from a
+        # previous session see they're stale and exit. See
+        # _play_generation's comment for the full rationale.
+        self._play_generation += 1
+        gen = self._play_generation
         self._decode_thread = threading.Thread(target=self._run_decode, args=(url,), daemon=True)
         self._decode_thread.start()
-        threading.Thread(target=self._position_notify_loop, daemon=True).start()
+        self._notify_thread = threading.Thread(
+            target=self._position_notify_loop, args=(gen,), daemon=True,
+        )
+        self._notify_thread.start()
 
-    def _position_notify_loop(self) -> None:
+    def _position_notify_loop(self, generation: int) -> None:
         """Poll self._position (kept current by the audio callback) and
         notify listeners a couple times a second. A dedicated low-rate
         thread rather than notifying from the decode loop directly: for a
         local file, decode finishes almost instantly, so tying
         notification cadence to decode iterations would fire a burst of
-        stale updates instead of tracking real playback over time."""
-        while not self._stop_flag.is_set():
+        stale updates instead of tracking real playback over time.
+
+        *generation* is the _play_generation value this loop was started
+        with. If a newer play() call increments _play_generation, this
+        loop exits immediately -- without this guard, stop() sets
+        _stop_flag and the new play() clears it, so the old loop never
+        saw a reason to stop and leaked indefinitely (one immortal
+        thread per episode, eventually freezing the UI)."""
+        while not self._stop_flag.is_set() and generation == self._play_generation:
             # Never log from PortAudio's callback: formatting and I/O there
             # can itself miss the next audio deadline. The callback only
             # increments counters; this ordinary worker reports them.
@@ -940,6 +967,14 @@ class LiveAudioEngine:
             url, timeout=timeout, options=options,
             metadata_errors="replace",
         )
+        # Capture the queue this session owns. stop() replaces
+        # self._pcm_queue with a fresh Queue for the next play() call,
+        # but this thread must keep putting into *this* session's queue --
+        # without the local reference, a stale decode thread (whose
+        # _stop_flag was cleared by the new session) would put PCM chunks
+        # into the new session's queue, contaminating the next episode's
+        # audio with the previous episode's tail.
+        pcm_queue = self._pcm_queue
         try:
             stream = next((s for s in container.streams if s.type == "audio"), None)
             if stream is None:
@@ -979,7 +1014,7 @@ class LiveAudioEngine:
                             self._leftover_was_padded = False
                         while True:
                             try:
-                                self._pcm_queue.get_nowait()
+                                pcm_queue.get_nowait()
                             except queue.Empty:
                                 break
                     except Exception:
@@ -992,7 +1027,7 @@ class LiveAudioEngine:
                         for pcm in self._filter_frame(rframe):
                             while not self._stop_flag.is_set():
                                 try:
-                                    self._pcm_queue.put(pcm, timeout=0.5)
+                                    pcm_queue.put(pcm, timeout=0.5)
                                     self._begin_output_if_buffered()
                                     break
                                 except queue.Full:
@@ -1006,8 +1041,11 @@ class LiveAudioEngine:
                 # of its decoded audio is available.
                 self._begin_output_if_buffered(force=True)
                 # Let any buffered audio finish playing before reporting stopped.
+                # Use the local pcm_queue reference (captured at the top of
+                # _decode_loop) for the same reason as the put/get calls:
+                # stop() may have replaced self._pcm_queue by now.
                 deadline = time.time() + 5
-                while not self._pcm_queue.empty() and time.time() < deadline:
+                while not pcm_queue.empty() and time.time() < deadline:
                     time.sleep(0.1)
                 self._state = self.STATE_STOPPED
                 self._notify_state()
