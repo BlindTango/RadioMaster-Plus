@@ -218,6 +218,8 @@ class SchedulerService:
         per-podcast cap -- a single global LIMIT here previously let one
         prolific podcast's backlog crowd out every other podcast's new
         episodes entirely, and ignored the configured limit outright.
+        A negative value (-1 from the settings spinner) means unlimited:
+        every pending episode of each podcast gets queued.
         """
         try:
             from radiomaster.utils.config import ConfigManager
@@ -259,13 +261,24 @@ class SchedulerService:
             from radiomaster.database.repository import DownloadRepository
             repo = DownloadRepository(db)
             for row in pending_podcast_ids:
-                episodes = db.fetchall(
-                    "SELECT e.*, p.title AS podcast_title FROM episodes e "
-                    "JOIN podcasts p ON p.id = e.podcast_id "
-                    "WHERE e.podcast_id = ? AND e.download_status = 'none' "
-                    "AND e.audio_url IS NOT NULL ORDER BY e.published_date DESC LIMIT ?",
-                    (row["podcast_id"], download_limit),
-                )
+                # -1 (or any negative) means unlimited: no LIMIT clause,
+                # every pending episode of this podcast gets queued.
+                if download_limit < 0:
+                    episodes = db.fetchall(
+                        "SELECT e.*, p.title AS podcast_title FROM episodes e "
+                        "JOIN podcasts p ON p.id = e.podcast_id "
+                        "WHERE e.podcast_id = ? AND e.download_status = 'none' "
+                        "AND e.audio_url IS NOT NULL ORDER BY e.published_date DESC",
+                        (row["podcast_id"],),
+                    )
+                else:
+                    episodes = db.fetchall(
+                        "SELECT e.*, p.title AS podcast_title FROM episodes e "
+                        "JOIN podcasts p ON p.id = e.podcast_id "
+                        "WHERE e.podcast_id = ? AND e.download_status = 'none' "
+                        "AND e.audio_url IS NOT NULL ORDER BY e.published_date DESC LIMIT ?",
+                        (row["podcast_id"], download_limit),
+                    )
                 for ep in episodes:
                     import os
                     from radiomaster.utils.helpers import sanitize_filename

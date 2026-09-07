@@ -142,7 +142,8 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "Import OPML and Export OPML transfer subscriptions between podcast apps. "
         "gpodder.net Sync uses the account configured in Settings > Podcasts. That "
         "settings page also controls storage, automatic downloads, refresh "
-        "frequency, retention, and auto-advance."
+        "frequency, retention, and auto-advance. Episodes to download per podcast "
+        "accepts -1 for unlimited."
     )),
     ("Audiobooks Tab", (
         "Browse File opens one audiobook media file. Browse Folder opens a conventional "
@@ -474,6 +475,12 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.78", (
+        "The Podcasts settings' Episodes to download per podcast now accepts -1 "
+        "for unlimited: every pending episode of each podcast gets queued for "
+        "auto-download instead of only the newest few. The spinner's label and "
+        "accessible name document the -1 value."
+    )),
     ("Version 1.1.77", (
         "Added Tools > Station Health Check: a background scan of the entire station "
         "catalog that reports dead streams, station names that differ from the "

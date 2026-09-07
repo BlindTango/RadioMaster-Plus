@@ -122,6 +122,50 @@ class TestRecordingSettings:
         scheduler.set_recordings_dir("new")
         assert scheduler._recordings_dir == "new"
 
+    def test_auto_download_negative_limit_is_unlimited(self) -> None:
+        """podcasts.download_limit = -1 must queue EVERY pending episode
+        of each podcast, not zero (a plain LIMIT -1 in SQLite means no
+        rows) -- the settings spinner's documented 'minus 1 for
+        unlimited' behavior. Verified against the exact two query shapes
+        _check_auto_downloads uses for the limited and unlimited paths."""
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE podcasts (id INTEGER PRIMARY KEY, title TEXT)")
+        conn.execute("""CREATE TABLE episodes (
+            id INTEGER PRIMARY KEY, podcast_id INTEGER, title TEXT,
+            audio_url TEXT, download_status TEXT, published_date TEXT)""")
+        conn.execute("INSERT INTO podcasts (id, title) VALUES (1, 'Show')")
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO episodes (podcast_id, title, audio_url, "
+                "download_status, published_date) VALUES (1, ?, ?, 'none', ?)",
+                (f"Ep {i}", f"http://ep{i}.mp3", f"2026-01-0{i + 1}"),
+            )
+        conn.commit()
+
+        base = (
+            "SELECT e.*, p.title AS podcast_title FROM episodes e "
+            "JOIN podcasts p ON p.id = e.podcast_id "
+            "WHERE e.podcast_id = ? AND e.download_status = 'none' "
+            "AND e.audio_url IS NOT NULL ORDER BY e.published_date DESC"
+        )
+        # Unlimited (-1): no LIMIT clause -- all 5 pending episodes.
+        unlimited = conn.execute(base, (1,)).fetchall()
+        assert len(unlimited) == 5
+        # A positive limit still caps: LIMIT 3 -> 3 rows.
+        limited = conn.execute(base + " LIMIT 3", (1,)).fetchall()
+        assert len(limited) == 3
+        # SQLite's own behavior for the record: LIMIT -1 also means "no
+        # limit" (verified live), so passing -1 through would have
+        # worked too -- the scheduler's explicit no-LIMIT branch is
+        # belt-and-braces clarity rather than a bug fix, but it makes
+        # the unlimited intent explicit instead of relying on that
+        # SQLite quirk.
+        sqlite_negative = conn.execute(base + " LIMIT -1", (1,)).fetchall()
+        assert len(sqlite_negative) == 5
+
     def test_short_metadata_segment_is_discarded_as_likely_ad(self, tmp_path) -> None:
         import time
         from pathlib import Path

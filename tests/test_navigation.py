@@ -273,6 +273,30 @@ class TestPlaybackSettings:
             panel._playlist.DeleteAllItems()
 
 
+class TestPodcastsSettings:
+    def test_download_limit_accepts_minus_one_for_unlimited(self, app_and_window) -> None:
+        """The 'Episodes to download per podcast' spinner must accept -1
+        (unlimited) -- min=-1 -- and save it verbatim; the scheduler
+        treats any negative value as 'no per-podcast cap'."""
+        _app, win = app_and_window
+        from radiomaster.ui.settings_dialog import SettingsDialog
+
+        original = win._config.get("podcasts.download_limit", default=3)
+        dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
+        try:
+            panel = dlg._get_panel(3)  # PodcastsPanel
+            assert panel.download_limit_spin.GetMin() == -1
+            assert panel.download_limit_spin.GetName() == (
+                "Episodes to download per podcast, minus 1 for unlimited"
+            )
+            panel.download_limit_spin.SetValue(-1)
+            panel.onSave()
+            assert win._config.get("podcasts.download_limit") == -1
+        finally:
+            win._config.set("podcasts.download_limit", value=original)
+            dlg.Destroy()
+
+
 class TestDownloadsSettings:
     def test_controls_are_named_and_formats_match_youtube(self, app_and_window) -> None:
         _app, win = app_and_window

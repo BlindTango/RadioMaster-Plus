@@ -403,12 +403,20 @@ class PodcastsPanel(SettingsPanel):
         self.auto_download_chk.SetValue(self.config.get("podcasts.auto_download", default=False))
         sizer.Add(self.auto_download_chk, 0, wx.ALL, 5)
 
-        sizer.Add(wx.StaticText(self, label="Episodes to download per podcast:"), 0, wx.ALL, 5)
+        sizer.Add(
+            wx.StaticText(
+                self,
+                label="Episodes to download per podcast (-1 for unlimited):",
+            ),
+            0, wx.ALL, 5,
+        )
         self.download_limit_spin = wx.SpinCtrl(
             self, value=str(self.config.get("podcasts.download_limit", default=3)),
-            min=1, max=100,
+            min=-1, max=100,
         )
-        set_accessible_name(self.download_limit_spin, "Episodes to download per podcast")
+        set_accessible_name(
+            self.download_limit_spin, "Episodes to download per podcast, minus 1 for unlimited"
+        )
         sizer.Add(self.download_limit_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(wx.StaticText(self, label="Episodes to keep:"), 0, wx.ALL, 5)
