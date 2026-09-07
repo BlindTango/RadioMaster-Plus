@@ -475,6 +475,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.79", (
+        "Fixed the Station Health Check freezing the interface during a scan. "
+        "The results list now appends only newly found problem stations instead "
+        "of rebuilding the entire list every half second, and the dialog's "
+        "catalog lookups (opening the dialog, starting a scan, hiding all dead "
+        "stations, and playing a result) moved off the interface thread. A scan "
+        "over a large catalog now leaves the interface fully responsive."
+    )),
     ("Version 1.1.78", (
         "The Podcasts settings' Episodes to download per podcast now accepts -1 "
         "for unlimited: every pending episode of each podcast gets queued for "
