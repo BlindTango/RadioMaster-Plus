@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import uuid as uuid_module
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterator, Optional
 
 from radiomaster.utils.paths import get_paths
@@ -81,6 +81,30 @@ CREATE TABLE IF NOT EXISTS favorite_stations (
 CREATE VIRTUAL TABLE IF NOT EXISTS stations_fts USING fts5(
     uuid UNINDEXED, name, tokenize='trigram'
 );
+
+CREATE TABLE IF NOT EXISTS hidden_stations (
+    uuid TEXT PRIMARY KEY,
+    reason TEXT DEFAULT '',
+    hidden_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS station_health (
+    uuid TEXT PRIMARY KEY,
+    checked_at TEXT NOT NULL,
+    stream_ok INTEGER DEFAULT 0,
+    name_ok INTEGER DEFAULT 1,
+    website_ok INTEGER DEFAULT 1,
+    geo_blocked INTEGER DEFAULT 0,
+    status TEXT DEFAULT '',
+    detail TEXT DEFAULT '',
+    codec TEXT DEFAULT '',
+    sample_rate INTEGER DEFAULT 0,
+    channels INTEGER DEFAULT 0,
+    bit_rate INTEGER DEFAULT 0,
+    db_codec TEXT DEFAULT '',
+    db_bitrate INTEGER DEFAULT 0,
+    format_mismatch INTEGER DEFAULT 0
+);
 """
 
 _FIELDS = ["uuid", "name", "url", "favicon", "tags", "country", "language",
@@ -88,6 +112,14 @@ _FIELDS = ["uuid", "name", "url", "favicon", "tags", "country", "language",
 
 _STATION_COLUMNS = ("uuid, name, url, favicon, tags, country, language, codec, "
                      "bitrate, votes, homepage, network, languagecodes")
+
+# Appended to every catalog browse query so stations hidden via the
+# Station Health Check (dead streams etc.) never appear in browse
+# lists, group counts, or search. The hidden_stations table is a
+# separate blacklist rather than a DELETE because the weekly catalog
+# sync (upsert_stations) would re-insert anything still in the
+# Radio-Browser feed -- the blacklist survives it untouched.
+_NOT_HIDDEN = "uuid NOT IN (SELECT uuid FROM hidden_stations)"
 
 
 def _content_hash(station: Station) -> str:
@@ -180,7 +212,9 @@ class StationDB:
     def genre_groups(self, limit: int = 200000, min_count: int = 1) -> list[tuple[str, int]]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT genre, COUNT(*) c FROM station_genres
+                f"""SELECT genre, COUNT(*) c FROM station_genres g
+                   JOIN stations s ON s.uuid = g.station_uuid
+                   WHERE s.{_NOT_HIDDEN}
                    GROUP BY genre HAVING c >= ? ORDER BY genre COLLATE NOCASE ASC LIMIT ?""",
                 (min_count, limit),
             ).fetchall()
@@ -189,8 +223,9 @@ class StationDB:
     def country_groups(self, limit: int = 200000, min_count: int = 1) -> list[tuple[str, int]]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT country, COUNT(*) c FROM stations
-                   WHERE country != '' GROUP BY country HAVING c >= ?
+                f"""SELECT country, COUNT(*) c FROM stations
+                   WHERE country != '' AND {_NOT_HIDDEN}
+                   GROUP BY country HAVING c >= ?
                    ORDER BY country COLLATE NOCASE ASC LIMIT ?""",
                 (min_count, limit),
             ).fetchall()
@@ -199,9 +234,11 @@ class StationDB:
     def language_groups(self, limit: int = 200000, min_count: int = 1) -> list[tuple[str, int]]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT language, COUNT(*) c FROM station_languages
-                   GROUP BY language HAVING c >= ?
-                   ORDER BY language COLLATE NOCASE ASC LIMIT ?""",
+                f"""SELECT l.language, COUNT(*) c FROM station_languages l
+                   JOIN stations s ON s.uuid = l.station_uuid
+                   WHERE s.{_NOT_HIDDEN}
+                   GROUP BY l.language HAVING c >= ?
+                   ORDER BY l.language COLLATE NOCASE ASC LIMIT ?""",
                 (min_count, limit),
             ).fetchall()
         return list(rows)
@@ -209,8 +246,9 @@ class StationDB:
     def network_groups(self, limit: int = 200000, min_count: int = 1) -> list[tuple[str, int]]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT network, COUNT(*) c FROM stations
-                   WHERE network != '' GROUP BY network HAVING c >= ?
+                f"""SELECT network, COUNT(*) c FROM stations
+                   WHERE network != '' AND {_NOT_HIDDEN}
+                   GROUP BY network HAVING c >= ?
                    ORDER BY network COLLATE NOCASE ASC LIMIT ?""",
                 (min_count, limit),
             ).fetchall()
@@ -220,7 +258,9 @@ class StationDB:
 
     def alphabet_groups(self) -> list[tuple[str, int]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT name FROM stations").fetchall()
+            rows = conn.execute(
+                f"SELECT name FROM stations WHERE {_NOT_HIDDEN}"
+            ).fetchall()
         buckets: dict[str, int] = {}
         for (name,) in rows:
             stripped = (name or "").strip()
@@ -233,6 +273,7 @@ class StationDB:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT {_STATION_COLUMNS} FROM stations
+                    WHERE {_NOT_HIDDEN}
                     ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -248,7 +289,8 @@ class StationDB:
                 params = (letter, limit)
             rows = conn.execute(
                 f"""SELECT {_STATION_COLUMNS} FROM stations
-                    WHERE {clause} ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
+                    WHERE {clause} AND {_NOT_HIDDEN}
+                    ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
                 params,
             ).fetchall()
         return self._rows_to_stations(rows)
@@ -312,7 +354,8 @@ class StationDB:
             rows = conn.execute(
                 f"""SELECT {', '.join(f's.{c.strip()}' for c in _STATION_COLUMNS.split(','))}
                    FROM stations s JOIN station_genres g ON g.station_uuid = s.uuid
-                   WHERE g.genre = ? ORDER BY s.name COLLATE NOCASE ASC LIMIT ?""",
+                   WHERE g.genre = ? AND s.{_NOT_HIDDEN}
+                   ORDER BY s.name COLLATE NOCASE ASC LIMIT ?""",
                 (genre, limit),
             ).fetchall()
         return self._rows_to_stations(rows)
@@ -321,7 +364,8 @@ class StationDB:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT {_STATION_COLUMNS} FROM stations
-                   WHERE country = ? ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
+                   WHERE country = ? AND {_NOT_HIDDEN}
+                   ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
                 (country, limit),
             ).fetchall()
         return self._rows_to_stations(rows)
@@ -331,7 +375,8 @@ class StationDB:
             rows = conn.execute(
                 f"""SELECT {', '.join(f's.{c.strip()}' for c in _STATION_COLUMNS.split(','))}
                    FROM stations s JOIN station_languages l ON l.station_uuid = s.uuid
-                   WHERE l.language = ? ORDER BY s.name COLLATE NOCASE ASC LIMIT ?""",
+                   WHERE l.language = ? AND s.{_NOT_HIDDEN}
+                   ORDER BY s.name COLLATE NOCASE ASC LIMIT ?""",
                 (language, limit),
             ).fetchall()
         return self._rows_to_stations(rows)
@@ -340,7 +385,8 @@ class StationDB:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT {_STATION_COLUMNS} FROM stations
-                   WHERE network = ? ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
+                   WHERE network = ? AND {_NOT_HIDDEN}
+                   ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
                 (network, limit),
             ).fetchall()
         return self._rows_to_stations(rows)
@@ -357,7 +403,8 @@ class StationDB:
                 return []
             placeholders = ",".join("?" * len(uuids))
             rows = conn.execute(
-                f"""SELECT {_STATION_COLUMNS} FROM stations WHERE uuid IN ({placeholders})
+                f"""SELECT {_STATION_COLUMNS} FROM stations
+                   WHERE uuid IN ({placeholders}) AND {_NOT_HIDDEN}
                    ORDER BY name COLLATE NOCASE ASC""",
                 uuids,
             ).fetchall()
@@ -410,3 +457,113 @@ class StationDB:
     def last_updated(self) -> Optional[datetime]:
         value = self.get_metadata("last_updated")
         return datetime.fromisoformat(value) if value else None
+
+    # ------------------------------------------------------------------
+    # Hidden stations (Station Health Check blacklist) -- see
+    # _NOT_HIDDEN's comment for why this is a table and not a DELETE.
+    # ------------------------------------------------------------------
+    def hide_station(self, station_uuid: str, reason: str = "") -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO hidden_stations (uuid, reason) VALUES (?, ?)",
+                (station_uuid, reason),
+            )
+
+    def unhide_station(self, station_uuid: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM hidden_stations WHERE uuid = ?", (station_uuid,))
+
+    def unhide_all(self) -> int:
+        """Clear the entire blacklist; returns the number of stations
+        that were hidden (0 if it was already empty)."""
+        with self._lock, self._connect() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM hidden_stations").fetchone()[0]
+            conn.execute("DELETE FROM hidden_stations")
+        return count
+
+    def hidden_stations(self) -> list[tuple[str, str, str]]:
+        """(uuid, name, reason) for every blacklisted station, newest
+        first. Joins the catalog for the name; a hidden station that
+        was dropped from the catalog entirely falls back to the uuid
+        (favorites/custom keep their own rows, so this is rare)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT h.uuid, COALESCE(s.name, f.name, c.name, h.uuid), h.reason
+                   FROM hidden_stations h
+                   LEFT JOIN stations s ON s.uuid = h.uuid
+                   LEFT JOIN favorite_stations f ON f.uuid = h.uuid
+                   LEFT JOIN custom_stations c ON c.uuid = h.uuid
+                   ORDER BY h.hidden_at DESC, h.uuid"""
+            ).fetchall()
+        return list(rows)
+
+    def hidden_count(self) -> int:
+        with self._connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM hidden_stations").fetchone()[0]
+
+    def hidden_uuids(self) -> set[str]:
+        with self._connect() as conn:
+            return {row[0] for row in conn.execute("SELECT uuid FROM hidden_stations")}
+
+    # ------------------------------------------------------------------
+    # Station health results -- written in batches by the health-check
+    # scan's UI timer, read back when the dialog opens (so past results
+    # are visible immediately) and for the resume filter.
+    # ------------------------------------------------------------------
+    _HEALTH_COLUMNS = ("uuid, checked_at, stream_ok, name_ok, website_ok, geo_blocked, "
+                       "status, detail, codec, sample_rate, channels, bit_rate, "
+                       "db_codec, db_bitrate, format_mismatch")
+
+    def record_health_results(self, results: list[dict]) -> None:
+        """Batched INSERT OR REPLACE of health-check rows. Each dict must
+        carry the _HEALTH_COLUMNS keys (checked_at filled in here if the
+        caller didn't set it)."""
+        if not results:
+            return
+        now = datetime.now().isoformat()
+        rows = []
+        for r in results:
+            rows.append((
+                r["uuid"], r.get("checked_at") or now,
+                int(bool(r.get("stream_ok"))), int(r.get("name_ok", 1) or 1),
+                int(r.get("website_ok", 1) or 1), int(bool(r.get("geo_blocked"))),
+                r.get("status", ""), r.get("detail", ""),
+                r.get("codec", ""), int(r.get("sample_rate", 0) or 0),
+                int(r.get("channels", 0) or 0), int(r.get("bit_rate", 0) or 0),
+                r.get("db_codec", ""), int(r.get("db_bitrate", 0) or 0),
+                int(bool(r.get("format_mismatch"))),
+            ))
+        with self._lock, self._connect() as conn:
+            conn.executemany(
+                f"""INSERT OR REPLACE INTO station_health ({self._HEALTH_COLUMNS})
+                VALUES ({', '.join('?' * 15)})""",
+                rows,
+            )
+
+    def health_results(self, problems_only: bool = True) -> list[dict]:
+        """All persisted health rows (newest first), optionally only the
+        problem ones -- a row is a problem when the stream is dead, the
+        name mismatches, the website is down, it's geo-blocked, or the
+        format differs from the database's claims."""
+        where = ""
+        if problems_only:
+            where = ("WHERE stream_ok = 0 OR name_ok = 0 OR website_ok = 0 "
+                     "OR geo_blocked = 1 OR format_mismatch = 1")
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""SELECT {self._HEALTH_COLUMNS} FROM station_health {where}
+                    ORDER BY checked_at DESC, uuid"""
+            ).fetchall()
+        cols = [c.strip() for c in self._HEALTH_COLUMNS.split(",")]
+        return [dict(zip(cols, row, strict=False)) for row in rows]
+
+    def recently_checked_uuids(self, days: float) -> set[str]:
+        """uuids with a health row newer than *days* days -- the resume
+        filter, so a restarted scan doesn't re-pay the timeout cost for
+        stations checked moments ago."""
+        if days <= 0:
+            return set()
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        with self._connect() as conn:
+            return {row[0] for row in conn.execute(
+                "SELECT uuid FROM station_health WHERE checked_at > ?", (cutoff,))}

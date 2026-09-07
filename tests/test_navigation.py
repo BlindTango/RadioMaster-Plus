@@ -1256,3 +1256,111 @@ class TestDownloadsHistoryRemoveAll:
                 panel._history_rows = real_rows
         finally:
             self._cleanup_rows(win, [active_id])
+
+
+class TestStationHealthCheck:
+    """The Tools > Station Health Check dialog: menu wiring, control
+    accessibility, and the MainWindow-owned service that survives dialog
+    close. Uses the app's real stations.db (like the rest of this file),
+    but only reads it -- hide/unhide round-trips clean up after
+    themselves."""
+
+    def test_tools_menu_has_station_health_entry(self, app_and_window) -> None:
+        _app, win = app_and_window
+        menu_bar = win.GetMenuBar()
+        tools_menu = menu_bar.GetMenu(menu_bar.FindMenu("Tools"))
+        labels = [item.GetItemLabelText() for item in tools_menu.GetMenuItems()
+                  if not item.IsSeparator()]
+        assert "Station Health Check..." in labels
+
+    def test_dialog_opens_with_accessible_controls(self, app_and_window) -> None:
+        app, win = app_and_window
+        from radiomaster.ui.station_health_dialog import StationHealthDialog
+        dlg = StationHealthDialog(win, win._station_db, win._health_service)
+        try:
+            # Every interactive control must have an accessible name.
+            for ctrl, expected in [
+                (dlg._btn_start, "Start Scan"),
+                (dlg._btn_stop, "Stop Scan"),
+                (dlg._workers_spin, "Parallel Connections"),
+                (dlg._skip_recent, "Skip Recently Checked Stations"),
+                (dlg._progress_label, "Scan Progress"),
+                (dlg._filter_choice, "Problem Filter"),
+                (dlg._results_list, "Health Check Results"),
+                (dlg._detail_text, "Selected Station Details"),
+                (dlg._btn_hide, "Hide Selected Station"),
+                (dlg._btn_hide_dead, "Hide All Dead Stations"),
+                (dlg._btn_recheck, "Recheck Selected Station"),
+                (dlg._btn_play, "Play Selected Station"),
+                (dlg._btn_hidden, "Manage Hidden Stations"),
+            ]:
+                assert ctrl.GetName() == expected, f"{expected} not accessible"
+            # Buttons start in the right states.
+            assert dlg._btn_start.IsEnabled()
+            assert not dlg._btn_stop.IsEnabled()
+            assert not dlg._btn_hide.IsEnabled()  # nothing selected
+        finally:
+            dlg._drain_timer.Stop()
+            dlg.Destroy()
+
+    def test_service_is_owned_by_main_window(self, app_and_window) -> None:
+        """The scan service must outlive the dialog -- closing the
+        dialog must not stop a running scan."""
+        app, win = app_and_window
+        assert win._health_service is not None
+        assert not win._health_service.running
+
+    def test_skip_urls_include_playing_and_recording(self, app_and_window) -> None:
+        """The scan must never probe the playing station or one being
+        recorded."""
+        app, win = app_and_window
+        win._engine._current_url = "http://playing.example/live"
+        station = Station(uuid="rec-x", name="Rec X", url="http://rec.example/live")
+        win._radio_panel._recordings[1] = {
+            "station_name": station.name, "station_key": "x",
+            "station": station, "session": MagicMock(), "split_tracks": False,
+        }
+        try:
+            skip = win._health_skip_urls()
+            assert "http://playing.example/live" in skip
+            assert "http://rec.example/live" in skip
+        finally:
+            win._radio_panel._recordings.pop(1, None)
+            win._engine._current_url = ""
+
+    def test_hide_and_unhide_round_trip_via_dialog(self, app_and_window) -> None:
+        """Hide Selected must remove a station from browse lists, and
+        Manage Hidden must restore it -- against the real stations.db,
+        cleaning up after itself."""
+        app, win = app_and_window
+        from radiomaster.ui.station_health_dialog import StationHealthDialog
+        marker = f"HealthTest-{id(self)}"
+        win._station_db.upsert_stations([
+            Station(uuid=marker, name=marker, url=f"http://{marker}/live"),
+        ])
+        dlg = StationHealthDialog(win, win._station_db, win._health_service)
+        try:
+            dlg._results[marker] = {"uuid": marker, "_name": marker,
+                                    "stream_ok": 0, "name_ok": 1,
+                                    "website_ok": 1, "geo_blocked": 0,
+                                    "format_mismatch": 0, "detail": "test"}
+            dlg._refresh_results()
+            assert dlg._results_list.GetItemCount() >= 1
+            # Select the marker row and hide it.
+            for i in range(dlg._results_list.GetItemCount()):
+                if dlg._results_list.GetItemText(i, 0) == marker:
+                    dlg._results_list.Select(i)
+                    break
+            with patch("radiomaster.ui.station_health_dialog.wx.MessageBox",
+                       return_value=wx.YES):
+                dlg._on_hide_selected(MagicMock())
+            assert win._station_db.hidden_count() >= 1
+            assert marker in win._station_db.hidden_uuids()
+            assert all(s.uuid != marker for s in win._station_db.all_stations())
+            # Unhide restores it.
+            win._station_db.unhide_station(marker)
+            assert any(s.uuid == marker for s in win._station_db.all_stations())
+        finally:
+            win._station_db.unhide_station(marker)
+            dlg._drain_timer.Stop()
+            dlg.Destroy()

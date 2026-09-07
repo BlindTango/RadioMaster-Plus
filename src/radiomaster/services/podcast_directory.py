@@ -45,12 +45,18 @@ class PodcastDirectory:
         return kwargs
 
     @staticmethod
-    def search(term: str, limit: int = 25, country: str = "US") -> list[dict[str, Any]]:
+    def search(term: str, limit: int = 200, country: str = "US") -> list[dict[str, Any]]:
         """Search for podcasts on iTunes/Apple Podcasts. Raises
         PodcastAPIError on a genuine failure (network/timeout/bad
         response) -- previously this swallowed every exception and just
         returned [], making a real failure (blocked network, bad proxy,
-        DNS, SSL) indistinguishable from "no podcasts matched"."""
+        DNS, SSL) indistinguishable from "no podcasts matched".
+
+        Default limit is 200, the iTunes Search API's documented
+        maximum (1 to 200). In practice iTunes returns fewer for most
+        terms (~100 ceiling observed live), but asking for the max
+        means we never truncate results the API could have returned --
+        the old default of 25 silently hid up to 175 of them."""
         try:
             resp = requests.get(
                 PodcastDirectory.ITUNES_SEARCH_URL,
@@ -174,7 +180,7 @@ class PodcastIndexDirectory:
         return bool(key and secret)
 
     @staticmethod
-    def search(term: str, limit: int = 25) -> list[dict[str, Any]]:
+    def search(term: str, limit: int = 200) -> list[dict[str, Any]]:
         key, secret = PodcastIndexDirectory._credentials()
         if not key or not secret:
             return []
@@ -226,12 +232,16 @@ class PodcastIndexDirectory:
         return results
 
 
-def search_all(term: str, limit: int = 25) -> list[dict[str, Any]]:
+def search_all(term: str, limit: int = 200) -> list[dict[str, Any]]:
     """Fans a search out to every available directory (iTunes always;
     Podcast Index once configured) and merges the results. A directory
     that fails doesn't sink the whole search -- only raises PodcastAPIError
     if EVERY directory failed and none returned anything, so a real
-    failure is still visible instead of looking identical to "no results"."""
+    failure is still visible instead of looking identical to "no results".
+
+    Default limit 200: the iTunes Search API's documented maximum, and
+    Podcast Index's documented cap -- every result the directories can
+    give, instead of the old 25-per-directory truncation."""
     results: list[dict[str, Any]] = []
     errors: list[str] = []
     for search_fn in (PodcastDirectory.search, PodcastIndexDirectory.search):

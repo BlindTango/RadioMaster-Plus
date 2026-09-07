@@ -80,6 +80,12 @@ class MainWindow(wx.Frame):
         self._station_api = StationAPI()
         self._station_db = StationDB()
         self._station_updater = StationUpdater(self._station_api, self._station_db)
+        # Station Health Check: MainWindow owns the scan service (not the
+        # dialog) so closing the dialog leaves a running scan going --
+        # see station_health_dialog.py's docstring. The skip-list and
+        # buffering hooks are wired in _setup_ui once the panels exist.
+        from radiomaster.services.station_health import StationHealthService
+        self._health_service = StationHealthService(workers=10)
         from radiomaster.services.station_update_scheduler import StationUpdateScheduler
         self._station_update_scheduler = StationUpdateScheduler(
             self._station_updater, on_result=self._on_station_update_result,
@@ -317,6 +323,9 @@ class MainWindow(wx.Frame):
         tools_menu.Append(self._menu_ids["track_splitter"], "Split &Track...")
         self._menu_ids["shortcut_editor"] = wx.NewIdRef()
         tools_menu.Append(self._menu_ids["shortcut_editor"], "&Keyboard Shortcuts...\tCtrl+K")
+        tools_menu.AppendSeparator()
+        self._menu_ids["station_health"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["station_health"], "Station &Health Check...")
         tools_menu.AppendSeparator()
         tools_menu.Append(wx.ID_PREFERENCES, "&Settings...\tCtrl+,")
         menubar.Append(tools_menu, "&Tools")
@@ -863,6 +872,7 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_identifier(), id=self._menu_ids["track_identifier"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_splitter(), id=self._menu_ids["track_splitter"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_shortcut_editor(), id=self._menu_ids["shortcut_editor"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_station_health(), id=self._menu_ids["station_health"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_settings(), id=wx.ID_PREFERENCES)
 
         # Help menu
@@ -1658,6 +1668,44 @@ class MainWindow(wx.Frame):
         dlg = TrackSplitterDialog(self)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _show_station_health(self) -> None:
+        """Show the Station Health Check dialog. The scan service is
+        owned here, so a scan keeps running when the dialog closes --
+        progress goes to the status bar, and reopening reattaches."""
+        from radiomaster.ui.station_health_dialog import StationHealthDialog
+        # Wire the non-interference hooks every time (cheap lambdas):
+        # never probe the playing/recording stations, and pause while
+        # playback is buffering.
+        self._health_service.get_skip_urls = self._health_skip_urls
+        self._health_service.is_buffering = lambda: self._engine.state == "buffering"
+        dlg = StationHealthDialog(
+            self, self._station_db, self._health_service,
+            on_scan_finished=lambda summary: self._status_bar.set_status(summary),
+        )
+        dlg.ShowModal()
+        dlg.Destroy()
+        # Hidden stations may have changed -- refresh the Radio tab's
+        # browse lists so hidden stations disappear immediately.
+        self._radio_panel.refresh_after_station_update()
+
+    def _health_skip_urls(self) -> set[str]:
+        """URLs the health scan must never probe: the currently-playing
+        stream and every station currently being recorded (manual or
+        scheduled). Icecast/SHOUTcast servers cap connections per
+        listener; a second connection to a station in active use can
+        make the server drop the real one (documented failure mode in
+        stream_reader.py)."""
+        skip: set[str] = set()
+        current = self._engine._current_url
+        if current:
+            skip.add(current)
+        for entry in getattr(self._radio_panel, "_recordings", {}).values():
+            station = entry.get("station")
+            url = getattr(station, "url", None)
+            if url:
+                skip.add(url)
+        return skip
 
     def _show_sleep_timer(self) -> None:
         """Show the sleep timer dialog."""

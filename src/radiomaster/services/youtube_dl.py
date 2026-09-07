@@ -152,12 +152,12 @@ class YouTubeService:
         "playlist": "EgIQAw%253D%253D",
     }
 
-    def search(self, query: str, max_results: int = 20,
+    def search(self, query: str, max_results: int = 100,
                search_type: str = "video") -> list[dict[str, Any]]:
         """Search YouTube using yt-dlp, filtered to videos, channels, or
         playlists (search_type).
 
-        --flat-playlist is what makes a 20-result search actually fast:
+        --flat-playlist is what makes a large search actually fast:
         without it, yt-dlp does a FULL metadata extraction for every
         single result (a real network round-trip per video), which for
         20 results routinely took well over a minute -- confirmed live
@@ -166,9 +166,15 @@ class YouTubeService:
         plus, and still includes everything this panel's results list
         actually shows (title/duration/channel).
 
+        Default max_results is 100 -- the old 20 hid most of what
+        YouTube returns for a query. yt-dlp's ytsearchN: accepts any N
+        (it just paginates the results page until it has N), and with
+        --flat-playlist the cost stays modest; the subprocess timeout
+        below is scaled to match.
+
         Also no longer gated on returncode == 0: yt-dlp exits non-zero
         if EVEN ONE result among many fails (a deleted/region-blocked
-        video is common in a real 20-result search) -- confirmed live,
+        video is common in a real 100-result search) -- confirmed live,
         one bad video among 20 discarded all 19 good ones that had
         already been fetched and printed. Every line of stdout that
         parses as JSON is kept regardless of the overall exit code.
@@ -190,11 +196,16 @@ class YouTubeService:
             )
             target = search_url
             extra_args = ["--playlist-end", str(max_results)]
+        # Timeout scales with the result count: --flat-playlist makes
+        # each additional page of results cheap, but a 100-result search
+        # still paginates ~10 results pages and needs more headroom
+        # than the old fixed 30s gave a 20-result one.
+        timeout = max(30, 30 + max_results // 2)
         try:
             result = subprocess.run(
                 [get_ytdlp(), *get_yt_dlp_proxy_args(), target,
                  "-j", *extra_args, "--flat-playlist"],
-                capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
+                capture_output=True, text=True, timeout=timeout, creationflags=_NO_WINDOW,
             )
             results = []
             for line in result.stdout.strip().split("\n"):

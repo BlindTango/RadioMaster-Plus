@@ -286,7 +286,7 @@ class YouTubePanel(wx.Panel):
             from radiomaster.services.youtube_dl import YouTubeService
             try:
                 service = YouTubeService()
-                results = service.search(query, max_results=20, search_type=search_type)
+                results = service.search(query, max_results=100, search_type=search_type)
             except Exception as e:
                 wx.CallAfter(self._on_search_failed, str(e))
                 return

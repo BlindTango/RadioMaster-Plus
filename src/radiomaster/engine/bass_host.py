@@ -96,6 +96,38 @@ _BASS_UNICODE             = 0x80000000  # flag for BASS_StreamCreateFile — fil
 # time-shift buffer file's growing tail (see timeshift_seek() below).
 _TIMESHIFT_TAIL_SAFETY_SECONDS = 2.0
 
+# Human-readable descriptions for the BASS error codes a stream open can
+# actually produce (from the official BASS_ErrorGetCode documentation) --
+# without these, a dead station surfaces as a cryptic "err=2" that gives a
+# screen-reader user nothing to act on. Only the codes reachable from the
+# play paths are listed; anything else falls back to the raw number.
+_BASS_ERROR_DESCRIPTIONS = {
+    2:  "the stream URL could not be opened -- the station is likely down, "
+        "the port is closed, or the address no longer resolves",
+    3:  "no usable audio output device/driver was found",
+    6:  "the stream format is not supported",
+    10: "the SSL/TLS connection failed (certificate or handshake problem)",
+    14: "the connection was made but no audio channel could be created",
+    20: "an internal BASS parameter was invalid",
+    29: "the audio device has no free channels",
+    31: "the stream returned no data (empty file or zero-length response)",
+    32: "the network connection failed",
+    40: "the connection timed out",
+    41: "the stream's file/format could not be determined or is unsupported",
+    44: "the required codec is not available",
+    48: "the URL protocol is not supported",
+    49: "access to the stream was denied",
+}
+
+
+def _describe_bass_error(err):
+    """Turn a raw BASS error code into an actionable message, keeping the
+    numeric code for diagnostics (logs, bug reports)."""
+    desc = _BASS_ERROR_DESCRIPTIONS.get(err)
+    if desc:
+        return f"BASS error {err}: {desc}"
+    return f"BASS error {err}"
+
 
 def _is_cert_verify_error(exc):
 	"""True if *exc* (or anything chained onto it via __cause__/__context__)
@@ -1601,7 +1633,7 @@ class BassHost:
             with self._lock:
                 if self._current_play_seq == seq:
                     self._current_play_seq = None
-            return False, f"StreamCreateURL failed (err={err})"
+            return False, f"StreamCreateURL failed ({_describe_bass_error(err)})"
 
         # Check if this play was cancelled while creating stream
         with self._lock:
@@ -1653,7 +1685,7 @@ class BassHost:
                 if self._current_play_seq == seq:
                     self._current_play_seq = None
                 self._handle = 0
-            return False, f"ChannelPlay failed (err={err})"
+            return False, f"ChannelPlay failed ({_describe_bass_error(err)})"
 
         with self._lock:
             if self._current_play_seq == seq:

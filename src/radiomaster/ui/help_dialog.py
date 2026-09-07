@@ -70,9 +70,9 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "controls the equalizer, lyrics panel, fullscreen mode, theme, and "
         "language. Effects contains live audio effects and preset managers. "
         "Tools contains the sleep timer, downloads, recording scheduler, track "
-        "tools, shortcut editors, and Settings. Help contains this manual, the "
-        "Quick Start Guide, bundled Release Notes, YouTube library updates, app "
-        "updates, and About information.\n\n"
+        "tools, shortcut editors, the station health check, and Settings. Help "
+        "contains this manual, the Quick Start Guide, bundled Release Notes, "
+        "YouTube library updates, app updates, and About information.\n\n"
         "Press Alt plus the underlined menu letter to open a menu. Arrow through "
         "items and press Enter to activate one. Escape closes an open menu or "
         "dialog without applying an action."
@@ -133,7 +133,9 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
     ("Podcasts Tab", (
         "The Podcasts tab has category, podcast, and episode lists. Search the "
         "directory or browse categories, select a show, and Subscribe to keep it "
-        "in your library. Add RSS Feed subscribes to a feed URL directly.\n\n"
+        "in your library. Add RSS Feed subscribes to a feed URL directly. Directory "
+        "searches return every result the podcast directories provide (up to 200 "
+        "per directory), not a truncated short list.\n\n"
         "Select an episode and press Enter or use its context menu to Play, Pause, "
         "Resume, Stop, Download, or Download All. Playback progress is remembered. "
         "Downloaded episodes appear in Downloads and can be played offline.\n\n"
@@ -165,7 +167,8 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "according to Settings > Playback."
     )),
     ("YouTube Tab", (
-        "Search can return Videos, Channels, or Playlists. Activating a video plays "
+        "Search can return Videos, Channels, or Playlists, up to 100 results "
+        "each. Activating a video plays "
         "it; activating a channel or playlist opens its videos. Subscribe to "
         "Channel stores a channel in the left-hand subscriptions list. Play URL "
         "accepts a YouTube or other yt-dlp-supported page URL.\n\n"
@@ -187,6 +190,27 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
         "history entry. The context menu's Remove All clears every history entry at "
         "once after confirmation. Removing a list entry does not silently delete an "
         "unrelated source file. Refresh reloads both lists from the database."
+    )),
+    ("Station Health Check", (
+        "Tools > Station Health Check scans the station catalog and reports "
+        "problems: dead streams, station names that differ from the stream's own "
+        "metadata, websites that no longer resolve, geo-blocked stations (with "
+        "the station's home country), and streams whose actual format differs "
+        "from the database's claim.\n\n"
+        "Start Scan begins checking every station; Parallel connections controls "
+        "how many stations are probed at once, and the skip-recently-checked "
+        "option avoids re-checking stations verified within the last seven days. "
+        "The scan runs in the background: it never probes the station you are "
+        "listening to or recording, pauses while playback is buffering, and "
+        "keeps running if you close the dialog (progress appears in the status "
+        "bar; reopening the dialog reattaches).\n\n"
+        "Results list only problem stations, filterable by problem type. Select "
+        "a row to see full details, including the stream's actual codec, sample "
+        "rate, channels, and bitrate versus what the database claims. Hide "
+        "Selected or Hide All Dead removes broken stations from all browse "
+        "lists (Manage Hidden restores them); hiding survives catalog updates. "
+        "Recheck Selected re-verifies one station, and Play lets you confirm a "
+        "result by ear."
     )),
     ("Scheduler Tab", (
         "The Scheduler tab lists planned recordings with station, start time, "
@@ -450,6 +474,22 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.77", (
+        "Added Tools > Station Health Check: a background scan of the entire station "
+        "catalog that reports dead streams, station names that differ from the "
+        "stream's own metadata, websites that no longer resolve, geo-blocked stations "
+        "with their home country, and streams whose actual codec, sample rate, "
+        "channels, or bitrate differ from the database's claims. Broken stations can "
+        "be hidden from all browse lists (reversible via Manage Hidden, and hiding "
+        "survives catalog updates). The scan never probes the station you are "
+        "listening to or recording, pauses while playback is buffering, and keeps "
+        "running if you close its dialog.\n\n"
+        "Podcast directory searches now return every result the directories provide "
+        "(up to 200 per directory instead of 25), and YouTube searches return up to "
+        "100 results for videos, channels, and playlists instead of 20. Stream open "
+        "failures now explain themselves in plain language instead of a raw BASS "
+        "error number."
+    )),
     ("Version 1.1.76", (
         "Effect parameter sliders now update the active BASS effect in real time for "
         "chorus, echo, flanger, gargle, compressor, and distortion, not just reverb -- "
