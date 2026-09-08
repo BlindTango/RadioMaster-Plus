@@ -105,6 +105,12 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.84", (
+        "The About dialog now includes the GPL version 2 or later license notice, "
+        "credit to Un4seen Developments for BASS, and copyright for Deenadayalan "
+        "Moodley, 2026. Use Copy version (Alt+C) to copy the version number. "
+        "The dialog supports keyboard navigation and selectable, read-only text."
+    )),
     ("Version 1.1.83", (
         "Removed the backup PyAV/sounddevice audio engine. Un4seen BASS remains "
         "the audio playback engine, with its existing controls and effects. "

@@ -1093,15 +1093,61 @@ class MainWindow(wx.Frame):
     def _show_about(self) -> None:
         """Show the about dialog."""
         from radiomaster import __app_name__, __version__
-        wx.MessageBox(
+        about_text = (
             f"{__app_name__} v{__version__}\n\n"
             "A unified media player for radio, podcasts, YouTube,\n"
             "audiobooks, and local media.\n\n"
+            "Copyright © 2026 Deenadayalan Moodley.\n\n"
+            "License: GNU General Public License, version 2 or later\n"
+            "(GPL-2.0-or-later). See the included LICENSE file for details.\n\n"
+            "BASS audio library by Un4seen Developments.\n\n"
             "Built with Python and wxPython.\n"
-            "Accessibility is a first-class citizen.",
-            f"About {__app_name__}",
-            wx.OK | wx.ICON_INFORMATION,
+            "Accessibility is a first-class citizen."
         )
+        dialog = wx.Dialog(
+            self, title=f"About {__app_name__}",
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        content = wx.TextCtrl(
+            dialog, value=about_text, size=(560, 300),
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+        )
+        content.SetName("About RadioMaster+")
+        copy_button = wx.Button(dialog, label="&Copy version")
+        close_button = wx.Button(dialog, wx.ID_OK, label="C&lose")
+        close_button.SetDefault()
+        dialog.SetEscapeId(wx.ID_OK)
+
+        def copy_version(event: wx.CommandEvent) -> None:
+            copied = False
+            if wx.TheClipboard.Open():
+                try:
+                    copied = wx.TheClipboard.SetData(wx.TextDataObject(__version__))
+                    if copied:
+                        wx.TheClipboard.Flush()
+                finally:
+                    wx.TheClipboard.Close()
+            if not copied:
+                wx.MessageBox(
+                    "Could not copy the version number. Please try again.",
+                    "Copy version", wx.OK | wx.ICON_WARNING, parent=dialog,
+                )
+
+        copy_button.Bind(wx.EVT_BUTTON, copy_version)
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        buttons.Add(copy_button, 0, wx.RIGHT, 8)
+        buttons.Add(close_button)
+        layout = wx.BoxSizer(wx.VERTICAL)
+        layout.Add(content, 1, wx.EXPAND | wx.ALL, 12)
+        layout.Add(buttons, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        dialog.SetSizerAndFit(layout)
+        dialog.SetMinSize(dialog.GetSize())
+        dialog.CentreOnParent()
+        content.SetFocus()
+        try:
+            dialog.ShowModal()
+        finally:
+            dialog.Destroy()
 
     def _on_track_finished(self) -> None:
         """A track reached its own natural end (engine.on_track_finished).
