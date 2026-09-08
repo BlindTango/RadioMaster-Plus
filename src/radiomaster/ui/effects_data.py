@@ -1,9 +1,8 @@
 """Central data for the Effects menu: which effects exist, their
 adjustable parameters, and their built-in presets.
 
-Filter mapping (verified against PyAV's bundled libavfilter before use --
-see build_effects_filters() in engine/live_audio_engine.py for the actual
-"name=args" strings):
+Video filter mapping (see engine/video_filters.py for FFplay strings;
+audio playback uses the native BASS effects mapping in bass_radio_engine.py):
     echo        -> aecho (single delayed repeat)
     equalizer   -> firequalizer (10-band)
     reverb      -> aecho with multiple pipe-separated delay/decay taps

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "radiomaster-plus"
-version = "1.1.82"
+version = "1.1.83"
 description = "A unified media player for radio, podcasts, YouTube, audiobooks, and local media with full accessibility support"
 readme = "README.md"
 license = { text = "GPL-2.0-or-later" }
@@ -32,9 +32,6 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "pywin32>=306",
     "comtypes>=1.4",
-    "av>=13.0",
-    "sounddevice>=0.5",
-    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

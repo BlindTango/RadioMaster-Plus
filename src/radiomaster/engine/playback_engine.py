@@ -1,18 +1,4 @@
-"""Playback engine: dispatches to one of two backends depending on content.
-
-Audio-only content (radio, podcasts, audiobooks, local audio files,
-YouTube audio) goes through LiveAudioEngine (engine/live_audio_engine.py),
-a direct PyAV-decode + sounddevice/WASAPI-output pipeline that supports
-genuinely live volume/pan/rate/effects changes -- no restart, matching the
-README's "real-time... no restart required" promise.
-
-Video goes through the original ffplay subprocess (unchanged) -- ffplay
-still handles the actual video rendering, which this class was never
-trying to replace; only its audio-control limitations motivated
-LiveAudioEngine. Effect/rate/pan changes during video playback still
-restart ffplay, same as before, since ffplay has no live filter-graph
-reload API.
-"""
+"""Playback uses Un4seen BASS for audio and FFplay for video rendering."""
 
 import logging
 import subprocess
@@ -23,7 +9,7 @@ from typing import Any, Callable
 
 from radiomaster.utils.tools import get_ffplay
 from radiomaster.utils.logging_setup import log_io
-from radiomaster.engine.live_audio_engine import LiveAudioEngine, build_effects_filters
+from radiomaster.engine.video_filters import build_effects_filters
 
 log = logging.getLogger("radiomaster")
 
@@ -59,9 +45,6 @@ class PlaybackEngine:
         self._reconnect_timer: threading.Timer | None = None
         self._volume_timer: threading.Timer | None = None
         self._volume_lock = threading.Lock()
-        self._rate_timer: threading.Timer | None = None
-        self._rate_lock = threading.Lock()
-        self._crossfade_generation = 0
 
         # --- Shared state (both backends) ---
         self._current_url: str = ""
@@ -116,11 +99,7 @@ class PlaybackEngine:
         self._on_track_finished: Callable[[], None] | None = None
         self._on_effects_changed: Callable[[str, dict[str, Any]], None] | None = None
 
-        # --- Audio (LiveAudioEngine) backend ---
-        self._live = LiveAudioEngine()
-        self._wire_live_callbacks(self._live)
-        # Started lazily on the first radio request so BASS cannot slow normal
-        # application startup or delay restoring the last non-radio media.
+        # Start BASS lazily on the first audio request.
         self._bass_radio = None
         self._using_bass_radio = False
 
@@ -153,17 +132,6 @@ class PlaybackEngine:
         self._bass_radio = bass
         return bass
 
-    def _wire_live_callbacks(self, live: LiveAudioEngine) -> None:
-        """Hook a LiveAudioEngine instance's callbacks up to this engine's
-        own listeners. Shared between __init__'s single long-lived instance
-        and crossfade_to()'s temporary "incoming" instance."""
-        live.on_state_change(lambda _s: self._notify_state())
-        live.on_position_update(
-            lambda p, d: self._on_position_update(p, d) if self._on_position_update else None
-        )
-        live.on_error(lambda m: self._notify_error(m))
-        live.on_track_finished(lambda: self._on_track_finished() if self._on_track_finished else None)
-        live.on_buffering(lambda p: self._on_buffering(p) if self._on_buffering else None)
 
     # ---------------------------------------------------------------------
     # Public accessors
@@ -173,7 +141,7 @@ class PlaybackEngine:
         """Current playback state (stopped, playing, paused, buffering)."""
         if self._using_bass_radio and self._bass_radio:
             return self._bass_radio.state
-        return self._state if self._is_video_active else self._live.state
+        return self._state
 
     def play(self, url: str, title: str = "", artist: str = "",
               is_video: bool = False, duration: float = 0.0,
@@ -216,79 +184,19 @@ class PlaybackEngine:
             bass.apply_effects(self._effects)
             bass.play(url, title, artist, duration, seekable=not is_live)
             return
-        self._live.set_auto_reconnect(self._auto_reconnect)
-        self._live.set_replaygain_db(self._replaygain_db)
-        self._live.set_volume(self._volume)
-        self._live.set_pan(self._pan)
-        self._live.set_rate(self._rate)
-        self._live.play(url, title, artist, duration)
+        self._state = self.STATE_STOPPED
+        self._notify_state()
+        self._notify_error(
+            "The BASS audio engine could not start. Check your audio output device "
+            "and reinstall RadioMaster+ if its BASS files are missing or damaged."
+        )
 
     def crossfade_to(self, url: str, title: str = "", artist: str = "",
-                      duration: float = 0.0, fade_seconds: float = 5.0,
-                      is_live: bool = False) -> None:
-        """Switch to *url* with a real overlapping crossfade against
-        whatever's currently playing, instead of a hard stop/start cut.
+                     duration: float = 0.0, fade_seconds: float = 5.0,
+                     is_live: bool = False) -> None:
+        """Advance using BASS's existing stream switch (no overlap mixing)."""
+        self.play(url, title, artist, duration=duration, is_live=is_live)
 
-        Audio-only: video always hard-cuts (ffplay has no live mixing).
-        Also hard-cuts if nothing is actually playing yet, or fade_seconds
-        is 0 -- nothing to overlap against.
-
-        Two independent LiveAudioEngine instances -- each with its own
-        sounddevice.OutputStream -- play simultaneously for the fade
-        window; WASAPI's shared mode mixes concurrent streams from the
-        same process at the OS level, so no manual PCM mixing is needed
-        here, just opposing volume ramps on each engine.
-        """
-        if self._using_bass_radio or self._is_video_active or fade_seconds <= 0 or self._live.state not in (
-            LiveAudioEngine.STATE_PLAYING, LiveAudioEngine.STATE_BUFFERING
-        ):
-            self.play(url, title, artist, duration=duration, is_live=is_live)
-            return
-
-        self._crossfade_generation += 1
-        generation = self._crossfade_generation
-
-        outgoing = self._live
-        outgoing_start_volume = outgoing.volume
-
-        incoming = LiveAudioEngine()
-        self._wire_live_callbacks(incoming)
-        incoming.set_auto_reconnect(self._auto_reconnect)
-        incoming.set_replaygain_db(self._compute_replaygain(url))
-        incoming.set_volume(0.0)
-        incoming.set_pan(self._pan)
-        incoming.set_rate(self._rate)
-        incoming.play(url, title, artist, duration)
-
-        self._live = incoming
-        self._current_url = url
-        self._current_title = title
-        self._current_artist = artist
-        self._duration = duration
-        self._reconnect_attempts = 0
-
-        target_volume = self._volume
-        threading.Thread(
-            target=self._run_crossfade_ramp,
-            args=(generation, outgoing, incoming, outgoing_start_volume, target_volume, fade_seconds),
-            daemon=True,
-        ).start()
-
-    def _run_crossfade_ramp(self, generation: int, outgoing: LiveAudioEngine, incoming: LiveAudioEngine,
-                             outgoing_start_volume: float, target_volume: float, fade_seconds: float) -> None:
-        steps = max(1, int(fade_seconds * 20))  # ~20 volume updates/sec
-        for i in range(1, steps + 1):
-            if generation != self._crossfade_generation:
-                # Superseded by a newer play()/crossfade_to() call -- stop
-                # ramping (whatever superseded this owns the volume now)
-                # but still tear down our own outgoing stream below, or
-                # it would keep playing forever in the background.
-                break
-            t = i / steps
-            incoming.set_volume(target_volume * t)
-            outgoing.set_volume(outgoing_start_volume * (1 - t))
-            time.sleep(fade_seconds / steps)
-        outgoing.stop()
 
     def set_replaygain_mode(self, mode: str) -> None:
         """Set ReplayGain mode: "none", "track", or "album"."""
@@ -301,8 +209,6 @@ class PlaybackEngine:
             elif self._using_bass_radio and self._bass_radio:
                 effective = min(2.0, self._volume * (10.0 ** (self._replaygain_db / 20.0)))
                 self._bass_radio.set_volume(effective)
-            else:
-                self._live.set_replaygain_db(self._replaygain_db)
 
     def _compute_replaygain(self, url: str) -> float:
         """ReplayGain only makes sense for local files with tags -- radio
@@ -316,15 +222,10 @@ class PlaybackEngine:
         """Stop playback. Stops whichever backend might be active -- each
         call is a safe no-op on the backend that wasn't in use.
 
-        *wait=False* (app shutdown only) skips blocking waits on both
-        backends -- see LiveAudioEngine.stop()'s docstring for why a slow
-        EVT_CLOSE handler mattered enough to break the installer's
-        close-running-app detection."""
-        self._crossfade_generation += 1  # let any in-flight ramp exit early
+        *wait=False* skips process waits during application shutdown."""
         if self._bass_radio:
             self._bass_radio.stop(wait=wait)
         self._using_bass_radio = False
-        self._live.stop(wait=wait)
 
         self._monitor_running = False
         with self._restart_lock:
@@ -342,10 +243,6 @@ class PlaybackEngine:
             if self._volume_timer is not None:
                 self._volume_timer.cancel()
                 self._volume_timer = None
-        with self._rate_lock:
-            if self._rate_timer is not None:
-                self._rate_timer.cancel()
-                self._rate_timer = None
         if self._process:
             try:
                 self._process.terminate()
@@ -374,7 +271,6 @@ class PlaybackEngine:
             self._bass_radio.pause()
             return
         if not self._is_video_active:
-            self._live.pause()
             return
         if self._process and self._state == self.STATE_PLAYING:
             # FFplay: 'p' or Space toggles pause via stdin
@@ -388,7 +284,6 @@ class PlaybackEngine:
             self._bass_radio.resume()
             return
         if not self._is_video_active:
-            self._live.resume()
             return
         if self._process and self._state == self.STATE_PAUSED:
             self._send_ffplay_key("p")
@@ -410,7 +305,6 @@ class PlaybackEngine:
             self._bass_radio.seek(position_seconds)
             return
         if not self._is_video_active:
-            self._live.seek(position_seconds)
             return
         # FFplay: 's' + seconds + '\n' seeks to absolute position
         self._send_ffplay_key(f"s{position_seconds}\n")
@@ -420,8 +314,7 @@ class PlaybackEngine:
     # short debounce collapses each burst to one WASAPI call instead of one
     # per tick -- much shorter than RESTART_DEBOUNCE_SECONDS since setting
     # a session volume is cheap and doesn't touch the ffplay process at all.
-    # (Video-only backstop: LiveAudioEngine applies volume as a direct
-    # numpy gain, no debounce needed there at all.)
+    # BASS receives audio volume changes directly without this debounce.
     VOLUME_DEBOUNCE_SECONDS = 0.08
 
     def set_volume(self, volume: float) -> None:
@@ -432,7 +325,6 @@ class PlaybackEngine:
             self._bass_radio.set_volume(effective)
             return
         if not self._is_video_active:
-            self._live.set_volume(self._volume)
             return
         if self._process is None:
             return
@@ -450,7 +342,7 @@ class PlaybackEngine:
         the same mechanism the Windows Volume Mixer uses per-app, and the
         only way to change a running ffplay's volume without restarting it
         (see utils/session_volume.py for why the old stdin-key approach
-        never worked). Video path only -- LiveAudioEngine handles audio."""
+        never worked). Video path only -- BASS handles audio."""
         process = self._process
         if process is None:
             return
@@ -478,17 +370,6 @@ class PlaybackEngine:
                 return
             time.sleep(delay)
 
-    # Unlike volume/pan (a pure numpy gain multiply, free to apply on every
-    # tick), a rate change rebuilds LiveAudioEngine's filter graph AND
-    # discards its ~4s buffered queue so the new rate is audible right
-    # away (see LiveAudioEngine._drain_queue_for_immediate_effect) --
-    # cheap once, but dragging the rate slider fires this many times a
-    # second, and each call was flushing the buffer and forcing an
-    # audible dropout while the decode thread caught back up over the
-    # network. Debouncing collapses a drag to a single flush after the
-    # user settles, matching the VOLUME_DEBOUNCE_SECONDS pattern above.
-    RATE_DEBOUNCE_SECONDS = 0.25
-
     def set_rate(self, rate: float) -> None:
         """Set playback rate (0.5 to 3.0), applied live for audio."""
         self._rate = max(0.5, min(3.0, rate))
@@ -496,14 +377,6 @@ class PlaybackEngine:
             self._bass_radio.set_rate(self._rate)
             return
         if not self._is_video_active:
-            with self._rate_lock:
-                if self._rate_timer is not None:
-                    self._rate_timer.cancel()
-                self._rate_timer = threading.Timer(
-                    self.RATE_DEBOUNCE_SECONDS, self._live.set_rate, args=(self._rate,)
-                )
-                self._rate_timer.daemon = True
-                self._rate_timer.start()
             return
         if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
             self._schedule_restart()
@@ -515,7 +388,6 @@ class PlaybackEngine:
             self._bass_radio.set_pan(self._pan)
             return
         if not self._is_video_active:
-            self._live.set_pan(self._pan)
             return
         if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
             self._schedule_restart()
@@ -525,15 +397,13 @@ class PlaybackEngine:
         _MAX_RECONNECT_ATTEMPTS times. Never applies to finite-duration
         media (local files, on-demand URLs) reaching a normal end."""
         self._auto_reconnect = enabled
-        self._live.set_auto_reconnect(enabled)
 
     def set_reconnect_settings(self, max_attempts: int, interval: float) -> None:
         """Configure the reconnect-attempt budget and delay between
         attempts for both backends (video/ffplay here, audio via
-        LiveAudioEngine)."""
+        BASS)."""
         self._MAX_RECONNECT_ATTEMPTS = max(1, max_attempts)
         self._reconnect_interval = max(0.5, interval)
-        self._live.set_reconnect_settings(max_attempts, interval)
 
     def set_output_device(self, device_name: str) -> None:
         """Set the audio output device by name (see utils/audio_devices.py),
@@ -547,14 +417,11 @@ class PlaybackEngine:
             if self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
                 self._schedule_restart()
             return
-        index = _resolve_sounddevice_index(device_name) if device_name else None
-        self._live.set_output_device(index)
 
     def toggle_effect(self, effect_id: str, enabled: bool) -> None:
         """Enable or disable an effect."""
         if effect_id in self._effects:
             self._effects[effect_id]["enabled"] = enabled
-            self._live.toggle_effect(effect_id, enabled)
             if self._bass_radio:
                 self._bass_radio.apply_effects(self._effects)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
@@ -569,7 +436,6 @@ class PlaybackEngine:
             self._effects[effect_id]["preset"] = preset_name
             self._effects[effect_id]["params"] = params
             self._effects[effect_id]["enabled"] = True
-            self._live.apply_preset(effect_id, preset_name, params)
             if self._bass_radio:
                 self._bass_radio.apply_effects(self._effects)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
@@ -589,7 +455,6 @@ class PlaybackEngine:
         if effect_id in self._effects:
             self._effects[effect_id]["params"] = params
             self._effects[effect_id]["enabled"] = True
-            self._live.apply_effect_params(effect_id, params)
             if self._bass_radio:
                 self._bass_radio.apply_effects(self._effects)
             self._notify_effects_changed(effect_id)
@@ -601,9 +466,7 @@ class PlaybackEngine:
         the menu's initial checkmarks reflect last session's state.
 
         Deliberately not just an in-place dict update: apply_preset()/
-        toggle_effect() also push the state into the LiveAudioEngine
-        mirror (self._live._effects), which is what actually builds the
-        ffmpeg filter chain.
+        toggle_effect() also update an already-created BASS host.
         """
         for effect_id, state in saved.items():
             if effect_id not in self._effects:
@@ -615,7 +478,7 @@ class PlaybackEngine:
 
     def _schedule_restart(self) -> None:
         """Debounce _restart_with_effects() -- see RESTART_DEBOUNCE_SECONDS.
-        Video-only; audio changes apply live via LiveAudioEngine."""
+        Video-only; audio changes apply live via BASS."""
         with self._restart_lock:
             if self._restart_timer is not None:
                 self._restart_timer.cancel()
@@ -961,7 +824,7 @@ class PlaybackEngine:
                     self._monitor_running = False
                     # This used to auto-reconnect (relaunch a fresh ffplay)
                     # for any duration == 0 (live/unbounded) video the same
-                    # way radio does -- but unlike radio (LiveAudioEngine,
+                    # way radio does -- but unlike radio (BASS,
                     # no window, no user-facing way to stop it except this
                     # engine's own stop()), a video plays in a real ffplay
                     # window the user can close directly: a click anywhere
@@ -983,7 +846,7 @@ class PlaybackEngine:
                     # reliable way left to tell "the stream really died"
                     # apart from "the user just closed it" -- so this no
                     # longer guesses. Radio's own auto-reconnect (Settings
-                    # > Radio > Auto-reconnect, LiveAudioEngine) is a
+                    # > Radio > Auto-reconnect, BASS) is a
                     # completely separate code path and is unaffected.
                     self._state = self.STATE_STOPPED
                     self._notify_state()
@@ -1045,13 +908,13 @@ class PlaybackEngine:
     def position(self) -> float:
         if self._using_bass_radio and self._bass_radio:
             return self._bass_radio.position
-        return self._position if self._is_video_active else self._live.position
+        return self._position
 
     @property
     def duration(self) -> float:
         if self._using_bass_radio:
             return 0.0
-        return self._duration if self._is_video_active else self._live.duration
+        return self._duration
 
     @property
     def volume(self) -> float:
@@ -1097,27 +960,3 @@ class PlaybackEngine:
         if new_pos < 0:
             new_pos = 0
         self.seek(new_pos)
-
-
-def _resolve_sounddevice_index(device_name: str) -> int | None:
-    """Best-effort match of a saved SDL-scheme device name (see
-    utils/audio_devices.py) against sounddevice/PortAudio's own device
-    list, which enumerates and names devices differently. Returns None
-    (system default) if nothing matches closely enough."""
-    try:
-        import sounddevice as sd
-        devices = sd.query_devices()
-    except Exception:
-        return None
-    # Strip the "N- " disambiguation prefix and match on the core name.
-    core = device_name.split("- ", 1)[-1].strip().lower()
-    best_index = None
-    for i, d in enumerate(devices):
-        if d.get("max_output_channels", 0) <= 0:
-            continue
-        name = str(d.get("name", "")).lower()
-        if core and core in name:
-            return i
-        if best_index is None and device_name.strip().lower() in name:
-            best_index = i
-    return best_index

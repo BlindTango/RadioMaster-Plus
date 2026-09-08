@@ -1106,6 +1106,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             may fail. Reported format is a fallback, not a verified measurement. Read
             the status bar as well as the station results and confirm the running version.
 
+            Audio playback requires the bundled Un4seen BASS engine. If it cannot
+            start, check your audio output device and reinstall RadioMaster+ if its
+            BASS files are missing or damaged. There is no backup audio engine.
+            Video playback continues to use the bundled video player.
+
             YouTube playback/download failure: update the YouTube library, check the
             link and connection, then retry. Missing downloaded file: check its configured
             folder and whether it was moved. Failed tasks can be retried from History.

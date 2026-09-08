@@ -105,6 +105,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.83", (
+        "Removed the backup PyAV/sounddevice audio engine. Un4seen BASS remains "
+        "the audio playback engine, with its existing controls and effects. "
+        "If BASS cannot start, playback reports an error instead of selecting "
+        "another audio engine. FFplay remains available for video playback. "
+        "The User Manual includes guidance for BASS startup problems."
+    )),
     ("Version 1.1.82", (
         "Fixed User Manual tree items announcing the generic Help Topics name. "
         "Category and topic items now use their native accessible names, so "
