@@ -51,6 +51,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # empty until then.
         "last_station": {},
     },
+    "audiobooks": {
+        "tts_engine": "sapi5",
+        "tts_voice": "",
+        "tts_rate": 0,
+        "tts_volume": 100,
+    },
     "downloads": {
         "download_path": "",
         "max_concurrent": 3,

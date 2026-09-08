@@ -1,7 +1,6 @@
 """Windows SAPI Text-to-Speech service for reading audiobooks."""
 
 import logging
-import threading
 from typing import Any, Callable
 
 logger = logging.getLogger("radiomaster")
@@ -20,6 +19,7 @@ class SAPITTS:
         self._current_voice: str = ""
         self._text_lines: list[str] = []
         self._current_line: int = 0
+        self._monitor_timer = None
 
         self._on_line_change: Callable[[int], None] | None = None
         self._on_complete: Callable[[], None] | None = None
@@ -58,6 +58,11 @@ class SAPITTS:
         """Get available SAPI voices."""
         return self._voices
 
+    @property
+    def available(self) -> bool:
+        """Whether Windows provided a usable speech engine."""
+        return self._speaker is not None
+
     def set_voice(self, voice_id: str) -> None:
         """Set the active voice."""
         if not self._speaker:
@@ -71,6 +76,7 @@ class SAPITTS:
                     break
         except Exception as e:
             logger.error(f"Failed to set voice: {e}")
+            raise RuntimeError("Windows could not select the requested speech voice.") from e
 
     def set_rate(self, rate: int) -> None:
         """Set speech rate (-10 to 10)."""
@@ -81,6 +87,7 @@ class SAPITTS:
             self._speaker.Rate = self._rate
         except Exception as e:
             logger.error(f"Failed to set rate: {e}")
+            raise RuntimeError("Windows could not set the speech rate.") from e
 
     def set_volume(self, volume: int) -> None:
         """Set speech volume (0 to 100)."""
@@ -91,6 +98,7 @@ class SAPITTS:
             self._speaker.Volume = self._volume
         except Exception as e:
             logger.error(f"Failed to set volume: {e}")
+            raise RuntimeError("Windows could not set the speech volume.") from e
 
     def speak(self, text: str) -> None:
         """Speak text asynchronously."""
@@ -102,7 +110,9 @@ class SAPITTS:
             self._speaker.Speak(text, 1)  # 1 = SVSFlagsAsync
             self._start_monitor()
         except Exception as e:
+            self._is_speaking = False
             logger.error(f"Failed to speak: {e}")
+            raise RuntimeError("Windows could not start text-to-speech.") from e
 
     def speak_lines(self, lines: list[str], start_line: int = 0) -> None:
         """Speak a list of lines, tracking current line."""
@@ -133,6 +143,9 @@ class SAPITTS:
 
     def stop(self) -> None:
         """Stop speech."""
+        if self._monitor_timer is not None:
+            self._monitor_timer.Stop()
+            self._monitor_timer = None
         if not self._speaker:
             return
         try:
@@ -161,27 +174,34 @@ class SAPITTS:
                 self._on_line_change(self._current_line)
 
     def _start_monitor(self) -> None:
-        """Monitor speech completion."""
-        def monitor() -> None:
-            import time
-            while self._is_speaking and self._speaker:
-                try:
-                    if self._speaker.Status.RunningState == 1:  # Finished
-                        self._is_speaking = False
-                        # Auto-advance to next line
-                        if self._text_lines and self._current_line < len(self._text_lines) - 1:
-                            self._current_line += 1
-                            self.speak(self._text_lines[self._current_line])
-                            if self._on_line_change:
-                                self._on_line_change(self._current_line)
-                        elif self._on_complete:
-                            self._on_complete()
-                        break
-                except Exception:
-                    break
-                time.sleep(0.1)
+        """Poll on the UI thread where the SAPI COM object was created."""
+        import wx
 
-        threading.Thread(target=monitor, daemon=True).start()
+        if self._monitor_timer is not None:
+            self._monitor_timer.Stop()
+
+        def monitor() -> None:
+            self._monitor_timer = None
+            if not self._is_speaking or not self._speaker:
+                return
+            try:
+                if self._speaker.Status.RunningState == 1:
+                    self._is_speaking = False
+                    if self._text_lines and self._current_line < len(self._text_lines) - 1:
+                        self._current_line += 1
+                        self.speak(self._text_lines[self._current_line])
+                        if self._on_line_change:
+                            self._on_line_change(self._current_line)
+                    elif self._on_complete:
+                        self._on_complete()
+                    return
+            except Exception as exc:
+                logger.error("Failed to monitor speech: %s", exc)
+                self._is_speaking = False
+                return
+            self._monitor_timer = wx.CallLater(100, monitor)
+
+        self._monitor_timer = wx.CallLater(100, monitor)
 
     def on_line_change(self, cb: Callable[[int], None]) -> None:
         self._on_line_change = cb

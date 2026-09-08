@@ -26,6 +26,7 @@ class AudiobookPanel(wx.Panel):
         self._current_path: str | None = None
         self._current_book_id: int | None = None
         self._resume_position: float = 0.0
+        self._tts = None
         self._setup_ui()
 
         # Periodically persist playback position for the loaded book so
@@ -40,6 +41,8 @@ class AudiobookPanel(wx.Panel):
     def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
         if event.GetEventObject() is self:
             self._save_position()
+            if self._tts is not None:
+                self._tts.stop()
         event.Skip()
 
     def _on_position_timer(self, event: wx.TimerEvent) -> None:
@@ -105,6 +108,12 @@ class AudiobookPanel(wx.Panel):
         self._btn_tts = wx.Button(right_panel, label="Read with TTS")
         set_accessible_name(self._btn_tts, "Read with Text to Speech")
         ctrl_sizer.Add(self._btn_tts, 0, wx.RIGHT, 4)
+
+        self._btn_stop_tts = wx.Button(right_panel, label="Stop TTS")
+        set_accessible_name(self._btn_stop_tts, "Stop Text to Speech")
+        self._btn_stop_tts.Disable()
+        self._btn_stop_tts.Bind(wx.EVT_BUTTON, self._on_stop_tts)
+        ctrl_sizer.Add(self._btn_stop_tts, 0, wx.RIGHT, 4)
 
         self._btn_bookmark = wx.Button(right_panel, label="Add Bookmark")
         set_accessible_name(self._btn_bookmark, "Add Bookmark")
@@ -309,20 +318,31 @@ class AudiobookPanel(wx.Panel):
                                  "No Text", wx.OK | wx.ICON_WARNING)
                     return
                 try:
-                    from radiomaster.services.sapi_tts import SAPITTS
-                    tts = SAPITTS()
-                    tts.speak(text)
+                    from radiomaster.services.audiobook_tts import configured_tts
+                    from radiomaster.utils.config import ConfigManager
+                    if self._tts is not None:
+                        self._tts.stop()
+                    self._tts = configured_tts(ConfigManager.get_instance())
+                    self._tts.on_complete(lambda: self._btn_stop_tts.Disable())
+                    self._tts.speak(text)
+                    self._btn_stop_tts.Enable()
                 except Exception as e:
-                    wx.MessageBox(f"TTS failed: {e}\n\nPlease ensure SAPI is available.",
+                    wx.MessageBox(f"TTS failed: {e}\n\nCheck Settings > Audiobooks.",
                                  "TTS Error", wx.OK | wx.ICON_ERROR)
                     return
         else:
             wx.MessageBox(
-                "SAPI Text-to-Speech reading will start. "
-                "Configure voice and speed in Settings.",
-                "TTS Reading",
+                "This audiobook has no chapter text available for TTS. "
+                "Use Read with TTS with a DAISY chapter containing text. "
+                "Choose its voice in Settings > Audiobooks.",
+                "No Text Available",
                 wx.OK | wx.ICON_INFORMATION,
             )
+
+    def _on_stop_tts(self, event: wx.CommandEvent) -> None:
+        if self._tts is not None:
+            self._tts.stop()
+        self._btn_stop_tts.Disable()
 
     def _on_bookmark(self, event: wx.CommandEvent) -> None:
         """Add a bookmark at the current position."""

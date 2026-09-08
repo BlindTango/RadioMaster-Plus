@@ -525,6 +525,141 @@ class PodcastsPanel(SettingsPanel):
         self.config.set("podcasts.auto_advance", value=self.auto_advance_chk.IsChecked())
 
 
+class AudiobooksPanel(SettingsPanel):
+    title = "Audiobooks"
+
+    def makeSettings(self, sizer: wx.BoxSizer) -> None:
+        from radiomaster.services.audiobook_tts import TTS_ENGINES
+
+        self._preview = None
+        grid = wx.FlexGridSizer(cols=2, hgap=8, vgap=10)
+        grid.AddGrowableCol(1)
+        self._engine_ids = list(TTS_ENGINES)
+        engine_labels = list(TTS_ENGINES.values())
+        saved_engine = self.config.get("audiobooks.tts_engine", default="sapi5")
+        if saved_engine not in self._engine_ids:
+            self._engine_ids.append(saved_engine)
+            engine_labels.append(f"Unavailable engine: {saved_engine}")
+        grid.Add(wx.StaticText(self, label="TTS Engine:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.engine_choice = wx.Choice(self, choices=engine_labels)
+        self.engine_choice.SetMinSize((180, -1))
+        set_accessible_name(self.engine_choice, "Audiobook TTS Engine")
+        self.engine_choice.SetSelection(self._engine_ids.index(saved_engine))
+        grid.Add(self.engine_choice, 0, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Voice:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.voice_choice = wx.Choice(self)
+        self.voice_choice.SetMinSize((180, -1))
+        set_accessible_name(self.voice_choice, "Audiobook TTS Voice")
+        grid.Add(self.voice_choice, 0, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Speech Rate:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.rate_spin = wx.SpinCtrl(self, min=-10, max=10)
+        self.rate_spin.SetValue(self.config.get("audiobooks.tts_rate", default=0))
+        set_accessible_name(self.rate_spin, "Audiobook TTS Speech Rate")
+        grid.Add(self.rate_spin, 0, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self, label="Speech Volume:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.volume_spin = wx.SpinCtrl(self, min=0, max=100)
+        self.volume_spin.SetValue(self.config.get("audiobooks.tts_volume", default=100))
+        set_accessible_name(self.volume_spin, "Audiobook TTS Speech Volume")
+        grid.Add(self.volume_spin, 0, wx.EXPAND)
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 5)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        self.preview_btn = wx.Button(self, label="&Preview Voice")
+        self.stop_preview_btn = wx.Button(self, label="Stop Pre&view")
+        self.stop_preview_btn.Disable()
+        buttons.Add(self.preview_btn, 0, wx.RIGHT, 5)
+        buttons.Add(self.stop_preview_btn, 0)
+        sizer.Add(buttons, 0, wx.ALL, 5)
+        self.voice_status = wx.StaticText(self, label="")
+        sizer.Add(self.voice_status, 0, wx.EXPAND | wx.ALL, 5)
+        info = wx.StaticText(self, label=(
+            "Windows SAPI 5 uses installed voices. Rate: -10 to 10 (0 is normal). "
+            "Volume: 0 to 100. Preview does not save. Apply or OK saves your "
+            "choices for the next Read with TTS. These settings apply to book text."
+        ))
+        info.Wrap(300)
+        sizer.Add(info, 0, wx.ALL, 5)
+        self.engine_choice.Bind(wx.EVT_CHOICE, self._on_engine_changed)
+        self.preview_btn.Bind(wx.EVT_BUTTON, self._on_preview)
+        self.stop_preview_btn.Bind(wx.EVT_BUTTON, lambda event: self._stop_preview())
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
+        self._load_voices(self.config.get("audiobooks.tts_voice", default=""))
+
+    def _load_voices(self, saved_voice: str) -> None:
+        from radiomaster.services.audiobook_tts import create_tts
+
+        self._voice_ids = [""]
+        labels = ["System default voice"]
+        available = False
+        try:
+            engine = create_tts(self._engine_ids[self.engine_choice.GetSelection()])
+            voices = engine.get_voices()
+            self._voice_ids.extend(voice["id"] for voice in voices)
+            labels.extend(voice["name"] for voice in voices)
+            available = bool(voices)
+            message = "" if available else "No SAPI 5 voices are available. Install a compatible voice and reopen Settings."
+        except (ValueError, RuntimeError) as exc:
+            message = str(exc)
+        if saved_voice not in self._voice_ids:
+            self._voice_ids.append(saved_voice)
+            labels.append("Unavailable voice (saved selection)")
+            message = "Your saved voice is unavailable. Select an installed voice or System default voice."
+        self.voice_choice.SetItems(labels)
+        self.voice_choice.SetSelection(self._voice_ids.index(saved_voice))
+        self.voice_choice.Enable(available)
+        self.preview_btn.Enable(available)
+        self.voice_status.SetLabel(message)
+        self.voice_status.Wrap(300)
+        self.Layout()
+
+    def _on_engine_changed(self, event: wx.CommandEvent) -> None:
+        self._stop_preview()
+        self._load_voices("")
+
+    def _on_preview(self, event: wx.CommandEvent) -> None:
+        from radiomaster.services.audiobook_tts import configure_tts, create_tts
+
+        self._stop_preview()
+        try:
+            self._preview = create_tts(self._engine_ids[self.engine_choice.GetSelection()])
+            configure_tts(self._preview, self._voice_ids[self.voice_choice.GetSelection()],
+                          self.rate_spin.GetValue(), self.volume_spin.GetValue())
+            self._preview.on_complete(self._stop_preview)
+            self._preview.speak("This is the voice selected for reading audiobooks in RadioMaster Plus.")
+            self.stop_preview_btn.Enable()
+        except (ValueError, RuntimeError) as exc:
+            self._stop_preview()
+            wx.MessageBox(str(exc), "Voice Preview", wx.OK | wx.ICON_ERROR, self)
+
+    def _stop_preview(self) -> None:
+        if self._preview is not None:
+            self._preview.stop()
+            self._preview = None
+        self.stop_preview_btn.Disable()
+
+    def onSave(self) -> None:
+        self._stop_preview()
+        self.config.set("audiobooks.tts_engine", value=self._engine_ids[self.engine_choice.GetSelection()])
+        self.config.set("audiobooks.tts_voice", value=self._voice_ids[self.voice_choice.GetSelection()])
+        self.config.set("audiobooks.tts_rate", value=self.rate_spin.GetValue())
+        self.config.set("audiobooks.tts_volume", value=self.volume_spin.GetValue())
+
+    def onPanelDeactivated(self) -> None:
+        self._stop_preview()
+        super().onPanelDeactivated()
+
+    def onDiscard(self) -> None:
+        self._stop_preview()
+
+    def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
+        if event.GetEventObject() is self:
+            self._stop_preview()
+        event.Skip()
+
+
 class DownloadsPanel(SettingsPanel):
     title = "Downloads"
 
@@ -992,6 +1127,7 @@ class SettingsDialog(wx.Dialog):
         PlaybackPanel,
         RadioPanel,
         PodcastsPanel,
+        AudiobooksPanel,
         DownloadsPanel,
         RecordingsPanel,
         NetworkPanel,

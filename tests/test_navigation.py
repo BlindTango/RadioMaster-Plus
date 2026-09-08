@@ -122,8 +122,11 @@ class TestHelpSystem:
                 child, cookie = tree.GetNextChild(dlg._root, cookie)
             # ...and the expected categories appear in order.
             assert categories == [
-                "Getting Started", "Tabs and Panels", "Playback and Effects",
-                "Tools", "Settings and Accessibility", "System and Maintenance",
+                "Getting Started", "Navigation and Playback", "Internet Radio",
+                "Station Health", "Podcasts", "Audiobooks", "Local Media", "YouTube",
+                "Downloads and Saved Files", "Recording and Scheduling", "Audio Effects",
+                "Additional Tools", "Settings", "Accessibility and Customization",
+                "Updates, Storage, and Troubleshooting",
             ]
             # Every topic appears exactly once under some category, and
             # selecting it shows its content.
@@ -383,8 +386,8 @@ class TestDownloadsSettings:
 
         dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
         try:
-            dlg._switch_to(4)
-            panel = dlg._panel_map[4]
+            dlg._switch_to(5)
+            panel = dlg._panel_map[5]
             assert panel.download_path_txt.GetName() == "Download Location"
             assert panel.max_concurrent_spin.GetName() == "Maximum Concurrent Downloads"
             assert panel.format_combo.GetName() == "Audio Format"
@@ -464,8 +467,8 @@ class TestRecordingsSettings:
 
         dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
         try:
-            dlg._switch_to(5)
-            panel = dlg._panel_map[5]
+            dlg._switch_to(6)
+            panel = dlg._panel_map[6]
             assert panel.recording_path_txt.GetName() == "Recording Location"
             assert panel.rec_format_combo.GetName() == "Recording Format"
             assert panel.rec_quality_combo.GetName() == "Recording Quality"
@@ -511,8 +514,8 @@ class TestNetworkSettings:
 
         dlg = SettingsDialog(win, win._config, theme_manager=win._theme_manager)
         try:
-            dlg._switch_to(6)
-            panel = dlg._panel_map[6]
+            dlg._switch_to(7)
+            panel = dlg._panel_map[7]
             assert panel.proxy_host_txt.GetName() == "Proxy Host"
             assert panel.proxy_port_spin.GetName() == "Proxy Port"
             assert panel.timeout_spin.GetName() == "Connection Timeout in seconds"
@@ -555,8 +558,8 @@ class TestAccessibilitySettings:
             on_apply=win._apply_settings_changes,
         )
         try:
-            dlg._switch_to(7)
-            panel = dlg._panel_map[7]
+            dlg._switch_to(8)
+            panel = dlg._panel_map[8]
             assert panel.high_contrast_chk.GetLabelText() == (
                 "Use black and white high contrast colors"
             )
@@ -674,8 +677,8 @@ class TestAdvancedSettings:
         original_auto = win._config.get("updates.ytdlp_auto_update", default=True)
         dlg = SettingsDialog(win, win._config, on_apply=win._apply_settings_changes)
         try:
-            dlg._switch_to(8)
-            panel = dlg._panel_map[8]
+            dlg._switch_to(9)
+            panel = dlg._panel_map[9]
             assert panel.logging_combo.GetName() == "Logging Level"
             assert panel._log_level_values == ["off", "info", "debug", "io"]
 
