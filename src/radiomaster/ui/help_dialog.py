@@ -17,6 +17,63 @@ def _key(action: str) -> str:
     return f"{{shortcut:{action}}}"
 
 
+# Category grouping for the User Manual's tree view: topic title ->
+# category. Topics not listed here land in "General". The order of
+# _CATEGORY_ORDER is the order categories appear in the tree. Only
+# USER_MANUAL_TOPICS titles are mapped -- Quick Start and Release
+# Notes pass their own topic lists through the same dialog, and their
+# titles must all stay unmapped so they take the flat fallback.
+_TOPIC_CATEGORIES: dict[str, str] = {
+    "Welcome and Overview": "Getting Started",
+    "Main Window and Menus": "Getting Started",
+    "Step by Step: Play Your First Station": "Getting Started",
+    "Step by Step: Record a Station": "Getting Started",
+    "Step by Step: Subscribe to a Podcast": "Getting Started",
+    "Step by Step: Download a YouTube Video": "Getting Started",
+    "Step by Step: Read/Listen to an Audiobook": "Getting Started",
+
+    "Radio Tab": "Tabs and Panels",
+    "Podcasts Tab": "Tabs and Panels",
+    "Audiobooks Tab": "Tabs and Panels",
+    "Media Player Tab": "Tabs and Panels",
+    "YouTube Tab": "Tabs and Panels",
+    "Downloads Tab": "Tabs and Panels",
+    "Scheduler Tab": "Tabs and Panels",
+    "Station Health Check": "Tabs and Panels",
+
+    "Transport Bar & Playback Controls": "Playback and Effects",
+    "Crossfade": "Playback and Effects",
+    "The Effects Menu": "Playback and Effects",
+
+    "Recording Scheduler": "Tools",
+    "Downloads": "Tools",
+    "Lyrics Panel": "Tools",
+    "Track Identifier and Track Splitter": "Tools",
+    "Sleep Timer": "Tools",
+    "Keyboard Shortcuts": "Tools",
+    "Default Keyboard Navigation": "Tools",
+
+    "Settings": "Settings and Accessibility",
+    "Accessibility Notes": "Settings and Accessibility",
+
+    "Checking for Updates": "System and Maintenance",
+    "Portable Mode": "System and Maintenance",
+    "Files, Storage, and Backups": "System and Maintenance",
+    "Troubleshooting": "System and Maintenance",
+    "Hardware & System Requirements": "System and Maintenance",
+}
+
+_CATEGORY_ORDER: list[str] = [
+    "Getting Started",
+    "Tabs and Panels",
+    "Playback and Effects",
+    "Tools",
+    "Settings and Accessibility",
+    "System and Maintenance",
+    "General",
+]
+
+
 def render_help_topics(topics: list[tuple[str, str]], config) -> list[tuple[str, str]]:
     """Resolve shortcut markers from the same catalogue used by MainWindow."""
     from radiomaster.ui.shortcut_editor import format_shortcut, load_shortcuts
@@ -279,7 +336,8 @@ USER_MANUAL_TOPICS: list[tuple[str, str]] = [
     ("Downloads", (
         f"The Downloads tab ({_key('panel_downloads')}) shows every queued, in-progress, and completed "
         "download from Podcasts and YouTube in one place, with pause/resume and "
-        "history. Download location, format, and metadata embedding are configured "
+        "history. Download location, format, metadata embedding, and how many "
+        "Download History entries to show (-1 for unlimited) are configured "
         "in Settings > Downloads."
     )),
     ("Lyrics Panel", (
@@ -475,6 +533,19 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.80", (
+        "The User Manual's topic list is now a tree: Getting Started, Tabs and "
+        "Panels, Playback and Effects, Tools, Settings and Accessibility, and "
+        "System and Maintenance appear as expandable branches with the "
+        "individual topics as their children, so related topics sit together "
+        "instead of one long flat list. The Quick Start Guide and Release Notes "
+        "keep their flat lists. Arrows walk the tree, Right or Enter expands a "
+        "branch, and selecting a topic shows its content as before.\n\n"
+        "Download History on the Downloads tab now honors a configurable entry "
+        "count: Settings > Downloads adds Download History entries to show, "
+        "which accepts -1 for unlimited. The previous fixed 50-entry cap hid "
+        "older downloads with no way to see them."
+    )),
     ("Version 1.1.79", (
         "Fixed the Station Health Check freezing the interface during a scan. "
         "The results list now appends only newly found problem stations instead "
@@ -703,6 +774,18 @@ RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
 
 
 class HelpDialog(wx.Dialog):
+    """Topic tree + read-only content pane.
+
+    The topic list is a wx.TreeCtrl: categories (Getting Started, Tabs
+    and Panels, ...) as expandable branches with the individual topics
+    as their children -- a flat list made every topic sit at the same
+    level with no structure to navigate by, which for a screen-reader
+    user meant arrowing through 30+ unrelated titles to find one
+    section. The tree keeps the same keyboard model (arrows walk it,
+    Enter expands/collapses a branch or opens a topic) and adds
+    Left/Right to collapse/expand, with the accessible name unchanged.
+    """
+
     def __init__(self, parent: wx.Window, *, title: str = "RadioMaster+ User Manual",
                  topics: list[tuple[str, str]] | None = None, config=None) -> None:
         super().__init__(parent, title=title,
@@ -714,8 +797,16 @@ class HelpDialog(wx.Dialog):
         )
 
         topics_label = wx.StaticText(self, label="&Topics:")
-        self.topic_list = wx.ListBox(self, choices=[topic for topic, _ in self._topics])
-        set_accessible_name(self.topic_list, "Help Topics")
+        # TR_HIDE_ROOT + a single invisible root item: the categories
+        # appear as top-level branches without an artificial "All" node
+        # above them. TR_TWIST_BUTTONS adds the +/- glyphs sighted users
+        # expect; keyboard users expand with Right/Enter.
+        self.topic_tree = wx.TreeCtrl(
+            self, style=wx.TR_HIDE_ROOT | wx.TR_TWIST_BUTTONS
+            | wx.TR_LINES_AT_ROOT | wx.TR_SINGLE,
+        )
+        set_accessible_name(self.topic_tree, "Help Topics")
+        self._build_tree()
 
         content_label = wx.StaticText(self, label="Content:")
         self.content = wx.TextCtrl(
@@ -727,7 +818,7 @@ class HelpDialog(wx.Dialog):
 
         left = wx.BoxSizer(wx.VERTICAL)
         left.Add(topics_label, 0, wx.BOTTOM, 4)
-        left.Add(self.topic_list, 1, wx.EXPAND)
+        left.Add(self.topic_tree, 1, wx.EXPAND)
 
         right = wx.BoxSizer(wx.VERTICAL)
         right.Add(content_label, 0, wx.BOTTOM, 4)
@@ -742,22 +833,84 @@ class HelpDialog(wx.Dialog):
         outer.Add(close_btn, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10)
         self.SetSizer(outer)
 
-        self.topic_list.Bind(wx.EVT_LISTBOX, self._on_topic_selected)
+        self.topic_tree.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_topic_selected)
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK))
 
-        self.topic_list.SetSelection(0)
-        self._show_topic(0)
+        # Select the first topic so the content pane starts populated,
+        # exactly like the old list did with its SetSelection(0) --
+        # walking down from the root finds the first topic-bearing item
+        # in either tree shape (categorized or flat fallback).
+        item = self.topic_tree.GetFirstChild(self._root)[0]
+        while item.IsOk() and self.topic_tree.GetItemData(item) is None:
+            item = self.topic_tree.GetFirstChild(item)[0]
+        if item.IsOk():
+            self.topic_tree.SelectItem(item)
         # A plain SetFocus() here gets overridden once ShowModal() gives the
         # default (Close) button initial focus -- EVT_INIT_DIALOG fires
         # after that, so setting focus there sticks.
         self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
 
+    def _build_tree(self) -> None:
+        """Group the flat topic list into category branches. Topics are
+        stored in tree item data as their index into self._topics, so
+        selection maps straight back to the content.
+
+        When every topic maps to the same category (Quick Start's five
+        topics, Release Notes' version entries -- neither has a
+        meaningful grouping), the category layer is skipped and topics
+        sit at the top level, exactly like the old flat list."""
+        self._root = self.topic_tree.AddRoot("Topics")
+        categories_used = {
+            _TOPIC_CATEGORIES.get(topic_title, "General")
+            for topic_title, _body in self._topics
+        }
+        if len(categories_used) <= 1:
+            for index, (topic_title, _body) in enumerate(self._topics):
+                self.topic_tree.AppendItem(self._root, topic_title, data=index)
+            return
+        # category name -> tree item, created lazily in _CATEGORY_ORDER
+        # so the tree shows the intended order, not insertion order.
+        category_items: dict[str, wx.TreeItemId] = {}
+        for category in _CATEGORY_ORDER:
+            if category in categories_used:
+                category_items[category] = self.topic_tree.AppendItem(
+                    self._root, category,
+                )
+        for index, (topic_title, _body) in enumerate(self._topics):
+            category = _TOPIC_CATEGORIES.get(topic_title, "General")
+            item = category_items.get(category)
+            if item is None:
+                # A category not in _CATEGORY_ORDER (shouldn't happen,
+                # but a new topic must never silently vanish).
+                item = self.topic_tree.AppendItem(self._root, category)
+                category_items[category] = item
+            self.topic_tree.AppendItem(item, topic_title, data=index)
+        # Expand everything: the whole point is seeing the structure,
+        # and collapsed branches hide topics from arrow-key navigation
+        # until expanded (a screen-reader user shouldn't have to guess
+        # a branch needs opening).
+        for category_item in category_items.values():
+            self.topic_tree.Expand(category_item)
+
     def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
         event.Skip()
-        self.topic_list.SetFocus()
+        self.topic_tree.SetFocus()
 
-    def _on_topic_selected(self, event: wx.CommandEvent) -> None:
-        self._show_topic(self.topic_list.GetSelection())
+    def _on_topic_selected(self, event: wx.TreeEvent) -> None:
+        # The tree fires SEL_CHANGED during Destroy() teardown (the
+        # selection is cleared) -- by then the C++ peer is gone and any
+        # query on it raises. Skip events once the tree is dead.
+        if not self.topic_tree:
+            event.Skip()
+            return
+        item = event.GetItem()
+        if not item.IsOk():
+            return
+        data = self.topic_tree.GetItemData(item)
+        # Category branches carry no data -- selecting one just leaves
+        # the current content in place (the old list had no such rows).
+        if data is not None:
+            self._show_topic(data)
 
     def _show_topic(self, index: int) -> None:
         if 0 <= index < len(self._topics):

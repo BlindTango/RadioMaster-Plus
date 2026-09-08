@@ -586,6 +586,22 @@ class DownloadsPanel(SettingsPanel):
         self.embed_artwork_chk.SetValue(self.config.get("downloads.embed_artwork", default=True))
         sizer.Add(self.embed_artwork_chk, 0, wx.ALL, 5)
 
+        sizer.Add(
+            wx.StaticText(
+                self,
+                label="Download History entries to show (-1 for unlimited):",
+            ),
+            0, wx.ALL, 5,
+        )
+        self.history_limit_spin = wx.SpinCtrl(
+            self, value=str(self.config.get("downloads.history_limit", default=50)),
+            min=-1, max=10000,
+        )
+        set_accessible_name(
+            self.history_limit_spin, "Download History entries to show, minus 1 for unlimited"
+        )
+        sizer.Add(self.history_limit_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
     def _browse(self, ctrl: wx.TextCtrl) -> None:
         dlg = wx.DirDialog(self, "Choose directory", ctrl.GetValue())
         if dlg.ShowModal() == wx.ID_OK:
@@ -605,6 +621,7 @@ class DownloadsPanel(SettingsPanel):
         self.config.set("downloads.audio_quality", value=self.quality_combo.GetStringSelection())
         self.config.set("downloads.embed_metadata", value=self.embed_metadata_chk.IsChecked())
         self.config.set("downloads.embed_artwork", value=self.embed_artwork_chk.IsChecked())
+        self.config.set("downloads.history_limit", value=self.history_limit_spin.GetValue())
 
 
 class RecordingsPanel(SettingsPanel):

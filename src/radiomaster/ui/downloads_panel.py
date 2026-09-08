@@ -56,6 +56,21 @@ class DownloadsPanel(wx.Panel):
             self._refresh_timer.Stop()
         event.Skip()
 
+    @staticmethod
+    def _history_limit() -> int:
+        """How many Download History rows to show, from Settings >
+        Downloads (downloads.history_limit). -1 means unlimited (all
+        completed/failed rows); the default is 50."""
+        from radiomaster.utils.config import ConfigManager
+        try:
+            value = int(ConfigManager.get_instance().get(
+                "downloads.history_limit", default=50))
+        except (TypeError, ValueError):
+            return 50
+        if value < 0:
+            return -1  # SQLite: LIMIT -1 = no limit
+        return max(1, value)
+
     def _setup_ui(self) -> None:
         """Create the downloads panel layout."""
         main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -184,8 +199,14 @@ class DownloadsPanel(wx.Panel):
 
         # History (completed/failed downloads) -- refreshed the same
         # cautious way, though it changes far less often than progress.
+        # The row cap is configurable (Settings > Downloads > Download
+        # History entries, default 50) -- a hardcoded 50 hid older
+        # entries with no way to see them.
+        history_limit = self._history_limit()
         new_history = self._db.fetchall(
-            "SELECT * FROM downloads WHERE status IN ('completed', 'failed') ORDER BY id DESC LIMIT 50"
+            "SELECT * FROM downloads WHERE status IN ('completed', 'failed') "
+            "ORDER BY id DESC LIMIT ?",
+            (history_limit,),
         )
         history_same = (
             self._history_list.GetItemCount() == len(new_history)

@@ -94,6 +94,85 @@ class TestHelpSystem:
         from radiomaster import __version__
         assert RELEASE_NOTES_TOPICS[0][0] == f"Version {__version__}"
 
+    def test_user_manual_topic_tree_groups_topics_into_categories(
+        self, app_and_window
+    ) -> None:
+        """The User Manual's topic list is a tree: category branches
+        (Getting Started, Tabs and Panels, ...) with the individual
+        topics as children -- a flat list made a screen-reader user
+        arrow through 30+ unrelated titles with no structure. Quick
+        Start and Release Notes keep the flat shape (their topics have
+        no meaningful grouping)."""
+        from radiomaster.ui.help_dialog import (
+            HelpDialog, QUICK_START_TOPICS, RELEASE_NOTES_TOPICS,
+        )
+
+        _app, win = app_and_window
+        dlg = HelpDialog(win, topics=USER_MANUAL_TOPICS)
+        try:
+            tree = dlg.topic_tree
+            # Every top-level item is a category branch (no topic data)...
+            child, cookie = tree.GetFirstChild(dlg._root)
+            categories = []
+            while child.IsOk():
+                assert tree.GetItemData(child) is None, (
+                    "top-level items must be categories, not topics"
+                )
+                categories.append(tree.GetItemText(child))
+                child, cookie = tree.GetNextChild(dlg._root, cookie)
+            # ...and the expected categories appear in order.
+            assert categories == [
+                "Getting Started", "Tabs and Panels", "Playback and Effects",
+                "Tools", "Settings and Accessibility", "System and Maintenance",
+            ]
+            # Every topic appears exactly once under some category, and
+            # selecting it shows its content.
+            seen_titles = set()
+            for category in categories:
+                cat_item, _ = tree.GetFirstChild(dlg._root)
+                # walk to this category's item
+                target = None
+                scan, cookie2 = tree.GetFirstChild(dlg._root)
+                while scan.IsOk():
+                    if tree.GetItemText(scan) == category:
+                        target = scan
+                        break
+                    scan, cookie2 = tree.GetNextChild(dlg._root, cookie2)
+                topic, cookie3 = tree.GetFirstChild(target)
+                while topic.IsOk():
+                    index = tree.GetItemData(topic)
+                    assert isinstance(index, int)
+                    title, _body = dlg._topics[index]
+                    seen_titles.add(title)
+                    topic, cookie3 = tree.GetNextChild(target, cookie3)
+            assert seen_titles == {t for t, _ in USER_MANUAL_TOPICS}
+            # Selecting a topic updates the content pane.
+            first_cat = tree.GetFirstChild(dlg._root)[0]
+            first_topic = tree.GetFirstChild(first_cat)[0]
+            tree.SelectItem(first_topic)
+            expected_title = USER_MANUAL_TOPICS[tree.GetItemData(first_topic)][0]
+            assert dlg.content.GetValue().startswith(expected_title)
+        finally:
+            dlg.Destroy()
+
+        # Quick Start and Release Notes: flat (topics at top level).
+        for name, topics in (("Quick Start", QUICK_START_TOPICS),
+                             ("Release Notes", RELEASE_NOTES_TOPICS)):
+            dlg2 = HelpDialog(win, title=name, topics=topics)
+            try:
+                child, cookie = dlg2.topic_tree.GetFirstChild(dlg2._root)
+                top_titles = []
+                while child.IsOk():
+                    # Flat shape: every top-level item IS a topic (has data).
+                    assert dlg2.topic_tree.GetItemData(child) is not None, (
+                        f"{name} should stay flat, not gain categories"
+                    )
+                    top_titles.append(dlg2.topic_tree.GetItemText(child))
+                    child, cookie = dlg2.topic_tree.GetNextChild(dlg2._root, cookie)
+                assert top_titles == [t for t, _ in topics]
+            finally:
+                dlg2.Destroy()
+
 
 class TestPanelControls:
     def test_startup_settings_skip_duplicate_panel_refreshes(self, app_and_window) -> None:
@@ -310,11 +389,49 @@ class TestDownloadsSettings:
             assert panel.max_concurrent_spin.GetName() == "Maximum Concurrent Downloads"
             assert panel.format_combo.GetName() == "Audio Format"
             assert panel.quality_combo.GetName() == "Audio Quality"
+            assert panel.history_limit_spin.GetName() == (
+                "Download History entries to show, minus 1 for unlimited"
+            )
             assert panel.format_combo.GetItems() == [
                 item.upper() for item in win._youtube_panel._audio_format_choices
             ]
         finally:
             dlg.Destroy()
+
+    def test_history_limit_setting_drives_downloads_panel_query(
+        self, app_and_window
+    ) -> None:
+        """The Download History row cap must come from
+        downloads.history_limit: -1 means unlimited (all rows), a
+        positive value caps, and the Downloads panel's query honors it
+        without needing a restart."""
+        _app, win = app_and_window
+        from radiomaster.ui.downloads_panel import DownloadsPanel
+
+        original = win._config.get("downloads.history_limit", default=50)
+        try:
+            # Default: 50
+            assert DownloadsPanel._history_limit() == 50
+            # Unlimited: -1 passes through as SQLite's "no limit"
+            win._config.set("downloads.history_limit", value=-1)
+            assert DownloadsPanel._history_limit() == -1
+            # Positive caps, and junk falls back to the default
+            win._config.set("downloads.history_limit", value=500)
+            assert DownloadsPanel._history_limit() == 500
+            win._config.set("downloads.history_limit", value="not-a-number")
+            assert DownloadsPanel._history_limit() == 50
+            # The panel's actual query honors it: with -1, every
+            # completed/failed row in the real DB is returned.
+            win._config.set("downloads.history_limit", value=-1)
+            total = win._downloads_panel._db.fetchone(
+                "SELECT COUNT(*) AS n FROM downloads "
+                "WHERE status IN ('completed', 'failed')"
+            )["n"]
+            win._downloads_panel._load_data()
+            assert win._downloads_panel._history_list.GetItemCount() == total
+        finally:
+            win._config.set("downloads.history_limit", value=original)
+            win._downloads_panel._load_data()
 
     def test_live_apply_updates_manager_and_youtube_format(self, app_and_window) -> None:
         app, win = app_and_window
