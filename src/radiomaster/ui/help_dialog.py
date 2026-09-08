@@ -105,6 +105,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.82", (
+        "Fixed User Manual tree items announcing the generic Help Topics name. "
+        "Category and topic items now use their native accessible names, so "
+        "screen readers can announce the actual category or topic title. "
+        "The accessibility naming helper now limits custom names to the control "
+        "itself and preserves native names for child items."
+    )),
     ("Version 1.1.81", (
         "Settings now includes an Audiobooks category with Windows SAPI 5 engine "
         "and installed voice selection, speech rate, volume, and voice preview. "

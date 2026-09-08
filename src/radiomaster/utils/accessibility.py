@@ -11,7 +11,12 @@ class _NamedAccessible(wx.Accessible):
         self._name = name
 
     def GetName(self, childId):
-        return (wx.ACC_OK, self._name)
+        if childId == wx.ACC_SELF:
+            return (wx.ACC_OK, self._name)
+        # Native composite controls expose their rows/items as child IDs.
+        # Let the platform supply those names instead of replacing every
+        # tree topic or list row with the container's accessible name.
+        return (wx.ACC_NOT_IMPLEMENTED, "")
 
     def set_name(self, name: str) -> None:
         self._name = name

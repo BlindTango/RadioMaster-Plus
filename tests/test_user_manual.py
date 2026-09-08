@@ -56,6 +56,12 @@ def test_manual_dialog_category_overview_and_topic_selection():
     dialog = HelpDialog(frame)
     try:
         tree = dialog.topic_tree
+        accessible = tree.GetAccessible()
+        assert accessible.GetName(wx.ACC_SELF) == (wx.ACC_OK, "Help Topics")
+        # Child IDs belong to the native tree accessibility provider. The
+        # naming helper must defer to it for category and topic names.
+        for child_id in (1, 2, 100):
+            assert accessible.GetName(child_id) == (wx.ACC_NOT_IMPLEMENTED, "")
         category, cookie = tree.GetFirstChild(dialog._root)
         seen = []
         for expected_category, topics in MANUAL_SECTIONS:
