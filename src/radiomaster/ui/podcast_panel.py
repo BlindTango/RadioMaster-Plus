@@ -139,9 +139,11 @@ class PodcastPanel(wx.Panel):
         col2_sizer.Add(self._podcast_list, 1, wx.EXPAND | wx.ALL, 4)
         sub_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._btn_subscribe = wx.Button(col2, label="Su&bscribe")
+        self._btn_subscribe.Disable()
         set_accessible_name(self._btn_subscribe, "Subscribe to selected podcast")
         sub_btn_sizer.Add(self._btn_subscribe, 1, wx.RIGHT, 2)
         self._btn_unsubscribe = wx.Button(col2, label="&Unsubscribe")
+        self._btn_unsubscribe.Disable()
         set_accessible_name(self._btn_unsubscribe, "Unsubscribe from selected podcast")
         sub_btn_sizer.Add(self._btn_unsubscribe, 1, wx.LEFT, 2)
         col2_sizer.Add(sub_btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
@@ -238,6 +240,8 @@ class PodcastPanel(wx.Panel):
         self._podcast_data: list[dict[str, Any]] = []
         self._viewing_search_results = False
 
+        self._episode_data = []
+        self._update_subscription_buttons()
         cat = self._selected_category()
         if cat == "Subscriptions":
             for p in repo.get_all():
@@ -252,6 +256,13 @@ class PodcastPanel(wx.Panel):
             self._podcast_list.DeleteAllItems()
             self._podcast_data = []
             self._append_row(self._podcast_list, "(Use Search above to find podcasts to subscribe to)")
+
+    def _update_subscription_buttons(self) -> None:
+        idx = self._podcast_list.GetFirstSelected()
+        rows = getattr(self, "_podcast_data", [])
+        selected = 0 <= idx < len(rows)
+        self._btn_subscribe.Enable(selected and self._viewing_search_results)
+        self._btn_unsubscribe.Enable(selected and not self._viewing_search_results)
 
     def _selected_category(self) -> str:
         idx = self._category_list.GetFirstSelected()
@@ -320,6 +331,7 @@ class PodcastPanel(wx.Panel):
         self._podcast_list.DeleteAllItems()
         self._podcast_data = results
         self._viewing_search_results = True
+        self._update_subscription_buttons()
         if not results:
             self._append_row(self._podcast_list, "(No results -- try a different search term)")
         for r in results:
@@ -407,7 +419,7 @@ class PodcastPanel(wx.Panel):
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_subscribe(self, title: str, episode_count: int) -> None:
-        self._btn_subscribe.Enable()
+        self._btn_subscribe.Disable()
         # "Subscriptions" -- switching category re-populates column 2 from
         # the DB, which now includes the podcast just subscribed to.
         idx = self._find_row(self._category_list, "Subscriptions")
@@ -429,6 +441,7 @@ class PodcastPanel(wx.Panel):
                 self._podcast_list.EnsureVisible(i)
                 self._load_episodes_for_index(i)
                 break
+        self._update_subscription_buttons()
         self._set_status(f"Status: Subscribed to '{title}' ({episode_count} episode(s))")
 
     def _on_unsubscribe(self, event: wx.Event) -> None:
@@ -689,6 +702,7 @@ class PodcastPanel(wx.Panel):
 
     def _on_podcast_select(self, event: wx.CommandEvent) -> None:
         """Populate the episode list when a podcast is selected."""
+        self._update_subscription_buttons()
         self._episode_list.DeleteAllItems()
         self._episode_data: list[dict[str, Any]] = []
 
@@ -1001,43 +1015,65 @@ class PodcastPanel(wx.Panel):
                 threading.Thread(target=_parse, daemon=True).start()
         dlg.Destroy()
 
-    def _on_import_opml(self, event: wx.CommandEvent) -> None:
-        """Import OPML file with podcast subscriptions."""
+    def _on_import_opml(self, event: wx.CommandEvent | None) -> None:
+        """Import subscriptions and load their episodes off the UI thread."""
+        if getattr(self, "_importing_opml", False):
+            return
+        from radiomaster.services.podcast_manager import PodcastManager
+        import threading
+        import xml.etree.ElementTree as ET
+
         dlg = wx.FileDialog(self, "Import OPML", wildcard="OPML files (*.opml;*.xml)|*.opml;*.xml",
                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
-        if dlg.ShowModal() == wx.ID_OK:
-            opml_path = dlg.GetPath()
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            with open(dlg.GetPath(), "r", encoding="utf-8-sig") as stream:
+                content = stream.read()
+            ET.fromstring(content)
+            feeds = PodcastManager.parse_opml(content)
+        except Exception as exc:
+            wx.MessageBox(f"Error importing OPML: {exc}", "Import Error", wx.OK | wx.ICON_ERROR)
+            return
+        finally:
+            dlg.Destroy()
+        if not feeds:
+            wx.MessageBox("No podcast feeds found in this OPML file.", "Import OPML",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        self._importing_opml = True
+        self._btn_import_opml.Disable()
+        self._set_status(f"Status: Importing {len(feeds)} feeds and loading episodes...")
+
+        def worker():
             try:
-                import xml.etree.ElementTree as ET
-                from radiomaster.database.repository import PodcastRepository
+                result = PodcastManager.import_subscriptions(self._db, feeds)
+                call_after_safe(self, self._finish_opml_import, result)
+            finally:
+                self._db.close()
 
-                repo = PodcastRepository(self._db)
-                tree = ET.parse(opml_path)
-                root = tree.getroot()
+        threading.Thread(target=worker, daemon=True).start()
 
-                imported_count = 0
-                failed_count = 0
-
-                for outline in root.iter('outline'):
-                    xml_url = outline.get('xmlUrl')
-                    if xml_url:
-                        try:
-                            existing = repo.get_by_feed_url(xml_url)
-                            if not existing:
-                                title = outline.get('text', outline.get('title', 'Unknown'))
-                                repo.add(xml_url, title=title, is_custom=True)
-                                imported_count += 1
-                        except Exception:
-                            failed_count += 1
-
-                wx.MessageBox(
-                    f"OPML import complete!\n\nImported: {imported_count} feeds\nFailed: {failed_count} feeds",
-                    "Import Complete",
-                    wx.OK | wx.ICON_INFORMATION
-                )
-            except Exception as e:
-                wx.MessageBox(f"Error importing OPML: {str(e)}", "Import Error", wx.OK | wx.ICON_ERROR)
-        dlg.Destroy()
+    def _finish_opml_import(self, result: dict[str, Any]) -> None:
+        self._importing_opml = False
+        self._btn_import_opml.Enable()
+        self._search_seq += 1
+        self._category_list.Select(self._find_row(self._category_list, "Subscriptions"))
+        self._on_category_select(None)
+        for idx, podcast in enumerate(self._podcast_data):
+            if podcast["id"] in result["podcast_ids"]:
+                self._podcast_list.Select(idx)
+                self._podcast_list.EnsureVisible(idx)
+                self._load_episodes_for_index(idx)
+                break
+        self._update_subscription_buttons()
+        message = (f"Subscribed to {result['imported']} new feeds. "
+                   f"Loaded episodes for {result['refreshed']} feeds.")
+        if result["failed"]:
+            message += ("\nCould not load: " + ", ".join(result["failed"]) +
+                        ". Re-import the OPML file to retry.")
+        self._set_status("Status: " + message)
+        wx.MessageBox(message, "Import Complete", wx.OK | wx.ICON_INFORMATION)
 
     def _on_export_opml(self, event: wx.CommandEvent) -> None:
         """Export podcast subscriptions to OPML file."""

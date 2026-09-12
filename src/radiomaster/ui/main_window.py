@@ -1582,21 +1582,8 @@ class MainWindow(wx.Frame):
         dlg.Destroy()
 
     def _on_import_opml(self) -> None:
-        """Import OPML file."""
-        dlg = wx.FileDialog(self, "Import OPML", wildcard="OPML files (*.opml;*.xml)|*.opml;*.xml",
-                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
-        if dlg.ShowModal() == wx.ID_OK:
-            from radiomaster.services.podcast_manager import PodcastManager
-            import os
-            with open(dlg.GetPath(), "r", encoding="utf-8") as f:
-                content = f.read()
-            feeds = PodcastManager.parse_opml(content)
-            from radiomaster.database.repository import PodcastRepository
-            repo = PodcastRepository(self._db)
-            for feed in feeds:
-                repo.add(feed["feed_url"], feed["title"], is_custom=True)
-            self._status_bar.set_status(f"Imported {len(feeds)} feeds")
-        dlg.Destroy()
+        """Use the podcast panel subscription import workflow."""
+        self._podcast_panel._on_import_opml(None)
 
     def _on_export_opml(self) -> None:
         """Export OPML file."""

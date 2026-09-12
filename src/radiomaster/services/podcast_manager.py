@@ -103,6 +103,66 @@ class PodcastManager:
         return 0
 
     @staticmethod
+    def import_subscriptions(db, feeds: list[dict[str, str]]) -> dict[str, Any]:
+        """Save subscriptions and fetch episodes, preserving existing playback state."""
+        import hashlib
+        from radiomaster.database.repository import PodcastRepository
+
+        repo = PodcastRepository(db)
+        result = {"imported": 0, "refreshed": 0, "failed": [], "podcast_ids": []}
+        seen = set()
+        for feed in feeds:
+            url = feed["feed_url"].strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            try:
+                existing = repo.get_by_feed_url(url)
+                podcast_id = existing["id"] if existing else repo.add(
+                    url, title=feed.get("title") or url,
+                    website_url=feed.get("website_url", ""), is_custom=True,
+                )
+                result["podcast_ids"].append(podcast_id)
+                if not existing:
+                    result["imported"] += 1
+                data = PodcastManager.parse_feed(url)
+                if data is None:
+                    raise ValueError("Feed could not be loaded")
+                for ep in data.get("episodes", []):
+                    identity = ep.get("guid") or ep.get("audio_url") or (
+                        ep.get("title", "") + "|" + ep.get("published_date", "")
+                    )
+                    # Publishers can omit GUIDs or reuse them across feeds.
+                    guid = "opml:" + hashlib.sha256(
+                        (url + "\n" + identity).encode("utf-8")
+                    ).hexdigest()
+                    found = db.fetchone(
+                        """SELECT id FROM episodes WHERE podcast_id = ? AND
+                        (guid = ? OR (guid <> '' AND guid = ?) OR
+                         (audio_url <> '' AND audio_url = ?))""",
+                        (podcast_id, guid, ep.get("guid", ""), ep.get("audio_url", "")),
+                    )
+                    if found:
+                        continue
+                    db.execute(
+                        """INSERT INTO episodes
+                        (podcast_id, guid, title, description, content_encoded,
+                         duration, published_date, audio_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (podcast_id, guid, ep.get("title", ""),
+                         ep.get("description", ""), ep.get("content_encoded", ""),
+                         ep.get("duration", 0), ep.get("published_date", ""),
+                         ep.get("audio_url", "")),
+                    )
+                db.commit()
+                result["refreshed"] += 1
+            except Exception:
+                db.conn.rollback()
+                logger.exception("Unable to import episodes for %s", url)
+                result["failed"].append(feed.get("title") or url)
+        return result
+
+    @staticmethod
     def export_opml(subscriptions: list[dict[str, Any]]) -> str:
         """Export podcast subscriptions to OPML format."""
         lines = [
@@ -134,7 +194,7 @@ class PodcastManager:
                 xml_url = outline.get("xmlUrl", "")
                 if xml_url:
                     feeds.append({
-                        "title": outline.get("text", ""),
+                        "title": outline.get("text") or outline.get("title", ""),
                         "feed_url": xml_url,
                         "website_url": outline.get("htmlUrl", ""),
                     })

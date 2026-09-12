@@ -105,6 +105,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.85", (
+        "Importing an OPML file now subscribes to its feeds and loads their episodes "
+        "in the background. Both import commands refresh the Subscriptions list. "
+        "Subscribe is disabled for saved subscriptions. Re-import an existing OPML "
+        "file to load missing episodes while keeping playback progress. Feeds that "
+        "could not be loaded are reported so you can retry the import."
+    )),
     ("Version 1.1.84", (
         "The About dialog now includes the GPL version 2 or later license notice, "
         "credit to Un4seen Developments for BASS, and copyright for Deenadayalan "
