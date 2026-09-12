@@ -103,7 +103,9 @@ class PodcastManager:
         return 0
 
     @staticmethod
-    def import_subscriptions(db, feeds: list[dict[str, str]]) -> dict[str, Any]:
+    def import_subscriptions(
+        db, feeds: list[dict[str, str]], *, create_missing: bool = True,
+    ) -> dict[str, Any]:
         """Save subscriptions and fetch episodes, preserving existing playback state."""
         import hashlib
         from radiomaster.database.repository import PodcastRepository
@@ -118,6 +120,8 @@ class PodcastManager:
             seen.add(url)
             try:
                 existing = repo.get_by_feed_url(url)
+                if not create_missing and not existing:
+                    continue
                 podcast_id = existing["id"] if existing else repo.add(
                     url, title=feed.get("title") or url,
                     website_url=feed.get("website_url", ""), is_custom=True,

@@ -65,6 +65,7 @@ class PodcastPanel(wx.Panel):
         # from one show ended up filed under a different show's folder.
         self._current_podcast_title = "Unknown Podcast"
         self._search_seq = 0
+        self._refreshing_podcasts: set[int] = set()
         self.on_content_changed = None
         self._setup_ui()
 
@@ -720,6 +721,61 @@ class PodcastPanel(wx.Panel):
             return
 
         self._load_episodes_for_index(idx)
+        self._refresh_subscription(self._podcast_data[idx])
+
+    def _refresh_subscription(self, podcast: dict[str, Any]) -> None:
+        """Fetch the selected subscription without blocking keyboard navigation."""
+        import threading
+        from radiomaster.services.podcast_manager import PodcastManager
+
+        podcast_id = podcast.get("id")
+        if not podcast_id or not podcast.get("feed_url"):
+            return
+        if podcast_id in self._refreshing_podcasts:
+            return
+        self._refreshing_podcasts.add(podcast_id)
+        self._set_status(f"Status: Refreshing episodes for '{podcast.get('title', '')}'...")
+
+        def worker():
+            failed = True
+            try:
+                result = PodcastManager.import_subscriptions(
+                    self._db, [podcast], create_missing=False,
+                )
+                failed = bool(result["failed"])
+            except Exception:
+                logger.exception("Could not refresh podcast %s", podcast_id)
+            finally:
+                self._db.close()
+                call_after_safe(self, self._finish_subscription_refresh, podcast_id, failed)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_subscription_refresh(self, podcast_id: int, failed: bool) -> None:
+        self._refreshing_podcasts.discard(podcast_id)
+        idx = self._podcast_list.GetFirstSelected()
+        if (self._viewing_search_results or idx < 0 or idx >= len(self._podcast_data)
+                or self._podcast_data[idx].get("id") != podcast_id):
+            return
+        # Keep the selected episode when new entries change the row order.
+        episode_idx = self._episode_list.GetFirstSelected()
+        episodes = getattr(self, "_episode_data", [])
+        selected_id = episodes[episode_idx].get("id") if 0 <= episode_idx < len(episodes) else None
+        self._load_episodes_for_index(idx)
+        if selected_id is not None:
+            for row, episode in enumerate(self._episode_data):
+                if episode.get("id") == selected_id:
+                    self._episode_list.Select(row)
+                    self._episode_list.EnsureVisible(row)
+                    break
+        title = self._podcast_data[idx].get("title", "")
+        if failed:
+            self._set_status(
+                f"Status: Could not refresh '{title}'. Showing saved episodes. "
+                "Select the podcast again to retry."
+            )
+        else:
+            self._set_status(f"Status: {len(self._episode_data)} episode(s) for '{title}'")
 
     @staticmethod
     def _episode_notes_text(podcast_title: str, ep: dict[str, Any]) -> str:

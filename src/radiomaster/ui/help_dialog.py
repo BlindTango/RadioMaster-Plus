@@ -105,6 +105,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.86", (
+        "Selecting a saved podcast subscription now shows cached episodes immediately "
+        "and refreshes its feed in the background to fetch the latest episodes. "
+        "Playback progress and the selected episode are preserved. A slow response "
+        "cannot replace the episode list after you switch podcasts. If a feed cannot "
+        "be refreshed, saved episodes remain available and the status explains how "
+        "to retry."
+    )),
     ("Version 1.1.85", (
         "Importing an OPML file now subscribes to its feeds and loads their episodes "
         "in the background. Both import commands refresh the Subscriptions list. "
