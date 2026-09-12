@@ -105,6 +105,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.87", (
+        "Download All now prepares podcast downloads in the background so large "
+        "episode lists do not freeze the window. The batch keeps the podcast and "
+        "episodes you confirmed even if you switch podcasts while it runs. "
+        "Progress appears in the status bar, and the completion message reports "
+        "queued, skipped, and failed episodes. Repeated Download All commands "
+        "cannot start another batch while one is still being prepared."
+    )),
     ("Version 1.1.86", (
         "Selecting a saved podcast subscription now shows cached episodes immediately "
         "and refreshes its feed in the background to fetch the latest episodes. "

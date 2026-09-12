@@ -528,26 +528,66 @@ class PodcastPanel(wx.Panel):
         self._download_episode_at(idx, show_confirmation=True)
 
     def _on_download_all(self, event: wx.CommandEvent | None = None) -> None:
-        """Queue every episode currently listed for the loaded podcast --
-        one confirmation up front, one summary at the end, instead of a
-        "Download Added" message box per episode which would be
-        unusable for a feed with dozens of episodes."""
-        episodes = getattr(self, "_episode_data", [])
+        """Prepare a snapshot of the episode list on a background worker."""
+        if getattr(self, "_queueing_download_all", False):
+            self._set_status("Status: Episodes are already being added to the download queue.")
+            return
+        episodes = [dict(ep) for ep in getattr(self, "_episode_data", [])]
+        podcast_title = self._current_podcast_title
         if not episodes:
             wx.MessageBox("No episodes to download.", "Download All", wx.OK | wx.ICON_INFORMATION)
             return
         if wx.MessageBox(
-            f"Download all {len(episodes)} episode(s) of '{self._current_podcast_title}'?",
+            f"Download all {len(episodes)} episode(s) of '{podcast_title}'?",
             "Download All", wx.YES_NO | wx.ICON_QUESTION,
         ) != wx.YES:
             return
-        queued = sum(
-            1 for i in range(len(episodes)) if self._download_episode_at(i, show_confirmation=False)
-        )
-        wx.MessageBox(
-            f"Added {queued} of {len(episodes)} episode(s) to the download queue.",
-            "Download All", wx.OK | wx.ICON_INFORMATION,
-        )
+        manager = getattr(wx.GetApp(), "download_manager", None)
+        if manager is None:
+            wx.MessageBox("The download manager is unavailable.", "Download All",
+                          wx.OK | wx.ICON_WARNING)
+            return
+        self._queueing_download_all = True
+        self._set_status(f"Status: Adding {len(episodes)} episodes of '{podcast_title}' to the queue...")
+
+        def worker():
+            queued = skipped = failed = 0
+            try:
+                settings = self._podcast_download_settings(podcast_title)
+                for number, ep in enumerate(episodes, 1):
+                    if not ep.get("audio_url"):
+                        skipped += 1
+                    else:
+                        try:
+                            self._queue_podcast_episode(ep, podcast_title, manager, settings)
+                            queued += 1
+                        except Exception:
+                            self._db.conn.rollback()
+                            failed += 1
+                            logger.exception("Could not queue podcast episode %s", ep.get("id"))
+                    if number % 25 == 0:
+                        call_after_safe(self, self._set_status,
+                                        f"Status: Prepared {number} of {len(episodes)} episodes for '{podcast_title}'.")
+            except Exception:
+                failed = len(episodes) - queued - skipped
+                logger.exception("Could not prepare podcast downloads")
+            finally:
+                self._db.close()
+                call_after_safe(self, self._finish_download_all,
+                                podcast_title, queued, skipped, failed)
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_download_all(self, title: str, queued: int, skipped: int, failed: int) -> None:
+        self._queueing_download_all = False
+        message = f"Added {queued} episode(s) of '{title}' to the download queue."
+        if skipped:
+            message += f" Skipped {skipped} episode(s) with no audio URL."
+        if failed:
+            message += f" Could not queue {failed} episode(s)."
+        self._set_status("Status: " + message)
+        wx.MessageBox(message, "Download All", wx.OK | wx.ICON_INFORMATION)
 
     def _download_episode_at(self, idx: int, show_confirmation: bool) -> bool:
         """Queues the episode at ``idx`` for download. Returns whether it
@@ -566,52 +606,59 @@ class PodcastPanel(wx.Panel):
             if show_confirmation:
                 wx.MessageBox("This episode has no audio URL.", "Cannot Download", wx.OK | wx.ICON_WARNING)
             return False
-        from radiomaster.database.repository import DownloadRepository
+        manager = getattr(wx.GetApp(), "download_manager", None)
+        if manager is None:
+            return False
+        podcast_title = self._current_podcast_title
+        self._queue_podcast_episode(
+            ep, podcast_title, manager, self._podcast_download_settings(podcast_title),
+        )
+        if show_confirmation:
+            wx.MessageBox(f"Download added to queue: {ep.get('title', 'Podcast Episode')}",
+                          "Download Added", wx.OK | wx.ICON_INFORMATION)
+        return True
+
+    @staticmethod
+    def _podcast_download_settings(podcast_title: str) -> tuple[str, str, str, str]:
+        """Resolve paths and format once per batch, including portable path probes."""
+        import os
         from radiomaster.utils.helpers import sanitize_filename
         from radiomaster.utils.paths import get_podcasts_dir
         from radiomaster.utils.config import ConfigManager
-        import os
-
-        title = ep.get("title", "Podcast Episode")
-        podcast_title = self._current_podcast_title
+        from radiomaster.services.download_manager import normalize_audio_format
 
         feed_dir = os.path.join(get_podcasts_dir(), sanitize_filename(podcast_title))
-        filename_base = sanitize_filename(title)[:150]  # avoid MAX_PATH issues on very long titles
         config = ConfigManager.get_instance()
-        from radiomaster.services.download_manager import normalize_audio_format
         audio_format = normalize_audio_format(
             config.get("downloads.audio_format", default="mp3")
         )
-        quality_setting = config.get("downloads.audio_quality", default="192k")
-        audio_quality = "0" if quality_setting.lower() == "best" else quality_setting.upper()
+        quality = config.get("downloads.audio_quality", default="192k")
+        return feed_dir, audio_format, quality, "0" if quality.lower() == "best" else quality.upper()
 
-        repo = DownloadRepository(self._db)
-        download_id = repo.add(
-            url, title=title, source_type="podcast", format=audio_format,
-            quality=quality_setting, output_dir=feed_dir, extract_audio=True,
+    def _queue_podcast_episode(self, ep: dict[str, Any], podcast_title: str,
+                               manager: Any, settings: tuple[str, str, str, str]) -> None:
+        """Persist and enqueue one episode without accessing wx controls."""
+        from radiomaster.database.repository import DownloadRepository
+        from radiomaster.utils.helpers import sanitize_filename
+
+        feed_dir, audio_format, quality, audio_quality = settings
+        title = ep.get("title", "Podcast Episode")
+        filename_base = sanitize_filename(title)[:150]
+        download_id = DownloadRepository(self._db).add(
+            ep["audio_url"], title=title, source_type="podcast", format=audio_format,
+            quality=quality, output_dir=feed_dir, extract_audio=True,
             filename_base=filename_base,
         )
         self._db.execute(
             "UPDATE episodes SET download_status = 'queued' WHERE id = ?", (ep.get("id"),)
         )
         self._db.commit()
-        # Inserting the DB row alone was the whole bug: nothing ever
-        # actually told DownloadManager to fetch the file, so the row sat
-        # at its insert-time "queued" status forever and never moved to
-        # History no matter how long you waited -- same wiring YouTube
-        # downloads already use.
-        app = wx.GetApp()
-        if hasattr(app, "download_manager") and hasattr(app.download_manager, "add_download"):
-            app.download_manager.add_download(
-                download_id, url, output_dir=feed_dir, title=title,
-                extract_audio=True, format=audio_format, audio_quality=audio_quality,
-                filename_base=filename_base,
-            )
+        manager.add_download(
+            download_id, ep["audio_url"], output_dir=feed_dir, title=title,
+            extract_audio=True, format=audio_format, audio_quality=audio_quality,
+            filename_base=filename_base,
+        )
         self._write_show_notes(feed_dir, filename_base, podcast_title, ep)
-        if show_confirmation:
-            wx.MessageBox(f"Download added to queue: {title}", "Download Added",
-                         wx.OK | wx.ICON_INFORMATION)
-        return True
 
     def _on_episode_context_menu(self, event: wx.ContextMenuEvent) -> None:
         """Right-click (or Shift+F10/Menu key) on an episode -- follows
