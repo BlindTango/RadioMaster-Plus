@@ -53,6 +53,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             shortcuts and file associations. Keep the executable and its accompanying
             folders together; copying only the executable is not sufficient.
 
+            A native text window says RadioMaster+ is starting while the application
+            loads. It closes when the main window is ready. It has no animation or
+            timer and remains available when Reduce motion is enabled.
+
             On first launch, allow the station catalogue to download. The status area
             reports loading and connection activity. If stations are missing, connect
             to the internet and use Settings > Radio > Update Now.
@@ -358,7 +362,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         _topic("Downloading Episodes and Complete Feeds", """
             Choose Download Episode or the episode context menu's Download to queue one
             episode. Download All queues episodes currently listed for that podcast after
-            one confirmation. Already downloaded or queued episodes can be skipped.
+            one confirmation. Preparation runs in the background and reports queued,
+            skipped, and failed episodes. A matching completed file recorded in History
+            is reused without downloading again; see Reusing Completed Downloads.
 
             Downloads are placed in the Podcast Download Location configured in Settings
             > Podcasts, with a subfolder for the show. Audio format and quality follow
@@ -538,6 +544,8 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             and WAV. The Audio Format selector is updated when
             download settings are applied. A higher output bitrate cannot restore detail
             missing from the original media. A failed download can be retried from History.
+            A matching completed copy recorded in History is reused without contacting
+            the source; see Reusing Completed Downloads for the matching rules.
         """),
     ]),
     ("Downloads and Saved Files", [
@@ -551,10 +559,39 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             a completed file. Files must still exist at their recorded locations.
             Recordings and podcast downloads can appear here as well as YouTube downloads.
         """),
+        _topic("Reusing Completed Downloads", """
+            Before starting a transfer, RadioMaster+ checks Download History for a
+            completed copy of the same source URL with matching format, quality, and
+            audio/video choice. The recorded file must still exist and must not be
+            empty or a partial download. A matching copy moves the new request to
+            completed History without contacting the source, including while offline.
+
+            This applies to podcast episodes, Download All, YouTube video and audio,
+            automatic podcast downloads, and retries. Podcast episodes are also marked
+            downloaded. The history display limit does not restrict this check.
+
+            Changing the title or destination still reuses the recorded file at its
+            existing location; it does not copy or move that file. Choosing a different
+            format, quality, or audio/video option starts a new download instead.
+
+            If the file is missing, empty, or partial, normal downloading is attempted
+            and requires access to the source. Removing its completed History entries
+            removes the record used by this check, even though the file remains on disk.
+            Files without a matching completion record are left to the downloader's
+            own existing-file checks, which may still contact the source. Files are
+            checked for existence and size, not tested for media corruption. Radio
+            recordings are not reused because a new recording captures a different time.
+        """),
         _topic("Progress, Restart, Retry, and Remove", """
             Read an active row's status and progress before taking action. Its context
             menu offers Restart for a normal download, or Stop Recording for a running
             recording. Restart resubmits a download. Failed History entries offer Retry.
+
+            In Download History, right-click or press Shift+F10 or the Applications key
+            and choose Retry all failed downloads to retry every failed entry, including
+            entries beyond the display limit. No row selection is required. The option
+            is disabled when there are no failures. Each retry keeps its saved settings
+            and reuses a matching completed file when available.
 
             Remove on an active normal download removes its list/database entry; it
             does not cancel the background transfer. The confirmation explains this.
@@ -944,7 +981,8 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             move between major regions enables those extra navigation keys. Enhance
             keyboard focus with high contrast highlighting adds a stronger focus cue.
 
-            Reduce motion by skipping the startup splash affects the next launch.
+            The Reduce motion preference is saved with Apply or OK. Startup feedback
+            uses native text without animation and stays available with this enabled.
             The other options apply with Apply or OK. Control names, normal keyboard
             navigation, and native focus indicators remain available independently.
         """),

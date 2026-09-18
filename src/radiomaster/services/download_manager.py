@@ -47,6 +47,7 @@ class DownloadManager:
         self._on_progress: Callable[[int, float], None] | None = None
         self._on_complete: Callable[[int, str], None] | None = None
         self._on_error: Callable[[int, str], None] | None = None
+        self._existing_file_lookup: Callable[[int], str] | None = None
 
     def start(self) -> None:
         """Start the download manager."""
@@ -224,6 +225,18 @@ class DownloadManager:
     def _execute_download(self, item: dict[str, Any]) -> None:
         """Execute a single download."""
         download_id = item["id"]
+        # Run in the worker, before touching the destination or starting any
+        # network process. Completion uses the same history/episode callback
+        # as a fresh download, including when retrying an old failed entry.
+        if self._existing_file_lookup and self._on_complete:
+            existing = self._existing_file_lookup(download_id)
+            if existing:
+                with self._lock:
+                    cancelled = download_id in self._cancelled
+                    self._cancelled.discard(download_id)
+                if not cancelled:
+                    self._on_complete(download_id, existing)
+                return
         url = item["url"]
         output_dir = item["output_dir"]
         extract_audio = item.get("extract_audio", False)
@@ -375,6 +388,10 @@ class DownloadManager:
 
     def on_progress(self, cb: Callable[[int, float], None]) -> None:
         self._on_progress = cb
+
+    def set_existing_file_lookup(self, cb: Callable[[int], str]) -> None:
+        """Check for a recorded completed file before starting each download."""
+        self._existing_file_lookup = cb
 
     def on_complete(self, cb: Callable[[int, str], None]) -> None:
         """*cb* receives (download_id, file_path) -- file_path is "" if

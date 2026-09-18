@@ -277,6 +277,39 @@ class DownloadRepository:
         )
         self._db.commit()
 
+    def find_existing_file(self, download_id: int) -> str:
+        """Find a completed copy of the requested URL and download settings.
+
+        Destinations and titles may change; format and quality must still match
+        so an audio copy cannot replace a requested video (or quality upgrade).
+        Only recorded completions are trusted, never guessed filenames.
+        """
+        import os
+        from radiomaster.utils.paths import resolve_stored_path
+
+        requested = self.get(download_id)
+        if not requested or not requested.get("url") or requested.get("source_type") == "radio_recording":
+            return ""
+        candidates = self._db.fetchall(
+            "SELECT file_path FROM downloads WHERE url = ? AND status = 'completed' "
+            "AND COALESCE(source_type, '') != 'radio_recording' "
+            "AND COALESCE(extract_audio, 0) = ? "
+            "AND LOWER(COALESCE(format, '')) = LOWER(?) "
+            "AND LOWER(COALESCE(quality, '')) = LOWER(?) ORDER BY id DESC",
+            (requested["url"], int(bool(requested.get("extract_audio"))),
+             requested.get("format") or "", requested.get("quality") or ""),
+        )
+        for candidate in candidates:
+            path = resolve_stored_path(candidate.get("file_path") or "")
+            if not path or path.lower().endswith((".part", ".ytdl", ".tmp")):
+                continue
+            try:
+                if os.path.isfile(path) and os.path.getsize(path) > 0:
+                    return path
+            except OSError:
+                continue
+        return ""
+
     def add_completed(self, url: str, title: str, source_type: str = "", file_path: str = "") -> int:
         """Inserts a download row that's already finished -- e.g. one
         track of a split radio recording, finalized independently of

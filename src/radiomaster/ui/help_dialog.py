@@ -90,6 +90,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "before opening playback, so large or 4K videos can take longer to start. "
         "Use Help > Update YouTube Library if extraction stops working."
     )),
+    ("Download and Reuse Saved Files", (
+        "Choose Download Episode in Podcasts, or Download or Download Audio in YouTube. "
+        f"Open Downloads with {_key('panel_downloads')} to check progress and History. "
+        "If History records a completed copy of the same source with matching format and quality "
+        "and its file still exists, the request completes using that file without contacting the source. "
+        "Changing the title or destination does not move or download that existing copy again. "
+        "In Download History, press Shift+F10 or the Applications key and choose "
+        "Retry all failed downloads to retry every failure, including older entries outside the display limit. "
+        "See the manual topic Reusing Completed Downloads for matching rules and limitations."
+    )),
     ("Accessibility Essentials", (
         "Tab and Shift+Tab move between controls. Arrow keys move in lists and "
         "menus, Enter activates, Shift+F10 opens a context menu, and Escape backs "
@@ -97,14 +107,24 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "in-app and optional global keys from one accessible list. "
         "Settings > Accessibility contains black-and-white high contrast, an "
         "OpenDyslexic font option, concise screen-reader status announcements, F6 and "
-        "Shift+F6 region navigation, enhanced focus highlighting, and reduced-motion "
-        "startup. Standard labels, Tab navigation, and native focus remain available "
+        "Shift+F6 region navigation, enhanced focus highlighting, and Reduce motion. "
+        "The startup message uses native text without animation and remains available with Reduce motion enabled. "
+        "Standard labels, Tab navigation, and native focus remain available "
         "regardless of those extra options."
     )),
 ]
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.89", (
+        "Downloads now check for a recorded completed copy before contacting the source. "
+        "When the same source, format, quality, and audio/video choice match and the file still exists, "
+        "the request moves to completed History using that file, including while offline. "
+        "This applies to podcasts, YouTube, scheduled downloads, and retries. "
+        "Missing, empty, or partial files are downloaded normally.\n\n"
+        "The User Manual and Quick Start Guide now explain existing-file reuse, "
+        "Retry all failed downloads, and the native startup window."
+    )),
     ("Version 1.1.88", (
         "Download History now offers Retry all failed downloads in its context menu. "
         "This includes failures beyond the history display limit and preserves each download's settings.\n\n"

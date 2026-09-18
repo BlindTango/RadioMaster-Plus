@@ -294,15 +294,18 @@ class SchedulerService:
                         output_dir=feed_dir, extract_audio=True,
                         filename_base=filename_base,
                     )
+                    # Commit queued state before a worker can immediately
+                    # reuse an existing file and mark this episode completed.
+                    db.execute(
+                        "UPDATE episodes SET download_status = 'queued' WHERE id = ?",
+                        (ep["id"],),
+                    )
+                    db.commit()
                     self._download_manager.add_download(
                         download_id, ep.get("audio_url", ""), output_dir=feed_dir,
                         title=title, extract_audio=True, format=audio_format,
                         audio_quality=audio_quality,
                         filename_base=filename_base,
-                    )
-                    db.execute(
-                        "UPDATE episodes SET download_status = 'queued' WHERE id = ?",
-                        (ep["id"],),
                     )
             db.commit()
             if owns_db:

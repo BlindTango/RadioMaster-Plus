@@ -1028,7 +1028,7 @@ class AccessibilityPanel(SettingsPanel):
         sizer.Add(self.focus_indicators_chk, 0, wx.ALL, 5)
 
         self.reduce_motion_chk = wx.CheckBox(
-            self, label="Reduce motion by skipping the startup splash"
+            self, label="Reduce motion"
         )
         self.reduce_motion_chk.SetValue(self.config.get(
             "accessibility.reduce_motion", default=False

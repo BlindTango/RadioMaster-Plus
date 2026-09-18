@@ -128,6 +128,7 @@ class RadioMasterApp(wx.App):
         # no way to tell, and it never moved to History.
         from radiomaster.database.repository import DownloadRepository
         download_repo = DownloadRepository(self._db)
+        self._download_manager.set_existing_file_lookup(download_repo.find_existing_file)
         # DownloadManager's queue is in-memory only -- a download still
         # 'queued'/'downloading' in the database at this point belongs to
         # a process that died with the app last time (a clean exit or a
