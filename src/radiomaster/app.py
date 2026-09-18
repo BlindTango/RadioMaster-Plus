@@ -1,19 +1,22 @@
 """Application class for RadioMaster+."""
 
+from __future__ import annotations
+
 import wx
 import logging
+from typing import TYPE_CHECKING
 
 from radiomaster.utils.logging_setup import setup_logging
 from radiomaster.utils.paths import get_paths
 from radiomaster.utils.config import ConfigManager
-from radiomaster.database.connection import DatabaseManager
-from radiomaster.ui.main_window import MainWindow
-from radiomaster.ui.theme_manager import ThemeManager
-from radiomaster.services.download_manager import DownloadManager
-from radiomaster.services.scheduler_service import SchedulerService
-from radiomaster.services.lyrics_service import set_lyrics_repository
-from radiomaster.database.repository import LyricsRepository
 from radiomaster import __app_name__, __version__
+
+if TYPE_CHECKING:
+    from radiomaster.database.connection import DatabaseManager
+    from radiomaster.ui.main_window import MainWindow
+    from radiomaster.ui.theme_manager import ThemeManager
+    from radiomaster.services.download_manager import DownloadManager
+    from radiomaster.services.scheduler_service import SchedulerService
 
 
 class RadioMasterApp(wx.App):
@@ -42,7 +45,30 @@ class RadioMasterApp(wx.App):
         super().__init__()
 
     def OnInit(self) -> bool:
+        """Paint startup feedback before importing and initializing the application."""
+        from radiomaster.ui.splash import show_splash
+
+        self.SetAppName(__app_name__)
+        self.SetVendorName(__app_name__)
+        splash = show_splash()
+        try:
+            wx.Yield()
+            return self._initialize()
+        finally:
+            splash.Destroy()
+            if self._main_window:
+                self._main_window.Raise()
+
+    def _initialize(self) -> bool:
         """Initialize the application."""
+        from radiomaster.database.connection import DatabaseManager
+        from radiomaster.ui.main_window import MainWindow
+        from radiomaster.ui.theme_manager import ThemeManager
+        from radiomaster.services.download_manager import DownloadManager
+        from radiomaster.services.scheduler_service import SchedulerService
+        from radiomaster.services.lyrics_service import set_lyrics_repository
+        from radiomaster.database.repository import LyricsRepository
+
         self.SetAppName(__app_name__)
         self.SetVendorName(__app_name__)
 
@@ -68,15 +94,6 @@ class RadioMasterApp(wx.App):
         # handed a reference directly) must see this exact object -- see
         # ConfigManager.set_instance()'s docstring for why this matters.
         ConfigManager.set_instance(self._config)
-
-        # Read accessibility preferences before presenting anything. When
-        # reduced motion is enabled, startup proceeds without the timed
-        # splash; otherwise Yield ensures it paints before synchronous init.
-        splash = None
-        if not self._config.get("accessibility.reduce_motion", default=False):
-            from radiomaster.ui.splash import show_splash
-            splash = show_splash()
-            wx.Yield()
 
         # Setup logging
         setup_logging(
@@ -160,9 +177,6 @@ class RadioMasterApp(wx.App):
         )
         self._main_window.Show()
         self.SetTopWindow(self._main_window)
-        if splash:
-            splash.Close()
-
         return True
 
     def OnExit(self) -> int:

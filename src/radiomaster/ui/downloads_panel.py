@@ -365,10 +365,7 @@ class DownloadsPanel(wx.Panel):
 
     def _on_history_context_menu(self, event: wx.ContextMenuEvent) -> None:
         idx = self._history_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or idx >= len(self._history_rows):
-            event.Skip()
-            return
-        row = self._history_rows[idx]
+        row = self._history_rows[idx] if 0 <= idx < len(self._history_rows) else {}
 
         menu = wx.Menu()
         play_item = menu.Append(wx.ID_ANY, "&Play")
@@ -377,8 +374,14 @@ class DownloadsPanel(wx.Panel):
         if row.get("status") == "failed":
             retry_item = menu.Append(wx.ID_ANY, "&Retry")
             self.Bind(wx.EVT_MENU, lambda e, r=row: self._retry_download(r), retry_item)
+        retry_all_item = menu.Append(wx.ID_ANY, "Retry all &failed downloads")
+        retry_all_item.Enable(bool(self._db.fetchone(
+            "SELECT id FROM downloads WHERE status = 'failed' LIMIT 1"
+        )))
+        self.Bind(wx.EVT_MENU, self._on_retry_all_failed, retry_all_item)
         menu.AppendSeparator()
         remove_item = menu.Append(wx.ID_ANY, "R&emove")
+        remove_item.Enable(bool(row))
         self.Bind(wx.EVT_MENU, lambda e: self._on_remove_history(e), remove_item)
         remove_all_item = menu.Append(wx.ID_ANY, "Remove &All")
         self.Bind(wx.EVT_MENU, lambda e: self._on_remove_all_history(e), remove_all_item)
@@ -393,15 +396,13 @@ class DownloadsPanel(wx.Panel):
     # difference is Restart also has to stop whatever's still actually
     # running for a stalled download first.
     # ------------------------------------------------------------------
-    def _resubmit(self, row: dict[str, Any]) -> None:
+    def _resubmit(self, row: dict[str, Any], *, refresh: bool = True) -> None:
         from radiomaster.database.repository import DownloadRepository
-        repo = DownloadRepository(self._db)
-        repo.reset_for_retry(row["id"])
-
         app = wx.GetApp()
         if not (hasattr(app, "download_manager") and hasattr(app.download_manager, "add_download")):
-            self._load_data()
             return
+        repo = DownloadRepository(self._db)
+        repo.reset_for_retry(row["id"])
         quality = row.get("quality") or ""
         audio_quality = "0" if quality.lower() == "best" else (quality.upper() if quality else "0")
         app.download_manager.add_download(
@@ -413,6 +414,16 @@ class DownloadsPanel(wx.Panel):
             audio_quality=audio_quality,
             filename_base=row.get("filename_base") or "",
         )
+        if refresh:
+            self._load_data()
+
+    def _on_retry_all_failed(self, event: wx.Event) -> None:
+        """Retry a snapshot of all failures, including history outside the display limit."""
+        rows = self._db.fetchall(
+            "SELECT * FROM downloads WHERE status = 'failed' ORDER BY id"
+        )
+        for row in rows:
+            self._resubmit(row, refresh=False)
         self._load_data()
 
     def _retry_download(self, row: dict[str, Any]) -> None:

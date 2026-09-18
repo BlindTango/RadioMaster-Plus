@@ -105,6 +105,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.88", (
+        "Download History now offers Retry all failed downloads in its context menu. "
+        "This includes failures beyond the history display limit and preserves each download's settings.\n\n"
+        "A native startup window now appears before the main application modules load and stays "
+        "visible until the main window is ready. Its text is accessible to screen readers, "
+        "uses system colours, and remains available with Reduce motion enabled."
+    )),
     ("Version 1.1.87", (
         "Download All now prepares podcast downloads in the background so large "
         "episode lists do not freeze the window. The batch keeps the podcast and "
