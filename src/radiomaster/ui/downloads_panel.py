@@ -1,6 +1,8 @@
 """Downloads tab panel showing active downloads and history."""
 
 import os
+import errno
+import sqlite3
 import wx
 from typing import Any, Callable, Optional
 from radiomaster.database.connection import DatabaseManager
@@ -93,21 +95,6 @@ class DownloadsPanel(wx.Panel):
         self._active_list.Bind(wx.EVT_KEY_DOWN, self._on_active_list_key)
         self._active_list.Bind(wx.EVT_CONTEXT_MENU, self._on_active_context_menu)
         main_sizer.Add(self._active_list, 1, wx.EXPAND | wx.ALL, 4)
-
-        active_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_stop_recording = wx.Button(self, label="Stop &Recording")
-        set_accessible_name(self._btn_stop_recording, "Stop Selected Recording")
-        self._btn_stop_recording.Bind(wx.EVT_BUTTON, self._on_stop_recording)
-        active_btn_sizer.Add(self._btn_stop_recording, 1, wx.RIGHT, 2)
-        # A queued/downloading row that isn't a recording (a stuck
-        # podcast/YouTube download, or one you just don't want anymore)
-        # had no way to leave the Active list at all short of it finishing
-        # or failing on its own.
-        self._btn_remove = wx.Button(self, label="Re&move")
-        set_accessible_name(self._btn_remove, "Remove Selected Download")
-        self._btn_remove.Bind(wx.EVT_BUTTON, self._on_remove)
-        active_btn_sizer.Add(self._btn_remove, 1, wx.LEFT, 2)
-        main_sizer.Add(active_btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
 
         # History
         main_sizer.Add(wx.StaticText(self, label="Download History"), 0, wx.ALL, 4)
@@ -218,20 +205,27 @@ class DownloadsPanel(wx.Panel):
         )
         self._history_rows = new_history
         if not history_same:
+            selected_idx = self._history_list.GetFirstSelected()
+            selected_id = (self._history_list.GetItemData(selected_idx)
+                           if selected_idx != wx.NOT_FOUND else None)
             self._history_list.DeleteAllItems()
             for i, d in enumerate(new_history):
                 idx = self._history_list.InsertItem(i, d.get("title", "Unknown"))
                 self._history_list.SetItemData(idx, d["id"])
                 self._history_list.SetItem(idx, 1, d.get("created_at", ""))
                 self._history_list.SetItem(idx, 2, d.get("status", ""))
+                if d["id"] == selected_id:
+                    self._history_list.Select(idx)
 
-    def _on_stop_recording(self, event: wx.CommandEvent) -> None:
-        idx = self._active_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
-            wx.MessageBox("Select an active recording first.", "No Selection",
-                          wx.OK | wx.ICON_INFORMATION)
-            return
-        row = self._active_rows[idx]
+    def _on_stop_recording(self, event: wx.CommandEvent,
+                           *, row: dict[str, Any] | None = None) -> None:
+        if row is None:
+            idx = self._active_list.GetFirstSelected()
+            if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
+                wx.MessageBox("Select an active recording first.", "No Selection",
+                              wx.OK | wx.ICON_INFORMATION)
+                return
+            row = self._active_rows[idx]
         if row.get("source_type") != "radio_recording":
             wx.MessageBox("Only manual radio recordings (not other downloads) can be "
                           "stopped from here.", "Not a Recording", wx.OK | wx.ICON_INFORMATION)
@@ -255,13 +249,14 @@ class DownloadsPanel(wx.Panel):
         else:
             event.Skip()
 
-    def _on_remove(self, event: wx.Event) -> None:
-        idx = self._active_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
-            wx.MessageBox("Select a download first.", "No Selection",
-                          wx.OK | wx.ICON_INFORMATION)
-            return
-        row = self._active_rows[idx]
+    def _on_remove(self, event: wx.Event, *, row: dict[str, Any] | None = None) -> None:
+        if row is None:
+            idx = self._active_list.GetFirstSelected()
+            if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
+                wx.MessageBox("Select a download first.", "No Selection",
+                              wx.OK | wx.ICON_INFORMATION)
+                return
+            row = self._active_rows[idx]
         if row.get("source_type") == "radio_recording":
             # Only block Remove for a recording that's genuinely still
             # running -- that needs Stop Recording's graceful finalize
@@ -292,23 +287,61 @@ class DownloadsPanel(wx.Panel):
         DownloadRepository(self._db).delete(row["id"])
         self._load_data()
 
-    def _on_remove_history(self, event: wx.Event) -> None:
-        idx = self._history_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or idx >= len(self._history_rows):
-            wx.MessageBox("Select a download from History first.", "No Selection",
-                          wx.OK | wx.ICON_INFORMATION)
+    def _on_remove_all_active(self, event: wx.Event) -> None:
+        """Remove active entries, preserving recordings that still need stopping."""
+        from radiomaster.database.repository import DownloadRepository
+        rows = DownloadRepository(self._db).get_queued()
+        removable = [row for row in rows if (
+            row.get("source_type") != "radio_recording"
+            or (self.on_check_recording_active
+                and not self.on_check_recording_active(row["id"]))
+        )]
+        if not removable:
+            message = ("Only running recordings remain. Use Stop Recording before removing them."
+                       if rows else "Active Downloads is already empty.")
+            wx.MessageBox(message, "Nothing to Remove", wx.OK | wx.ICON_INFORMATION, self)
             return
-        row = self._history_rows[idx]
+        message = (
+            f"Remove all {len(removable)} removable entries from Active Downloads? "
+            "This only removes the entries; downloads already queued or running will continue "
+            "in the background. Downloaded files will not be deleted."
+        )
+        if len(removable) != len(rows):
+            message += " Running recordings will remain in the list."
+        if wx.MessageBox(message, "Remove All Active Downloads",
+                         wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
+            return
+        # Delete only the confirmed snapshot, and leave entries that finished
+        # while the confirmation was open in History.
+        ids = tuple(row["id"] for row in removable)
+        placeholders = ",".join("?" for _ in ids)
+        if self._delete_history_entries(
+            f"DELETE FROM downloads WHERE id IN ({placeholders}) "
+            "AND status IN ('queued', 'downloading')", ids, area="active downloads",
+        ):
+            self._load_data()
+
+    def _on_remove_history(self, event: wx.Event, *, row: dict[str, Any] | None = None) -> None:
+        if row is None:
+            idx = self._history_list.GetFirstSelected()
+            if idx == wx.NOT_FOUND or idx >= len(self._history_rows):
+                wx.MessageBox("Select a download from History first.", "No Selection",
+                              wx.OK | wx.ICON_INFORMATION, self)
+                return
+            row = self._history_rows[idx]
         if wx.MessageBox(
             f"Remove '{row.get('title', 'this download')}' from History? "
             "This only removes the entry -- it doesn't delete the downloaded file itself.",
-            "Remove From History", wx.YES_NO | wx.ICON_QUESTION,
+            "Remove From History", wx.YES_NO | wx.ICON_QUESTION, self,
         ) != wx.YES:
+            return
+        if not self._delete_history_entries(
+            "DELETE FROM downloads WHERE id = ? AND status IN ('completed', 'failed')",
+            (row["id"],),
+        ):
             return
         if row["id"] == self._playing_history_id:
             self._playing_history_id = None
-        from radiomaster.database.repository import DownloadRepository
-        DownloadRepository(self._db).delete(row["id"])
         self._load_data()
 
     def _on_remove_all_history(self, event: wx.Event) -> None:
@@ -317,77 +350,150 @@ class DownloadsPanel(wx.Panel):
         only the database entries go away, the files on disk are left
         untouched, and anything still queued/downloading stays in the
         Active list (this deliberately never touches those rows)."""
-        if not self._history_rows:
+        count = self._db.fetchone(
+            "SELECT COUNT(*) AS count FROM downloads WHERE status IN ('completed', 'failed')"
+        )["count"]
+        if not count:
             wx.MessageBox("Download History is already empty.", "Nothing to Remove",
-                          wx.OK | wx.ICON_INFORMATION)
+                          wx.OK | wx.ICON_INFORMATION, self)
             return
         if wx.MessageBox(
-            f"Remove all {len(self._history_rows)} entries from Download History? "
+            f"Remove all {count} entries from Download History? "
             "This only removes the entries -- it doesn't delete the downloaded "
             "files themselves.",
-            "Remove All From History", wx.YES_NO | wx.ICON_QUESTION,
+            "Remove All From History", wx.YES_NO | wx.ICON_QUESTION, self,
         ) != wx.YES:
             return
-        from radiomaster.database.repository import DownloadRepository
-        DownloadRepository(self._db).delete_history()
+        if not self._delete_history_entries(
+            "DELETE FROM downloads WHERE status IN ('completed', 'failed')"
+        ):
+            return
         self._playing_history_id = None
         self._load_data()
+
+    def _delete_history_entries(self, sql: str, params: tuple[Any, ...] = (),
+                                *, area: str = "download history") -> bool:
+        """Commit removal before changing the UI; report storage failures."""
+        try:
+            self._db.execute(sql, params)
+            self._db.commit()
+        except (sqlite3.Error, OSError) as error:
+            # A failed commit can leave a pending deletion on this connection.
+            # Roll it back so a later refresh/write cannot hide or delete rows.
+            rollback_failed = False
+            try:
+                self._db.conn.rollback()
+            except (sqlite3.Error, OSError):
+                rollback_failed = True
+            code = getattr(error, "sqlite_errorcode", 0) or 0
+            full = (
+                (code & 0xFF) == sqlite3.SQLITE_FULL
+                or getattr(error, "errno", None) == errno.ENOSPC
+                or getattr(error, "winerror", None) in (39, 112)
+                or "database or disk is full" in str(error).lower()
+                or "no space left on device" in str(error).lower()
+            )
+            if full:
+                message = (
+                    f"Could not update {area} because the drive containing "
+                    "RadioMaster+ data is full. Free some space on that drive and try again. "
+                    "Even removing entries requires some free space."
+                )
+                title = "Drive Full"
+            else:
+                message = f"Could not update {area}. Please try again.\n\nDetails: {error}"
+                title = f"Could Not Update {area.title()}"
+            if rollback_failed:
+                message += "\n\nRestart RadioMaster+ before trying again."
+            wx.MessageBox(message, title, wx.OK | wx.ICON_ERROR, self)
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Context menus -- EVT_CONTEXT_MENU covers right-click, the
     # Menu/Applications key, AND Shift+F10 in one binding (see
     # context_menu_pos's own docstring), so no separate keyboard handling
-    # is needed. Both menus mirror their panel's existing buttons (Stop
-    # Recording/Remove, Play/Remove) plus the one new action each: Restart
-    # for a stalled active download, Retry for a failed one in History.
+    # is needed. Active download actions live here; History also retains
+    # its Play and Remove buttons.
     # ------------------------------------------------------------------
     def _on_active_context_menu(self, event: wx.ContextMenuEvent) -> None:
         idx = self._active_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or idx >= len(self._active_rows):
-            event.Skip()
-            return
-        row = self._active_rows[idx]
+        row = self._active_rows[idx] if 0 <= idx < len(self._active_rows) else {}
         is_recording = row.get("source_type") == "radio_recording"
 
         menu = wx.Menu()
-        if is_recording:
-            stop_item = menu.Append(wx.ID_ANY, "Stop &Recording")
-            self.Bind(wx.EVT_MENU, lambda e: self._on_stop_recording(e), stop_item)
-        else:
+        actions = {}
+        stop_item = menu.Append(wx.ID_ANY, "Stop &Recording")
+        stop_item.Enable(bool(
+            is_recording and row.get("status") == "downloading"
+            and self.on_stop_recording and self.on_check_recording_active
+            and self.on_check_recording_active(row["id"])
+        ))
+        actions[stop_item.GetId()] = lambda: self._on_stop_recording(event, row=row)
+        if not is_recording:
             restart_item = menu.Append(wx.ID_ANY, "&Restart")
-            self.Bind(wx.EVT_MENU, lambda e, r=row: self._restart_download(r), restart_item)
+            restart_item.Enable(bool(row))
+            actions[restart_item.GetId()] = lambda: self._restart_download(row)
+        restart_all_item = menu.Append(wx.ID_ANY, "Restart A&ll")
+        restart_all_item.Enable(bool(self._db.fetchone(
+            "SELECT id FROM downloads WHERE status IN ('queued', 'downloading') "
+            "AND COALESCE(source_type, '') != 'radio_recording' LIMIT 1"
+        )))
+        actions[restart_all_item.GetId()] = lambda: self._on_restart_all_active(event)
         menu.AppendSeparator()
         remove_item = menu.Append(wx.ID_ANY, "Re&move")
-        self.Bind(wx.EVT_MENU, lambda e: self._on_remove(e), remove_item)
-
-        self._active_list.PopupMenu(menu, context_menu_pos(self._active_list, event))
-        menu.Destroy()
+        remove_item.Enable(bool(row))
+        actions[remove_item.GetId()] = lambda: self._on_remove(event, row=row)
+        remove_all_item = menu.Append(wx.ID_ANY, "Remove &All")
+        remove_all_item.Enable(bool(self._db.fetchone(
+            "SELECT id FROM downloads WHERE status IN ('queued', 'downloading') LIMIT 1"
+        )))
+        actions[remove_all_item.GetId()] = lambda: self._on_remove_all_active(event)
+        try:
+            selected = self._active_list.GetPopupMenuSelectionFromUser(
+                menu, context_menu_pos(self._active_list, event))
+        finally:
+            menu.Destroy()
+        if selected in actions:
+            actions[selected]()
 
     def _on_history_context_menu(self, event: wx.ContextMenuEvent) -> None:
         idx = self._history_list.GetFirstSelected()
         row = self._history_rows[idx] if 0 <= idx < len(self._history_rows) else {}
 
         menu = wx.Menu()
+        actions = {}
         play_item = menu.Append(wx.ID_ANY, "&Play")
         play_item.Enable(row.get("status") == "completed")
-        self.Bind(wx.EVT_MENU, lambda e, i=idx: self._play_history_row(i), play_item)
+        actions[play_item.GetId()] = lambda: self._play_history_row(next(
+            (i for i, current in enumerate(self._history_rows) if current["id"] == row.get("id")),
+            -1,
+        ))
         if row.get("status") == "failed":
             retry_item = menu.Append(wx.ID_ANY, "&Retry")
-            self.Bind(wx.EVT_MENU, lambda e, r=row: self._retry_download(r), retry_item)
+            actions[retry_item.GetId()] = lambda: self._retry_download(row)
         retry_all_item = menu.Append(wx.ID_ANY, "Retry all &failed downloads")
         retry_all_item.Enable(bool(self._db.fetchone(
             "SELECT id FROM downloads WHERE status = 'failed' LIMIT 1"
         )))
-        self.Bind(wx.EVT_MENU, self._on_retry_all_failed, retry_all_item)
+        actions[retry_all_item.GetId()] = lambda: self._on_retry_all_failed(event)
         menu.AppendSeparator()
         remove_item = menu.Append(wx.ID_ANY, "R&emove")
         remove_item.Enable(bool(row))
-        self.Bind(wx.EVT_MENU, lambda e: self._on_remove_history(e), remove_item)
+        actions[remove_item.GetId()] = lambda: self._on_remove_history(event, row=row)
         remove_all_item = menu.Append(wx.ID_ANY, "Remove &All")
-        self.Bind(wx.EVT_MENU, lambda e: self._on_remove_all_history(e), remove_all_item)
+        actions[remove_all_item.GetId()] = lambda: self._on_remove_all_history(event)
 
-        self._history_list.PopupMenu(menu, context_menu_pos(self._history_list, event))
-        menu.Destroy()
+        # Dispatch after the native popup closes, so confirmation dialogs have
+        # normal focus and no persistent panel bindings outlive their menu IDs.
+        # Capture the row above: a timer refresh can change the list meanwhile.
+        try:
+            selected = self._history_list.GetPopupMenuSelectionFromUser(
+                menu, context_menu_pos(self._history_list, event))
+        finally:
+            menu.Destroy()
+        if selected in actions:
+            actions[selected]()
 
     # ------------------------------------------------------------------
     # Retry / Restart -- both resubmit the same row to DownloadManager
@@ -396,26 +502,52 @@ class DownloadsPanel(wx.Panel):
     # difference is Restart also has to stop whatever's still actually
     # running for a stalled download first.
     # ------------------------------------------------------------------
-    def _resubmit(self, row: dict[str, Any], *, refresh: bool = True) -> None:
-        from radiomaster.database.repository import DownloadRepository
+    def _resubmit(self, row: dict[str, Any], *, refresh: bool = True,
+                  restart: bool = False) -> bool:
         app = wx.GetApp()
         if not (hasattr(app, "download_manager") and hasattr(app.download_manager, "add_download")):
-            return
-        repo = DownloadRepository(self._db)
-        repo.reset_for_retry(row["id"])
+            return False
+        from radiomaster.services.download_manager import AUDIO_FORMATS, normalize_audio_format
+        from radiomaster.utils.paths import get_downloads_dir, get_podcasts_dir
+
+        output_dir = resolve_stored_path(row.get("output_dir") or "")
+        download_format = row.get("format") or ""
+        extract_audio = bool(row.get("extract_audio"))
+        if not output_dir:
+            # Rows created before migration 22 have no destination or audio
+            # flag. Passing their empty folder to the worker fails immediately
+            # in makedirs(), sending the retry straight back to History.
+            output_dir = (get_podcasts_dir() if row.get("source_type") == "podcast"
+                          else get_downloads_dir())
+            extract_audio = extract_audio or download_format.lower() in (*AUDIO_FORMATS, "ogg")
+        download_format = (normalize_audio_format(download_format) if extract_audio
+                           else (download_format or "best"))
+        def prepare() -> bool:
+            return DownloadsPanel._delete_history_entries(
+                self, "UPDATE downloads SET status = 'queued', progress = 0, error = NULL WHERE id = ?",
+                (row["id"],), area="downloads",
+            )
+        if restart:
+            if not app.download_manager.prepare_restart(row["id"], prepare):
+                return False
+        elif not prepare():
+            return False
         quality = row.get("quality") or ""
         audio_quality = "0" if quality.lower() == "best" else (quality.upper() if quality else "0")
         app.download_manager.add_download(
             row["id"], row["url"],
-            output_dir=resolve_stored_path(row.get("output_dir") or ""),
+            output_dir=output_dir,
             title=row.get("title", ""),
-            format=row.get("format") or "",
-            extract_audio=bool(row.get("extract_audio")),
+            format=download_format,
+            extract_audio=extract_audio,
             audio_quality=audio_quality,
             filename_base=row.get("filename_base") or "",
         )
+        if restart:
+            app.download_manager.start()
         if refresh:
             self._load_data()
+        return True
 
     def _on_retry_all_failed(self, event: wx.Event) -> None:
         """Retry a snapshot of all failures, including history outside the display limit."""
@@ -423,7 +555,8 @@ class DownloadsPanel(wx.Panel):
             "SELECT * FROM downloads WHERE status = 'failed' ORDER BY id"
         )
         for row in rows:
-            self._resubmit(row, refresh=False)
+            if self._resubmit(row, refresh=False) is False:
+                break
         self._load_data()
 
     def _retry_download(self, row: dict[str, Any]) -> None:
@@ -442,10 +575,29 @@ class DownloadsPanel(wx.Panel):
             "Restart Download", wx.YES_NO | wx.ICON_QUESTION,
         ) != wx.YES:
             return
-        app = wx.GetApp()
-        if hasattr(app, "download_manager") and hasattr(app.download_manager, "cancel"):
-            app.download_manager.cancel(row["id"])
-        self._resubmit(row)
+        self._resubmit(row, restart=True)
+
+    def _on_restart_all_active(self, event: wx.Event) -> None:
+        """Restart every active download, excluding live radio recordings."""
+        rows = self._db.fetchall(
+            "SELECT * FROM downloads WHERE status IN ('queued', 'downloading') "
+            "AND COALESCE(source_type, '') != 'radio_recording' ORDER BY id"
+        )
+        if not rows:
+            wx.MessageBox("There are no active downloads to restart.", "Nothing to Restart",
+                          wx.OK | wx.ICON_INFORMATION, self)
+            return
+        if wx.MessageBox(
+            f"Restart all {len(rows)} active downloads? Current attempts will be stopped "
+            "and new attempts started using your simultaneous-download limit. "
+            "Paused downloads will resume. Radio recordings will continue unchanged.",
+            "Restart All Downloads", wx.YES_NO | wx.ICON_QUESTION, self,
+        ) != wx.YES:
+            return
+        for row in rows:
+            if self._resubmit(row, restart=True, refresh=False) is False:
+                break
+        self._load_data()
 
     # ------------------------------------------------------------------
     # Playback -- a completed download's file (podcast episode, YouTube

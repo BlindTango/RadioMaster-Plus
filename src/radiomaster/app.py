@@ -149,6 +149,8 @@ class RadioMasterApp(wx.App):
         self._download_manager.on_error(
             lambda did, msg: download_repo.update_progress(did, 0.0, status="failed")
         )
+        self._download_status_warning_shown = False
+        self._download_manager.on_callback_error(self._on_download_status_error)
         self._download_manager.start()
 
         from radiomaster.utils.paths import get_recordings_dir
@@ -179,6 +181,30 @@ class RadioMasterApp(wx.App):
         self._main_window.Show()
         self.SetTopWindow(self._main_window)
         return True
+
+    def _on_download_status_error(self, error: Exception) -> None:
+        """Roll back on the worker's connection and report once on the UI thread."""
+        import errno
+        import sqlite3
+        try:
+            self._db.conn.rollback()
+        except (sqlite3.Error, OSError):
+            self.logger.exception("Could not roll back download status")
+        if self._download_status_warning_shown:
+            return
+        self._download_status_warning_shown = True
+        full = ((getattr(error, "sqlite_errorcode", 0) or 0) & 0xFF == sqlite3.SQLITE_FULL
+                or getattr(error, "errno", None) == errno.ENOSPC
+                or getattr(error, "winerror", None) in (39, 112)
+                or "database or disk is full" in str(error).lower())
+        message = (
+            "Could not save download status because the drive containing RadioMaster+ data "
+            "is full. Free some space, then restart RadioMaster+ and retry affected downloads."
+            if full else f"Could not save download status. Restart RadioMaster+ and retry "
+            f"affected downloads.\n\nDetails: {error}"
+        )
+        wx.CallAfter(wx.MessageBox, message, "Drive Full" if full else "Download Status Error",
+                     wx.OK | wx.ICON_ERROR)
 
     def OnExit(self) -> int:
         """Clean up on exit."""

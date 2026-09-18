@@ -1044,7 +1044,7 @@ class TestLyricsFetch:
         instead of "seconds into this song" and jump straight to the
         last line."""
         app, win = app_and_window
-        win._engine._live._position = 1200.0  # 20 minutes into the station
+        win._engine._position = 1200.0  # 20 minutes into the station
         win._lyrics_song_start_position = 0.0
 
         with patch("radiomaster.services.lyrics_service.LyricsService.fetch_lyrics", return_value=None):
@@ -1054,18 +1054,18 @@ class TestLyricsFetch:
 
     def test_lyrics_timer_highlights_relative_to_song_start(self, app_and_window) -> None:
         app, win = app_and_window
-        win._engine._live._state = "playing"
+        win._engine._state = "playing"
         win._lyrics_song_start_position = 1200.0
         win._lyrics_panel._lrc_lines = [(0.0, "line zero"), (5.0, "line five"), (10.0, "line ten")]
         win._lyrics_panel.highlight_sentence = MagicMock()
 
         # 3s into the song -> raw engine position is 1203, well past every
         # LRC timestamp; only the offset-adjusted value (3.0) picks line 0.
-        win._engine._live._position = 1203.0
+        win._engine._position = 1203.0
         win._on_lyrics_timer(None)
         win._lyrics_panel.highlight_sentence.assert_called_with(0)
 
-        win._engine._live._position = 1207.0
+        win._engine._position = 1207.0
         win._on_lyrics_timer(None)
         win._lyrics_panel.highlight_sentence.assert_called_with(1)
 
@@ -1329,7 +1329,7 @@ class TestDownloadsHistoryRemoveAll:
 
     def test_remove_all_confirms_then_clears_history(self, app_and_window) -> None:
         """Remove All asks for confirmation, then delegates to
-        DownloadRepository.delete_history and resets the playing-row
+        the protected deletion helper and resets the playing-row
         tracker (a cleared list can't have a playing row anymore)."""
         app, win = app_and_window
         panel = win._downloads_panel
@@ -1342,8 +1342,7 @@ class TestDownloadsHistoryRemoveAll:
 
             with patch("radiomaster.ui.downloads_panel.wx.MessageBox",
                        return_value=wx.YES) as confirm, \
-                    patch("radiomaster.database.repository.DownloadRepository.delete_history",
-                          return_value=1) as delete_all:
+                    patch.object(panel, "_delete_history_entries", return_value=True) as delete_all:
                 panel._on_remove_all_history(MagicMock())
             confirm.assert_called_once()
             assert confirm.call_args[0][2] == wx.YES_NO | wx.ICON_QUESTION
@@ -1364,8 +1363,7 @@ class TestDownloadsHistoryRemoveAll:
 
             with patch("radiomaster.ui.downloads_panel.wx.MessageBox",
                        return_value=wx.NO), \
-                    patch("radiomaster.database.repository.DownloadRepository.delete_history",
-                          return_value=1) as delete_all:
+                    patch.object(panel, "_delete_history_entries", return_value=True) as delete_all:
                 panel._on_remove_all_history(MagicMock())
             delete_all.assert_not_called()
 
@@ -1378,7 +1376,7 @@ class TestDownloadsHistoryRemoveAll:
             self, app_and_window) -> None:
         """With nothing in History, Remove All must not even ask for
         confirmation -- just an informational 'already empty' notice --
-        and must never reach delete_history()."""
+        and must never reach the deletion helper."""
         app, win = app_and_window
         panel = win._downloads_panel
         marker = f"RemoveAllEmptyTest-{id(self)}"
@@ -1390,8 +1388,8 @@ class TestDownloadsHistoryRemoveAll:
             panel._history_rows = []
             try:
                 with patch("radiomaster.ui.downloads_panel.wx.MessageBox") as msgbox, \
-                        patch("radiomaster.database.repository.DownloadRepository.delete_history",
-                              return_value=0) as delete_all:
+                        patch.object(panel._db, "fetchone", return_value={"count": 0}), \
+                        patch.object(panel, "_delete_history_entries", return_value=True) as delete_all:
                     panel._on_remove_all_history(MagicMock())
                 msgbox.assert_called_once()  # the "already empty" notice, not a confirm
                 assert msgbox.call_args[0][2] == wx.OK | wx.ICON_INFORMATION

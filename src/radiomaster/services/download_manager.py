@@ -34,19 +34,15 @@ class DownloadManager:
         self._running = False
         self._paused_flag = False
         self._threads: list[threading.Thread] = []
-        self._lock = threading.Lock()
-        # download_id -> the live yt-dlp Popen, while it's running --
-        # lets cancel() actually kill a specific download instead of
-        # only being able to stop the whole manager. Also tracks ids
-        # asked to cancel before their process even started (still
-        # sitting in self._queue), so _worker skips them instead of
-        # starting a stale request late.
+        self._lock = threading.RLock()
         self._processes: dict[int, subprocess.Popen] = {}
-        self._cancelled: set[int] = set()
+        self._attempts: dict[int, dict[str, Any]] = {}
+        self._execution_locks: dict[int, threading.Lock] = {}
 
         self._on_progress: Callable[[int, float], None] | None = None
         self._on_complete: Callable[[int, str], None] | None = None
         self._on_error: Callable[[int, str], None] | None = None
+        self._on_callback_error: Callable[[Exception], None] | None = None
         self._existing_file_lookup: Callable[[int], str] | None = None
 
     def start(self) -> None:
@@ -54,6 +50,7 @@ class DownloadManager:
         self._running = True
         self._paused_flag = False
         with self._lock:
+            self._threads = [thread for thread in self._threads if thread.is_alive()]
             for _ in range(self._max_concurrent - len(self._threads)):
                 self._start_worker_locked()
 
@@ -116,7 +113,7 @@ class DownloadManager:
         it documents, instead of the two drifting apart by whatever
         yt-dlp happened to extract.
         """
-        self._queue.put({
+        item = {
             "id": download_id,
             "url": url,
             "output_dir": output_dir,
@@ -125,7 +122,11 @@ class DownloadManager:
             "extract_audio": extract_audio,
             "audio_quality": audio_quality,
             "filename_base": filename_base,
-        })
+            "_cancel_event": threading.Event(),
+        }
+        with self._lock:
+            self._attempts[download_id] = item
+        self._queue.put(item)
 
     def _worker(self) -> None:
         """Worker thread that processes downloads from the queue."""
@@ -142,16 +143,6 @@ class DownloadManager:
             try:
                 item = self._queue.get(timeout=1)
             except queue.Empty:
-                continue
-
-            with self._lock:
-                was_cancelled = item["id"] in self._cancelled
-                self._cancelled.discard(item["id"])
-            if was_cancelled:
-                # Cancelled while still waiting in the queue, before its
-                # process ever started -- nothing to kill, just don't
-                # start it late.
-                self._queue.task_done()
                 continue
 
             try:
@@ -171,34 +162,69 @@ class DownloadManager:
                 # "downloads just sit at 0% now" after having worked
                 # earlier in the same session.
                 logger.exception(f"Worker thread crashed processing download {item.get('id')}")
-                if self._on_error:
-                    self._on_error(item["id"], "Download failed (internal error)")
-            self._queue.task_done()
+                self._notify(item, self._on_error, "Download failed (internal error)")
+            finally:
+                self._queue.task_done()
+
+    def prepare_restart(self, download_id: int, prepare: Callable[[], bool]) -> bool:
+        """Save the new state before cancelling, with old callbacks excluded."""
+        with self._lock:
+            if not prepare():
+                return False
+            self.cancel(download_id)
+            return True
 
     def cancel(self, download_id: int) -> bool:
         """Best-effort cancel of one download: kills its live yt-dlp
-        process if one is currently running, and marks the id so a
-        still-queued (not yet started) copy is skipped instead of
-        starting late. Used by "Restart" on a stalled download -- kill
+        process if one is currently running, and marks that attempt so a
+        still-queued copy is skipped without cancelling its replacement.
+        Used by "Restart" on a stalled download -- kill
         the stuck attempt first, then the caller re-submits a fresh one
         via add_download().
 
         Returns True if a live process was actually found and killed;
         False if the download had already finished, was only queued
         (not running), or wasn't tracked at all -- the caller can't tell
-        those apart from this alone, which is fine since either way
-        there's nothing left running for this id to conflict with a
-        fresh restart."""
+        those apart from this alone. A replacement waits for the old
+        attempt to finish cleaning up before it starts."""
         with self._lock:
-            self._cancelled.add(download_id)
+            item = self._attempts.get(download_id)
+            if item is not None:
+                item["_cancel_event"].set()
             process = self._processes.get(download_id)
-        if process is None:
-            return False
-        try:
-            process.kill()
-        except Exception:
-            pass
-        return True
+            if process is None:
+                return False
+            try:
+                process.kill()
+            except OSError:
+                pass
+            return True
+
+    def _notify(self, item: dict[str, Any], callback: Callable[..., None] | None,
+                *args: Any) -> None:
+        # Serialize cancellation with callbacks so an old attempt cannot change
+        # the database after Restart resets it for the replacement.
+        with self._lock:
+            if callback and not item.get("_cancel_event", threading.Event()).is_set():
+                try:
+                    callback(item["id"], *args)
+                except Exception as error:
+                    logger.exception("Could not save download %s status", item["id"])
+                    if self._on_callback_error:
+                        try:
+                            self._on_callback_error(error)
+                        except Exception:
+                            logger.exception("Could not report download status error")
+
+    def _execute_download(self, item: dict[str, Any]) -> None:
+        with self._lock:
+            execution_lock = self._execution_locks.setdefault(item["id"], threading.Lock())
+        # Wait for the killed process to exit and clean up before a replacement
+        # writes to the same files or registers its new process handle.
+        with execution_lock:
+            if item.get("_cancel_event", threading.Event()).is_set():
+                return
+            self._run_download(item)
 
     # UI-facing quality labels aren't valid yt-dlp -f selectors on their own
     # (e.g. "1080p" needs to become a real format expression); map them here.
@@ -222,7 +248,7 @@ class DownloadManager:
         "audio only": "bestaudio/best",
     }
 
-    def _execute_download(self, item: dict[str, Any]) -> None:
+    def _run_download(self, item: dict[str, Any]) -> None:
         """Execute a single download."""
         download_id = item["id"]
         # Run in the worker, before touching the destination or starting any
@@ -231,11 +257,7 @@ class DownloadManager:
         if self._existing_file_lookup and self._on_complete:
             existing = self._existing_file_lookup(download_id)
             if existing:
-                with self._lock:
-                    cancelled = download_id in self._cancelled
-                    self._cancelled.discard(download_id)
-                if not cancelled:
-                    self._on_complete(download_id, existing)
+                self._notify(item, self._on_complete, existing)
                 return
         url = item["url"]
         output_dir = item["output_dir"]
@@ -307,15 +329,10 @@ class DownloadManager:
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             with self._lock:
-                already_cancelled = download_id in self._cancelled
                 self._processes[download_id] = process
-            if already_cancelled:
-                # cancel() raced us between the queue-skip check above
-                # and here -- kill it immediately instead of letting a
-                # stale attempt run to completion. Left in self._cancelled
-                # (not discarded here) so the completion path below knows
-                # to suppress on_error for it -- see that comment.
-                process.kill()
+                if item.get("_cancel_event", threading.Event()).is_set():
+                    process.kill()
+            self._notify(item, self._on_progress, 0.0)
 
             # Monitor progress, and remember the real output file path yt-dlp
             # reports -- without this, a completed download had no way to
@@ -350,37 +367,20 @@ class DownloadManager:
                     try:
                         percent_str = line.split("%")[0].split()[-1]
                         percent = float(percent_str)
-                        if self._on_progress:
-                            self._on_progress(download_id, percent)
+                        self._notify(item, self._on_progress, percent)
                     except (ValueError, IndexError):
                         pass
 
             process.wait()
 
-            with self._lock:
-                was_cancelled = download_id in self._cancelled
-                self._cancelled.discard(download_id)
-            if was_cancelled:
-                # Deliberately killed via cancel() (the "Restart a
-                # stalled download" flow) -- the caller already knows
-                # and is about to re-submit a fresh attempt for this
-                # same id, so firing on_error here would just be a
-                # spurious "Download failed" racing against (and
-                # possibly landing after) the new attempt's own
-                # progress updates, stomping its status back to
-                # 'failed' while it's actually running fine.
-                pass
-            elif process.returncode == 0:
-                if self._on_complete:
-                    self._on_complete(download_id, destination_path)
+            if process.returncode == 0:
+                self._notify(item, self._on_complete, destination_path)
             else:
-                if self._on_error:
-                    self._on_error(download_id, "Download failed")
+                self._notify(item, self._on_error, "Download failed")
 
         except Exception as e:
             logger.error(f"Download {download_id} failed: {e}")
-            if self._on_error:
-                self._on_error(download_id, str(e))
+            self._notify(item, self._on_error, str(e))
         finally:
             with self._lock:
                 self._active = [a for a in self._active if a["id"] != download_id]
@@ -400,3 +400,6 @@ class DownloadManager:
 
     def on_error(self, cb: Callable[[int, str], None]) -> None:
         self._on_error = cb
+
+    def on_callback_error(self, cb: Callable[[Exception], None]) -> None:
+        self._on_callback_error = cb

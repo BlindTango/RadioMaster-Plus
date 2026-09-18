@@ -315,7 +315,9 @@ class SchedulerService:
 
     @staticmethod
     def _enforce_episode_retention(db: Any, keep: int) -> None:
-        """Remove local files older than each podcast's newest ``keep`` downloads."""
+        """Remove older downloads, or keep everything when ``keep`` is -1."""
+        if keep == -1:
+            return
         import os
         from radiomaster.utils.paths import resolve_stored_path
         keep = max(1, keep)

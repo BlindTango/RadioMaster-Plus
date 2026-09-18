@@ -419,12 +419,12 @@ class PodcastsPanel(SettingsPanel):
         )
         sizer.Add(self.download_limit_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        sizer.Add(wx.StaticText(self, label="Episodes to keep:"), 0, wx.ALL, 5)
+        sizer.Add(wx.StaticText(self, label="Episodes to keep (-1 for unlimited):"), 0, wx.ALL, 5)
         self.keep_episodes_spin = wx.SpinCtrl(
             self, value=str(self.config.get("podcasts.keep_episodes", default=10)),
-            min=1, max=1000,
+            min=-1, max=1000,
         )
-        set_accessible_name(self.keep_episodes_spin, "Episodes to keep")
+        set_accessible_name(self.keep_episodes_spin, "Episodes to keep, minus 1 for unlimited")
         sizer.Add(self.keep_episodes_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
         sizer.Add(

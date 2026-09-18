@@ -98,6 +98,10 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Changing the title or destination does not move or download that existing copy again. "
         "In Download History, press Shift+F10 or the Applications key and choose "
         "Retry all failed downloads to retry every failure, including older entries outside the display limit. "
+        "In Active Downloads, use the context menu for Restart, Restart All, Remove, Remove All, "
+        "and Stop Recording for a running radio recording. Restart resumes paused downloads "
+        "within the simultaneous-download limit. Remove clears entries without cancelling transfers. "
+        "Settings > Podcasts > Episodes to keep accepts -1 for unlimited retention. "
         "See the manual topic Reusing Completed Downloads for matching rules and limitations."
     )),
     ("Accessibility Essentials", (
@@ -116,6 +120,19 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.90", (
+        "Fixed Restart skipping replacement downloads. Restart and the new Restart All "
+        "resume paused downloads within the simultaneous-download limit. Old attempts "
+        "cannot overwrite replacement progress. Older failed downloads now retry with "
+        "fallback folders and valid format settings.\n\n"
+        "Active Downloads adds Remove All and keeps Stop Recording and Remove in its "
+        "context menu instead of separate buttons. Stop Recording is enabled only for "
+        "a running radio recording. Remove All preserves live recordings and does not "
+        "cancel background transfers or delete files. History removal retains the selected "
+        "entry across refreshes and reports storage errors, including a full drive.\n\n"
+        "Settings > Podcasts > Episodes to keep now accepts -1 for unlimited retention. "
+        "The User Manual and Quick Start Guide explain these controls."
+    )),
     ("Version 1.1.89", (
         "Downloads now check for a recorded completed copy before contacting the source. "
         "When the same source, format, quality, and audio/video choice match and the file still exists, "

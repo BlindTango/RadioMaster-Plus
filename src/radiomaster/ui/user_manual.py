@@ -376,7 +376,8 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             for none, or a positive limit. Episodes to keep is a separate retention
             setting: it can remove older downloaded episode files and their history
             entries, not just hide rows. Choose both deliberately before enabling a
-            large feed's downloads. Unlimited downloading does not disable retention.
+            large feed's downloads. Set Episodes to keep to -1 to disable retention;
+            unlimited downloading alone does not disable retention.
         """),
     ]),
     ("Audiobooks", [
@@ -584,24 +585,44 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         """),
         _topic("Progress, Restart, Retry, and Remove", """
             Read an active row's status and progress before taking action. Its context
-            menu offers Restart for a normal download, or Stop Recording for a running
-            recording. Restart resubmits a download. Failed History entries offer Retry.
+            menu opens with right-click, Shift+F10, or the Applications key. Restart
+            stops the selected download attempt and starts a replacement. Restart All
+            restarts all queued and downloading entries, excluding radio recordings.
+            Both resume a paused manager and follow the simultaneous-download limit;
+            excess entries wait until a download slot is available.
+
+            Stop Recording is enabled only for a selected running radio recording with
+            downloading status. It finalizes that recording's file. Stop Recording and
+            Remove are in the context menu; their Active Downloads buttons were removed.
+            Failed History entries offer Retry.
 
             In Download History, right-click or press Shift+F10 or the Applications key
             and choose Retry all failed downloads to retry every failed entry, including
             entries beyond the display limit. No row selection is required. The option
             is disabled when there are no failures. Each retry keeps its saved settings
-            and reuses a matching completed file when available.
+            and reuses a matching completed file when available. Older entries without
+            saved download folders use the current podcast or general download location.
 
             Remove on an active normal download removes its list/database entry; it
             does not cancel the background transfer. The confirmation explains this.
             Do not use Remove as a pause or cancellation control. A live recording
             must be stopped with Stop Recording so its output can be finalized.
+            Remove All in Active Downloads removes all eligible active entries after
+            confirmation, while preserving running recordings. Queued and running
+            transfers continue in the background, and downloaded files are kept.
 
             Remove in Download History deletes the history entry, not its saved file.
             Remove All clears completed/failed history after confirmation, including
             entries beyond the current display limit. It does not delete downloaded files
             or clear active work. Use Windows file management for actual file deletion.
+
+            Removing entries still requires a database write. If the drive containing
+            RadioMaster+ data is full, History removal and Active Downloads Remove All
+            show a Drive Full warning and roll back the failed change. Free space on
+            that drive and try again. Other database errors are also reported.
+            Retry and Restart also report failures to save the new download state.
+            If a background download cannot save its status, a warning explains the
+            error; after freeing space, restart RadioMaster+ and retry affected downloads.
         """),
         _topic("History Length and Playback Navigation", """
             Settings > Downloads > Download History entries to show controls the number
@@ -893,7 +914,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
 
             Episodes to keep controls retention separately from the automatic-download
             limit and can delete older downloaded episode files and related history.
-            Its range is 1 to 1000; it has no unlimited choice. Episode order chooses
+            Set it to -1 for unlimited retention, keeping all downloaded episodes.
+            Positive values keep that many recent downloads per podcast, up to 1000;
+            zero is treated as one. Episode order chooses
             Newest first or Oldest first. Auto-advance to
             the next episode when one finishes controls continuation in the selected show.
 
