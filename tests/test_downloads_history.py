@@ -98,6 +98,16 @@ def test_dismissing_menu_does_nothing(history, monkeypatch):
     assert repo.get(failed)
 
 
+def test_refresh_available_without_history_selection(history, monkeypatch):
+    panel, repo, completed, failed, queued, media, confirmation = history
+    panel._history_rows = []
+    panel._history_list.GetFirstSelected.return_value = -1
+    select_menu_action(monkeypatch, panel, "Re&fresh")
+    DownloadsPanel._on_history_context_menu(panel, MagicMock())
+    panel._load_data.assert_called_once()
+    confirmation.assert_not_called()
+
+
 def test_remove_does_not_delete_entry_retried_while_menu_open(history, monkeypatch):
     panel, repo, completed, failed, queued, media, confirmation = history
     select_menu_action(monkeypatch, panel, "R&emove", lambda: repo.reset_for_retry(completed))

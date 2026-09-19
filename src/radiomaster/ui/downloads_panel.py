@@ -109,23 +109,6 @@ class DownloadsPanel(wx.Panel):
         self._history_list.Bind(wx.EVT_CONTEXT_MENU, self._on_history_context_menu)
         main_sizer.Add(self._history_list, 1, wx.EXPAND | wx.ALL, 4)
 
-        history_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_play_history = wx.Button(self, label="&Play")
-        set_accessible_name(self._btn_play_history, "Play Selected Download")
-        self._btn_play_history.Bind(wx.EVT_BUTTON, lambda e: self._play_selected_history())
-        history_btn_sizer.Add(self._btn_play_history, 1, wx.RIGHT, 2)
-        self._btn_remove_history = wx.Button(self, label="R&emove")
-        set_accessible_name(self._btn_remove_history, "Remove Selected Download From History")
-        self._btn_remove_history.Bind(wx.EVT_BUTTON, self._on_remove_history)
-        history_btn_sizer.Add(self._btn_remove_history, 1, wx.LEFT, 2)
-        main_sizer.Add(history_btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
-
-        # Refresh button
-        self._btn_refresh = wx.Button(self, label="Refresh")
-        set_accessible_name(self._btn_refresh, "Refresh Downloads")
-        self._btn_refresh.Bind(wx.EVT_BUTTON, lambda e: self._load_data())
-        main_sizer.Add(self._btn_refresh, 0, wx.ALIGN_CENTER | wx.ALL, 4)
-
         self.SetSizer(main_sizer)
 
     def _load_data(self) -> None:
@@ -413,8 +396,7 @@ class DownloadsPanel(wx.Panel):
     # Context menus -- EVT_CONTEXT_MENU covers right-click, the
     # Menu/Applications key, AND Shift+F10 in one binding (see
     # context_menu_pos's own docstring), so no separate keyboard handling
-    # is needed. Active download actions live here; History also retains
-    # its Play and Remove buttons.
+    # is needed. Download actions are available from these context menus.
     # ------------------------------------------------------------------
     def _on_active_context_menu(self, event: wx.ContextMenuEvent) -> None:
         idx = self._active_list.GetFirstSelected()
@@ -483,6 +465,9 @@ class DownloadsPanel(wx.Panel):
         actions[remove_item.GetId()] = lambda: self._on_remove_history(event, row=row)
         remove_all_item = menu.Append(wx.ID_ANY, "Remove &All")
         actions[remove_all_item.GetId()] = lambda: self._on_remove_all_history(event)
+        menu.AppendSeparator()
+        refresh_item = menu.Append(wx.ID_ANY, "Re&fresh")
+        actions[refresh_item.GetId()] = self._load_data
 
         # Dispatch after the native popup closes, so confirmation dialogs have
         # normal focus and no persistent panel bindings outlive their menu IDs.

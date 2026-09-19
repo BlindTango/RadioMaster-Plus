@@ -553,8 +553,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         _topic("Downloads Tab", """
             Open Downloads with {shortcut:panel_downloads} or Tools > Download Manager.
             Active Downloads shows queued or running work and active radio recordings.
-            Download History contains completed and failed entries. Refresh reloads
-            the lists; they also update during normal operation.
+            Download History contains completed and failed entries. Its context menu
+            provides Play, Remove, Remove All, and Refresh. Open it with right-click,
+            Shift+F10, or the Applications key. Refresh reloads both lists, even when
+            History is empty; the lists also update automatically. These actions have
+            no separate buttons in the Downloads panel.
 
             Select a history item and choose Play, press Enter, or double-click to open
             a completed file. Files must still exist at their recorded locations.

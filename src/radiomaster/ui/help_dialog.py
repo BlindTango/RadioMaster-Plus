@@ -120,6 +120,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.91", (
+        "Download History now provides Refresh in its context menu, including when "
+        "no entry is selected or History is empty. Refresh reloads both download lists. "
+        "Removed the separate Play Selected Download, Remove Selected Download From "
+        "History, and Refresh buttons. Play and Remove remain in the context menu; "
+        "Enter still plays a completed entry and Delete removes the selected entry. "
+        "The User Manual explains the updated controls."
+    )),
     ("Version 1.1.90", (
         "Fixed Restart skipping replacement downloads. Restart and the new Restart All "
         "resume paused downloads within the simultaneous-download limit. Old attempts "

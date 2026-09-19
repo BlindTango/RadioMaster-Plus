@@ -61,7 +61,7 @@ def test_history_menu_allows_bulk_retry_without_selection(monkeypatch):
     monkeypatch.setattr("radiomaster.ui.downloads_panel.context_menu_pos", lambda *args: (0, 0))
     panel = SimpleNamespace(
         _history_list=MagicMock(), _history_rows=[], _db=MagicMock(),
-        Bind=MagicMock(), _on_retry_all_failed=MagicMock(),
+        Bind=MagicMock(), _on_retry_all_failed=MagicMock(), _load_data=MagicMock(),
     )
     panel._history_list.GetFirstSelected.return_value = -1
     DownloadsPanel._on_history_context_menu(panel, MagicMock())
