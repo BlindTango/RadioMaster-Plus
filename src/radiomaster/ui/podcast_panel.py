@@ -143,10 +143,6 @@ class PodcastPanel(wx.Panel):
         self._btn_subscribe.Disable()
         set_accessible_name(self._btn_subscribe, "Subscribe to selected podcast")
         sub_btn_sizer.Add(self._btn_subscribe, 1, wx.RIGHT, 2)
-        self._btn_unsubscribe = wx.Button(col2, label="&Unsubscribe")
-        self._btn_unsubscribe.Disable()
-        set_accessible_name(self._btn_unsubscribe, "Unsubscribe from selected podcast")
-        sub_btn_sizer.Add(self._btn_unsubscribe, 1, wx.LEFT, 2)
         col2_sizer.Add(sub_btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
         col2.SetSizer(col2_sizer)
         main_sizer.Add(col2, 1, wx.EXPAND | wx.RIGHT, 4)
@@ -169,27 +165,6 @@ class PodcastPanel(wx.Panel):
         # A second, separate "Play" button next to that was confusing
         # (two different-looking play controls that don't do the same
         # thing) rather than actually useful.
-        self._btn_download = wx.Button(col3, label="Download Episode")
-        set_accessible_name(self._btn_download, "Download Episode")
-        col3_sizer.Add(self._btn_download, 0, wx.EXPAND | wx.ALL, 4)
-
-        btn2_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_add_feed = wx.Button(col3, label="Add RSS Feed...")
-        set_accessible_name(self._btn_add_feed, "Add RSS Feed")
-        btn2_sizer.Add(self._btn_add_feed, 1, wx.RIGHT, 2)
-        self._btn_sync_gpodder = wx.Button(col3, label="Import gPodder Subscriptions")
-        set_accessible_name(self._btn_sync_gpodder, "Import gpodder.net Subscriptions")
-        btn2_sizer.Add(self._btn_sync_gpodder, 1, wx.LEFT, 2)
-        col3_sizer.Add(btn2_sizer, 0, wx.EXPAND | wx.ALL, 4)
-
-        opml_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._btn_import_opml = wx.Button(col3, label="Import OPML...")
-        set_accessible_name(self._btn_import_opml, "Import OPML")
-        opml_sizer.Add(self._btn_import_opml, 1, wx.RIGHT, 2)
-        self._btn_export_opml = wx.Button(col3, label="Export OPML...")
-        set_accessible_name(self._btn_export_opml, "Export OPML")
-        opml_sizer.Add(self._btn_export_opml, 1, wx.LEFT, 2)
-        col3_sizer.Add(opml_sizer, 0, wx.EXPAND | wx.ALL, 4)
 
         col3.SetSizer(col3_sizer)
         main_sizer.Add(col3, 2, wx.EXPAND)
@@ -202,17 +177,15 @@ class PodcastPanel(wx.Panel):
         self.search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_directory_search)
         self._category_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_category_select)
         self._podcast_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_podcast_select)
+        self._podcast_list.Bind(
+            wx.EVT_LIST_ITEM_DESELECTED, lambda event: self._update_subscription_buttons(),
+        )
         self._podcast_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_podcast_activated)
         self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
-        self._btn_unsubscribe.Bind(wx.EVT_BUTTON, self._on_unsubscribe)
+        self._podcast_list.Bind(wx.EVT_CONTEXT_MENU, self._on_podcast_context_menu)
         self._episode_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
         self._episode_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_episode_selected)
         self._episode_list.Bind(wx.EVT_CONTEXT_MENU, self._on_episode_context_menu)
-        self._btn_download.Bind(wx.EVT_BUTTON, self._on_download)
-        self._btn_add_feed.Bind(wx.EVT_BUTTON, self._on_add_feed)
-        self._btn_sync_gpodder.Bind(wx.EVT_BUTTON, self._on_sync_gpodder)
-        self._btn_import_opml.Bind(wx.EVT_BUTTON, self._on_import_opml)
-        self._btn_export_opml.Bind(wx.EVT_BUTTON, self._on_export_opml)
 
     # ------------------------------------------------------------------
     # Small ListCtrl helpers (InsertItem/SetItem is a lot of boilerplate
@@ -261,9 +234,51 @@ class PodcastPanel(wx.Panel):
     def _update_subscription_buttons(self) -> None:
         idx = self._podcast_list.GetFirstSelected()
         rows = getattr(self, "_podcast_data", [])
-        selected = 0 <= idx < len(rows)
-        self._btn_subscribe.Enable(selected and self._viewing_search_results)
-        self._btn_unsubscribe.Enable(selected and not self._viewing_search_results)
+        can_subscribe = False
+        if self._viewing_search_results and 0 <= idx < len(rows):
+            from radiomaster.database.repository import PodcastRepository
+            feed_url = rows[idx].get("feed_url", "")
+            can_subscribe = bool(feed_url) and (
+                PodcastRepository(self._db).get_by_feed_url(feed_url) is None
+            )
+        self._btn_subscribe.Enable(can_subscribe)
+
+    def _on_podcast_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        """Manage feeds with right-click, Shift+F10, or the Menu key."""
+        ctrl = self._podcast_list
+        if event.GetPosition() != wx.DefaultPosition:
+            idx, _ = ctrl.HitTest(ctrl.ScreenToClient(event.GetPosition()))
+            previous = ctrl.GetFirstSelected()
+            if previous != wx.NOT_FOUND and previous != idx:
+                ctrl.Select(previous, False)
+            if idx != wx.NOT_FOUND:
+                ctrl.Select(idx)
+                ctrl.Focus(idx)
+        self._update_subscription_buttons()
+        idx = ctrl.GetFirstSelected()
+        rows = getattr(self, "_podcast_data", [])
+        subscribed = (0 <= idx < len(rows)
+                      and not self._viewing_search_results
+                      and bool(rows[idx].get("id")))
+        menu = wx.Menu()
+        unsubscribe = menu.Append(wx.ID_ANY, "&Unsubscribe")
+        unsubscribe.Enable(subscribed)
+        menu.Bind(wx.EVT_MENU, self._on_unsubscribe, unsubscribe)
+        add_feed = menu.Append(wx.ID_ANY, "&Add RSS Feed...")
+        menu.Bind(wx.EVT_MENU, self._on_add_feed, add_feed)
+        menu.AppendSeparator()
+        gpodder = menu.Append(wx.ID_ANY, "Import &gpodder.net Subscriptions")
+        gpodder.Enable(not getattr(self, "_importing_gpodder", False))
+        menu.Bind(wx.EVT_MENU, self._on_sync_gpodder, gpodder)
+        import_opml = menu.Append(wx.ID_ANY, "&Import OPML...")
+        import_opml.Enable(not getattr(self, "_importing_opml", False))
+        menu.Bind(wx.EVT_MENU, self._on_import_opml, import_opml)
+        export_opml = menu.Append(wx.ID_ANY, "&Export OPML...")
+        menu.Bind(wx.EVT_MENU, self._on_export_opml, export_opml)
+        try:
+            ctrl.PopupMenu(menu, context_menu_pos(ctrl, event))
+        finally:
+            menu.Destroy()
 
     def _selected_category(self) -> str:
         idx = self._category_list.GetFirstSelected()
@@ -383,6 +398,12 @@ class PodcastPanel(wx.Panel):
                           wx.OK | wx.ICON_WARNING)
             return
 
+        from radiomaster.database.repository import PodcastRepository
+        if PodcastRepository(self._db).get_by_feed_url(feed_url) is not None:
+            self._update_subscription_buttons()
+            self._set_status("Status: Already subscribed to this podcast.")
+            return
+
         self._set_status(f"Status: Subscribing to '{result.get('title', feed_url)}'...")
         self._btn_subscribe.Disable()
 
@@ -485,6 +506,8 @@ class PodcastPanel(wx.Panel):
 
     def _on_sync_gpodder(self, event: wx.CommandEvent) -> None:
         """Sync subscriptions with gpodder.net."""
+        if getattr(self, "_importing_gpodder", False):
+            return
         from radiomaster.utils.config import ConfigManager
         config = ConfigManager.get_instance()
         username = config.get("podcasts.gpodder_username", default="")
@@ -495,8 +518,8 @@ class PodcastPanel(wx.Panel):
         from radiomaster.services.gpodder_sync import GpodderSync
         from radiomaster.database.repository import PodcastRepository
         import threading
-        self._btn_sync_gpodder.Disable()
-        self._btn_sync_gpodder.SetLabel("Importing...")
+        self._importing_gpodder = True
+        self._set_status("Status: Importing gpodder.net subscriptions...")
         def _do_sync():
             try:
                 sync = GpodderSync(username)
@@ -514,13 +537,17 @@ class PodcastPanel(wx.Panel):
                 wx.CallAfter(wx.MessageBox, f"gpodder.net sync failed: {e}",
                             "Import Error", wx.OK | wx.ICON_ERROR)
             finally:
-                wx.CallAfter(self._btn_sync_gpodder.Enable)
-                wx.CallAfter(self._btn_sync_gpodder.SetLabel, "Import gPodder Subscriptions")
+                call_after_safe(self, self._finish_gpodder_import)
         threading.Thread(target=_do_sync, daemon=True).start()
 
+    def _finish_gpodder_import(self) -> None:
+        self._importing_gpodder = False
+        if not self._viewing_search_results:
+            self._on_category_select(None)
+        self._set_status("Status: gpodder.net import finished.")
+
     def _on_download(self, event: wx.CommandEvent) -> None:
-        """Download the selected episode for offline playback (Download
-        Episode button and the episode context menu's Download item)."""
+        """Download the selected episode for offline playback."""
         idx = self._episode_list.GetFirstSelected()
         if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
             wx.MessageBox("Please select an episode first.", "No Selection", wx.OK | wx.ICON_WARNING)
@@ -665,13 +692,15 @@ class PodcastPanel(wx.Panel):
         the same Play/Pause/Stop template as RadioPanel's station context
         menu (see radio_panel.py's _on_station_context_menu, written as
         "the template other panels' context menus will follow"), plus
-        Download/Download All for offline playback."""
+        Download/Download All for offline playback and episode refresh."""
         idx = self._episode_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or not hasattr(self, "_episode_data") or idx >= len(self._episode_data):
-            event.Skip()
-            return
-        ep = self._episode_data[idx]
+        episodes = getattr(self, "_episode_data", [])
+        ep = episodes[idx] if 0 <= idx < len(episodes) else {}
         url = ep.get("audio_url", "")
+        podcast_idx = self._podcast_list.GetFirstSelected()
+        podcasts = getattr(self, "_podcast_data", [])
+        podcast = (podcasts[podcast_idx] if not self._viewing_search_results
+                   and 0 <= podcast_idx < len(podcasts) else {})
 
         menu = wx.Menu()
 
@@ -698,10 +727,19 @@ class PodcastPanel(wx.Panel):
         self.Bind(wx.EVT_MENU, lambda e, i=idx: self._download_episode_at(i, show_confirmation=True), download_item)
 
         download_all_item = menu.Append(wx.ID_ANY, "Download &All")
+        download_all_item.Enable(any(episode.get("audio_url") for episode in episodes))
         self.Bind(wx.EVT_MENU, lambda e: self._on_download_all(), download_all_item)
 
-        self._episode_list.PopupMenu(menu, context_menu_pos(self._episode_list, event))
-        menu.Destroy()
+        menu.AppendSeparator()
+        refresh_item = menu.Append(wx.ID_ANY, "Re&fresh Episodes")
+        refresh_item.Enable(bool(podcast.get("id") and podcast.get("feed_url"))
+                            and podcast["id"] not in self._refreshing_podcasts)
+        menu.Bind(wx.EVT_MENU, lambda e: self._refresh_subscription(podcast), refresh_item)
+
+        try:
+            self._episode_list.PopupMenu(menu, context_menu_pos(self._episode_list, event))
+        finally:
+            menu.Destroy()
 
     @staticmethod
     def _write_show_notes(feed_dir: str, filename_base: str, podcast_title: str,
@@ -1145,7 +1183,6 @@ class PodcastPanel(wx.Panel):
                           wx.OK | wx.ICON_INFORMATION)
             return
         self._importing_opml = True
-        self._btn_import_opml.Disable()
         self._set_status(f"Status: Importing {len(feeds)} feeds and loading episodes...")
 
         def worker():
@@ -1159,7 +1196,6 @@ class PodcastPanel(wx.Panel):
 
     def _finish_opml_import(self, result: dict[str, Any]) -> None:
         self._importing_opml = False
-        self._btn_import_opml.Enable()
         self._search_seq += 1
         self._category_list.Select(self._find_row(self._category_list, "Subscriptions"))
         self._on_category_select(None)

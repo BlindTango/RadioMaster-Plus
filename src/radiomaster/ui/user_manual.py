@@ -313,35 +313,46 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Custom Feeds, and Directory. Select a podcast to load its episodes, then
             activate an episode with Enter or a double-click to play.
 
-            The episode context menu provides Play/Pause/Resume, Stop, Download, and
-            Download All. Other panel controls include Subscribe, Unsubscribe, Download
-            Episode, Add RSS Feed, Import gPodder Subscriptions, Import OPML, and Export OPML.
+            Open either list's context menu with Shift+F10, the Applications/Menu key,
+            or a right-click. The Podcasts list menu provides Unsubscribe, Add RSS Feed,
+            Import gpodder.net Subscriptions, Import OPML, and Export OPML. Import actions
+            are available even when the list is empty. Subscribe remains a button.
+            The Episodes list menu provides Play/Pause/Resume, Stop, Download,
+            Download All, and Refresh Episodes. These actions use menus instead of
+            separate buttons to reduce Tab stops.
         """),
         _topic("Finding and Subscribing to Podcasts", """
             1. Enter a show name or subject in the Podcasts Search field and choose Search.
-            2. Select a result to inspect its episodes.
-            3. Choose Subscribe to keep the podcast in Subscriptions.
+            2. Select a search result.
+            3. Choose Subscribe to save the podcast and load its episodes.
             4. Return to Subscriptions and select the show whenever you want its episodes.
 
             Directory search uses the available podcast directories. Podcast Index can
             provide a second search directory when its API Key and API Secret are entered
             in Settings > Podcasts. They are separate from an AcoustID key.
 
-            Select a subscription and choose Unsubscribe to remove it from your saved
-            subscriptions. This is not a file-deletion command for downloaded audio.
+            Subscribe is enabled only when the selected result has a feed address and
+            is not already subscribed. Select a saved subscription and choose Unsubscribe
+            from the Podcasts list context menu to remove it. Unsubscribe is disabled
+            when no saved subscription is selected, including when the list is empty.
+            This is not a file-deletion command for downloaded audio.
         """),
         _topic("RSS Feeds, OPML, and gPodder Import", """
-            Add RSS Feed accepts a podcast's RSS feed URL directly. Use it when a show
+            In the Podcasts list context menu, Add RSS Feed accepts a podcast's RSS feed
+            URL directly. Use it when a show
             is absent from search results; a podcast homepage is not always its RSS URL.
             Custom feeds can be found using the Custom Feeds category.
 
             Import OPML loads a file containing podcast feed addresses. Export OPML
             saves subscriptions to an OPML file for backup or another podcast player.
-            Both are available in the Podcasts panel and the File menu. OPML does not
+            Both are available in the Podcasts list context menu and the File menu.
+            Importing subscribes to the feeds and loads their episodes in the background.
+            Re-importing can retry feeds whose episodes could not be fetched. OPML does not
             contain downloaded audio, listening positions, or all application settings.
 
             To import public gPodder subscriptions, enter the gPodder Username in
-            Settings > Podcasts, save it, then choose Import gPodder Subscriptions.
+            Settings > Podcasts, save it, then choose Import gpodder.net Subscriptions
+            from the Podcasts list context menu.
             This imports publicly available subscriptions. It is not authenticated
             two-way synchronization of private feeds or listening progress.
         """),
@@ -350,6 +361,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             is used when available; otherwise playback uses the episode's online address.
             A saved position can produce a resume prompt. Choose whether to continue
             or begin again. Use the position slider for a specific point in finite audio.
+
+            Selecting a subscription refreshes its episodes automatically. To fetch the
+            latest episodes again, choose Refresh Episodes from the Episodes list context
+            menu. This works even when no episodes are loaded. Refresh is disabled while
+            that podcast is already refreshing or when no subscription is selected.
 
             Settings > Podcasts > Episode order chooses Newest first or Oldest first.
             First/Previous/Next/Last follow the displayed order. Auto-advance to the next
@@ -360,7 +376,7 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             shared display contains show notes rather than a song-lyrics lookup.
         """),
         _topic("Downloading Episodes and Complete Feeds", """
-            Choose Download Episode or the episode context menu's Download to queue one
+            Choose Download from the Episodes list context menu to queue one
             episode. Download All queues episodes currently listed for that podcast after
             one confirmation. Preparation runs in the background and reports queued,
             skipped, and failed episodes. A matching completed file recorded in History

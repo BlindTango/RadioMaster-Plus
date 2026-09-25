@@ -81,20 +81,51 @@ def panel_method(name, **globals):
     return namespace[name]
 
 
-@pytest.mark.parametrize("search,selected,subscribe,unsubscribe", [
-    (False, 0, False, True), (True, 0, True, False),
-    (False, -1, False, False), (True, -1, False, False),
+@pytest.mark.parametrize("search,selected,subscribe", [
+    (False, 0, False), (True, 0, True),
+    (False, -1, False), (True, -1, False),
 ])
-def test_subscription_buttons_match_selection(search, selected, subscribe, unsubscribe):
+def test_subscription_buttons_match_selection(db, search, selected, subscribe):
     panel = SimpleNamespace(
-        _podcast_list=MagicMock(), _podcast_data=[{"id": 1}],
+        _db=db, _podcast_list=MagicMock(), _podcast_data=[{"feed_url": "https://feed"}],
         _viewing_search_results=search, _btn_subscribe=MagicMock(),
-        _btn_unsubscribe=MagicMock(),
     )
     panel._podcast_list.GetFirstSelected.return_value = selected
     panel_method("_update_subscription_buttons")(panel)
     panel._btn_subscribe.Enable.assert_called_once_with(subscribe)
-    panel._btn_unsubscribe.Enable.assert_called_once_with(unsubscribe)
+
+
+def test_search_result_subscribe_tracks_database_subscription(db):
+    panel = SimpleNamespace(
+        _db=db, _podcast_list=MagicMock(), _podcast_data=[{"feed_url": "https://feed"}],
+        _viewing_search_results=True, _btn_subscribe=MagicMock(),
+    )
+    panel._podcast_list.GetFirstSelected.return_value = 0
+    update = panel_method("_update_subscription_buttons")
+    repo = PodcastRepository(db)
+    podcast_id = repo.add("https://feed", title="Already subscribed")
+    update(panel)
+    panel._btn_subscribe.Enable.assert_called_with(False)
+    repo.remove(podcast_id)
+    update(panel)
+    panel._btn_subscribe.Enable.assert_called_with(True)
+    panel._podcast_data = [{}]
+    update(panel)
+    panel._btn_subscribe.Enable.assert_called_with(False)
+
+
+def test_activating_existing_search_result_does_not_subscribe_again(db):
+    PodcastRepository(db).add("https://feed", title="Existing")
+    panel = SimpleNamespace(
+        _db=db, _podcast_list=MagicMock(), _podcast_data=[{"feed_url": "https://feed"}],
+        _viewing_search_results=True, _update_subscription_buttons=MagicMock(),
+        _set_status=MagicMock(),
+    )
+    panel._podcast_list.GetFirstSelected.return_value = 0
+    panel_method("_on_subscribe", wx=SimpleNamespace(NOT_FOUND=-1))(panel, None)
+    panel._update_subscription_buttons.assert_called_once()
+    panel._set_status.assert_called_once_with("Status: Already subscribed to this podcast.")
+    assert len(PodcastRepository(db).get_all()) == 1
 
 
 @pytest.mark.parametrize("search", [False, True])
@@ -114,6 +145,46 @@ def test_select_subscription_loads_cached_episodes_then_refreshes(search):
     else:
         panel._load_episodes_for_index.assert_called_once_with(0)
         panel._refresh_subscription.assert_called_once_with(podcast)
+
+
+@pytest.mark.parametrize("search,selected,rows,enabled", [
+    (False, 0, [{"id": 3}], True),
+    (True, 0, [{"feed_url": "https://feed"}], False),
+    (False, -1, [], False),
+    (False, 0, [], False),
+])
+def test_podcast_keyboard_menu_supports_empty_list_and_subscription_state(
+    search, selected, rows, enabled,
+):
+    menu = MagicMock()
+    unsubscribe, add_feed = MagicMock(), MagicMock()
+    gpodder, import_opml, export_opml = MagicMock(), MagicMock(), MagicMock()
+    menu.Append.side_effect = [unsubscribe, add_feed, gpodder, import_opml, export_opml]
+    wx = SimpleNamespace(Menu=lambda: menu, ID_ANY=-1, NOT_FOUND=-1,
+                         DefaultPosition=(-1, -1), EVT_MENU=object())
+    event = MagicMock()
+    event.GetPosition.return_value = wx.DefaultPosition
+    panel = SimpleNamespace(
+        _podcast_list=MagicMock(), _podcast_data=rows,
+        _viewing_search_results=search, _update_subscription_buttons=MagicMock(),
+        _on_unsubscribe=MagicMock(), _on_add_feed=MagicMock(),
+        _on_sync_gpodder=MagicMock(), _on_import_opml=MagicMock(), _on_export_opml=MagicMock(),
+    )
+    panel._podcast_list.GetFirstSelected.return_value = selected
+    panel_method("_on_podcast_context_menu", wx=wx,
+                 context_menu_pos=lambda ctrl, event: (10, 10))(panel, event)
+    unsubscribe.Enable.assert_called_once_with(enabled)
+    add_feed.Enable.assert_not_called()
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_add_feed, add_feed)
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_unsubscribe, unsubscribe)
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_sync_gpodder, gpodder)
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_import_opml, import_opml)
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_export_opml, export_opml)
+    gpodder.Enable.assert_called_once_with(True)
+    import_opml.Enable.assert_called_once_with(True)
+    panel._podcast_list.Select.assert_not_called()
+    panel._podcast_list.PopupMenu.assert_called_once_with(menu, (10, 10))
+    menu.Destroy.assert_called_once()
 
 
 @pytest.mark.parametrize("search,selected_id", [(False, 4), (True, 3)])
@@ -186,3 +257,38 @@ def test_refresh_worker_fetches_once_and_queues_completion(db, monkeypatch):
     workers[0]()
     assert len(repo.get_episodes(podcast_id)) == 1
     queue.assert_called_once_with(panel, panel._finish_subscription_refresh, podcast_id, False)
+
+
+@pytest.mark.parametrize("selected,search,refreshing,enabled", [
+    (0, False, set(), True),
+    (-1, False, set(), False),
+    (0, True, set(), False),
+    (0, False, {3}, False),
+])
+def test_empty_episode_menu_can_refresh_selected_subscription(selected, search, refreshing, enabled):
+    menu = MagicMock()
+    items = {}
+    def append(item_id, label):
+        items[label] = MagicMock()
+        return items[label]
+    menu.Append.side_effect = append
+    wx = SimpleNamespace(Menu=lambda: menu, ID_ANY=-1, EVT_MENU=object())
+    podcast = {"id": 3, "feed_url": "https://feed"}
+    panel = SimpleNamespace(
+        _episode_list=MagicMock(), _episode_data=[], _podcast_list=MagicMock(),
+        _podcast_data=[podcast], _viewing_search_results=search,
+        _refreshing_podcasts=refreshing, _engine=MagicMock(), Bind=MagicMock(),
+        _refresh_subscription=MagicMock(),
+    )
+    panel._episode_list.GetFirstSelected.return_value = -1
+    panel._podcast_list.GetFirstSelected.return_value = selected
+    panel_method("_on_episode_context_menu", wx=wx,
+                 context_menu_pos=lambda ctrl, event: (10, 10))(panel, MagicMock())
+    items["Re&fresh Episodes"].Enable.assert_called_once_with(enabled)
+    items["&Download"].Enable.assert_called_once_with(False)
+    items["Download &All"].Enable.assert_called_once_with(False)
+    panel._episode_list.PopupMenu.assert_called_once_with(menu, (10, 10))
+    if enabled:
+        menu.Bind.call_args.args[1](None)
+        panel._refresh_subscription.assert_called_once_with(podcast)
+    menu.Destroy.assert_called_once()

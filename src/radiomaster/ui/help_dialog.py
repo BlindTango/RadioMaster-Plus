@@ -91,7 +91,8 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Use Help > Update YouTube Library if extraction stops working."
     )),
     ("Download and Reuse Saved Files", (
-        "Choose Download Episode in Podcasts, or Download or Download Audio in YouTube. "
+        "In Podcasts, open the episodes context menu and choose Download or Download All. "
+        "In YouTube, choose Download or Download Audio. "
         f"Open Downloads with {_key('panel_downloads')} to check progress and History. "
         "If History records a completed copy of the same source with matching format and quality "
         "and its file still exists, the request completes using that file without contacting the source. "
@@ -120,6 +121,18 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.92", (
+        "Podcast management uses fewer Tab stops. In the Podcasts list, press Shift+F10 "
+        "or the Applications key for Unsubscribe, Add RSS Feed, Import gpodder.net "
+        "Subscriptions, Import OPML, and Export OPML. Their separate buttons have been removed. "
+        "Import actions remain available when the list is empty; Unsubscribe requires a "
+        "selected saved subscription. Subscribe is enabled only for a selected search result "
+        "with a feed address that is not already subscribed.\n\n"
+        "In the Episodes list context menu, choose Download or Download All for offline "
+        "listening, or Refresh Episodes to fetch the latest episodes for the selected "
+        "subscription. Refresh works even when no episodes are loaded and is disabled "
+        "while that podcast is already refreshing. The Download Episode button has been removed."
+    )),
     ("Version 1.1.91", (
         "Download History now provides Refresh in its context menu, including when "
         "no entry is selected or History is empty. Refresh reloads both download lists. "
