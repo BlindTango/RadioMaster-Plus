@@ -1403,6 +1403,37 @@ class TestDownloadsHistoryRemoveAll:
             self._cleanup_rows(win, [active_id])
 
 
+class TestPodcastContextMenuKeys:
+    @pytest.mark.parametrize("list_name", ["_podcast_list", "_episode_list"])
+    @pytest.mark.parametrize("key,shift", [(wx.WXK_WINDOWS_MENU, False), (wx.WXK_F10, True)])
+    def test_keyboard_opens_empty_list_menu_once(self, app_and_window, list_name, key, shift):
+        _app, win = app_and_window
+        win._switch_tab(1)
+        panel = win._podcast_panel
+        ctrl = getattr(panel, list_name)
+        ctrl.SetFocus()
+        menus = []
+        def popup(menu, pos):
+            menus.append([item.GetItemLabelText() for item in menu.GetMenuItems()
+                          if not item.IsSeparator()])
+            return True
+        with patch.object(ctrl, "PopupMenu", side_effect=popup):
+            for event_type in (wx.EVT_KEY_DOWN, wx.EVT_KEY_UP):
+                event = wx.KeyEvent(event_type.typeId)
+                event.SetKeyCode(key)
+                event.SetShiftDown(shift)
+                event.SetEventObject(ctrl)
+                ctrl.GetEventHandler().ProcessEvent(event)
+        assert len(menus) == 1
+        if list_name == "_podcast_list":
+            assert menus[0] == ["Unsubscribe", "Add RSS Feed...",
+                                "Import gpodder.net Subscriptions", "Import OPML...",
+                                "Export OPML..."]
+        else:
+            assert "Refresh Episodes" in menus[0]
+        assert wx.Window.FindFocus() is ctrl
+
+
 class TestStationHealthCheck:
     """The Tools > Station Health Check dialog: menu wiring, control
     accessibility, and the MainWindow-owned service that survives dialog

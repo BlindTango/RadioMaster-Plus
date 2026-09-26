@@ -187,6 +187,32 @@ class PodcastPanel(wx.Panel):
         self._episode_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
         self._episode_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_episode_selected)
         self._episode_list.Bind(wx.EVT_CONTEXT_MENU, self._on_episode_context_menu)
+        # Native list controls do not reliably translate the Applications key
+        # into EVT_CONTEXT_MENU. Handle keyboard requests explicitly on both lists.
+        self._context_menu_key = None
+        for ctrl, handler in ((self._podcast_list, self._on_podcast_context_menu),
+                              (self._episode_list, self._on_episode_context_menu)):
+            for event_type in (wx.EVT_KEY_DOWN, wx.EVT_KEY_UP):
+                ctrl.Bind(event_type, lambda event, control=ctrl, callback=handler:
+                          self._on_context_menu_key(event, control, callback))
+
+    def _on_context_menu_key(self, event: wx.KeyEvent, ctrl: wx.ListCtrl, handler) -> None:
+        key = event.GetKeyCode()
+        requested = (not event.ControlDown() and not event.AltDown()
+                     and (key == wx.WXK_WINDOWS_MENU
+                          or (key == wx.WXK_F10 and event.ShiftDown())))
+        pending = self._context_menu_key == (ctrl, key)
+        if event.GetEventType() == wx.EVT_KEY_DOWN.typeId and requested:
+            self._context_menu_key = (ctrl, key)
+            return
+        if event.GetEventType() == wx.EVT_KEY_UP.typeId and (requested or pending):
+            self._context_menu_key = None
+            context = wx.ContextMenuEvent(wx.EVT_CONTEXT_MENU.typeId, ctrl.GetId())
+            context.SetEventObject(ctrl)
+            context.SetPosition(wx.DefaultPosition)
+            handler(context)
+            return
+        event.Skip()
 
     # ------------------------------------------------------------------
     # Small ListCtrl helpers (InsertItem/SetItem is a lot of boilerplate

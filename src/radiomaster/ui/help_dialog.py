@@ -132,6 +132,12 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.95", (
+        "Fixed the Applications/Menu key not opening the Podcasts list context menu. "
+        "The Podcasts and Episodes lists now explicitly handle both the Applications "
+        "key and Shift+F10, including when the lists are empty. Right-click remains "
+        "available. Focus stays in the list when you dismiss the menu."
+    )),
     ("Version 1.1.94", (
         "The Quick Start Guide adds a Check Station Availability topic and the Play Internet "
         "Radio topic now points to Station Health Check for dead-stream troubleshooting. "
