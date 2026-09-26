@@ -133,6 +133,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.97", (
+        "Selecting a subscribed channel in the YouTube panel's My Channels list now "
+        "loads its most recent videos into the results list, matching how the Podcasts "
+        "panel loads episodes when you select a subscription. Previously the videos "
+        "appeared only after pressing Enter or double-clicking the channel. "
+        "Updated the User Manual to document this behavior."
+    )),
     ("Version 1.1.96", (
         "Fixed Directory category navigation on the first podcast search after startup. "
         "Typing or submitting a query now keeps the selected and focused category rows "

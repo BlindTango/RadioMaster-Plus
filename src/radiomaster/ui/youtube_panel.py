@@ -244,6 +244,7 @@ class YouTubePanel(wx.Panel):
         self._results_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_result_activated)
         self._results_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_result_selected)
         self._channels_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_channel_activated)
+        self._channels_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_channel_selected)
 
         self._load_channels()
 
@@ -520,6 +521,25 @@ class YouTubePanel(wx.Panel):
         if not url:
             return
         self._load_channel_videos(url, channel.get('title', 'Channel'))
+
+    def _on_channel_selected(self, event: wx.ListEvent) -> None:
+        """Load the selected subscribed channel's videos into the results list.
+
+        Mirrors the Podcasts panel, where selecting a subscription loads
+        its episodes without requiring Enter or a double-click. Without
+        this, arrowing through My Channels showed nothing in the results
+        list until the user pressed Enter, which was inconsistent with
+        how every other subscription-style list in the app works.
+        """
+        idx = self._channels_list.GetFirstSelected()
+        if idx == wx.NOT_FOUND or idx >= len(self._channel_data):
+            return
+        channel = self._channel_data[idx]
+        url = channel.get('url', '')
+        if not url:
+            return
+        self._load_channel_videos(url, channel.get('title', 'Channel'))
+        event.Skip()
 
     def _on_subscribe(self, event: wx.CommandEvent) -> None:
         item = self._get_selected_video()

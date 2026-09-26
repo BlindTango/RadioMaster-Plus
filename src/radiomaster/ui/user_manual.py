@@ -539,6 +539,8 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             The panel also has My Channels, Subscribe to Channel, Unsubscribe, Play URL,
             Load Playlist, Download, Download Audio, Quality, and Audio Format. Selecting
             a video shows its available description and details in Content Display.
+            Selecting a subscribed channel in My Channels loads its most recent videos
+            into the results list.
         """),
         _topic("Playing Videos and Direct Links", """
             To play a search result, select a video and activate it. To use a link,
@@ -555,8 +557,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         """),
         _topic("Channels and Playlists", """
             Search with Type set to Channels, then activate a result to list its videos.
-            Subscribe to Channel saves a channel in My Channels. Activate a saved channel
-            to load its videos; Unsubscribe removes the local saved entry.
+            Subscribe to Channel saves a channel in My Channels. Selecting or activating
+            a saved channel loads its most recent videos into the results list, where
+            you can select one and press Enter to play it. Unsubscribe removes the local
+            saved entry.
 
             These are RadioMaster+ channel subscriptions, not changes to a signed-in
             YouTube account. The application does not provide a YouTube account manager.
