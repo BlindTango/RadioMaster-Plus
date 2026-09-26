@@ -286,7 +286,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
                repeat scan, or clear it to check recent entries again.
             3. Choose Start Scan. Read the progress and results while it works.
             4. Choose Stop Scan to stop the scan. Close only closes the dialog: a running
-               scan continues and can be revisited by reopening Station Health Check.
+               scan continues in the background and can be revisited by reopening
+               Station Health Check. Closing the dialog does not cancel a scan or lose
+               already collected results.
 
             The scan avoids streams currently being played or recorded. Reducing
             parallel connections can help on a slow connection. Results are retained
@@ -304,8 +306,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Hide Selected excludes that station from normal browsing. Hide All Dead
             acts on the dead-station results after confirmation. A failed website does
             not necessarily mean the audio stream is dead; inspect the problem type.
-            Hiding runs in the background. Hidden stations remain excluded from this
-            results list even if a later scan result arrives for them.
+            Hiding runs in the background and does not freeze the results list.
+            Hidden stations remain excluded from this results list even if a later
+            scan result arrives for them.
 
             Choose Manage Hidden to review excluded stations. Unhide Selected restores
             one entry; Unhide All restores all hidden entries. Hiding is reversible and

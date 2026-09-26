@@ -75,7 +75,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         f"Press {_key('panel_radio')}. Tab to Search and type a station name, genre, country, or "
         "language, or choose a browsing section and group. Select a station in the results "
         "list and press Enter. Use the context menu to add it to Favorites or start "
-        "recording."
+        "recording. If a station will not play, use Tools > Station Health Check to scan "
+        "for dead streams and hide them from browse lists."
+    )),
+    ("Check Station Availability", (
+        "Open Tools > Station Health Check to scan the station catalogue for dead streams, "
+        "name mismatches, unavailable websites, geographic restrictions, and format "
+        "differences. Choose Start Scan and read the results. Hide Selected or Hide All "
+        "Dead removes broken stations from browsing; Manage Hidden restores them. The "
+        "scan runs in the background, avoids the station you are playing or recording, and "
+        "keeps the interface responsive. Closing the dialog does not stop a running scan."
     )),
     ("Play Podcasts, Local Media, and Audiobooks", (
         f"Podcasts: press {_key('panel_podcasts')}, search or choose a subscription, select an episode, "
@@ -123,6 +132,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.94", (
+        "The Quick Start Guide adds a Check Station Availability topic and the Play Internet "
+        "Radio topic now points to Station Health Check for dead-stream troubleshooting. "
+        "The User Manual's Station Health topics clarify that hiding runs in the background "
+        "and that closing the dialog does not stop a running scan.\n\n"
+        "Updated the in-app Release Notes to include this version. No playback, settings, "
+        "or shortcut behavior changed in this release."
+    )),
     ("Version 1.1.93", (
         "Station Health Check handles large result lists with background filtering and "
         "saving, preserves the selected station during updates, and finishes queued saves "
