@@ -81,6 +81,32 @@ def panel_method(name, **globals):
     return namespace[name]
 
 
+@pytest.mark.parametrize("query,category,switch", [
+    ("news", "Subscriptions", True),
+    ("news", "Custom Feeds", True),
+    ("news", "Directory", False),
+    ("", "Subscriptions", False),
+    ("   ", "Subscriptions", False),
+])
+def test_typing_search_switches_to_directory_without_reloading_each_keystroke(query, category, switch):
+    panel = SimpleNamespace(
+        search_ctrl=MagicMock(), _category_list=MagicMock(),
+        _selected_category=MagicMock(return_value=category),
+        _find_row=MagicMock(return_value=2), _on_category_select=MagicMock(),
+    )
+    panel.search_ctrl.GetValue.return_value = query
+    event = MagicMock()
+    panel_method("_on_search_text", wx=SimpleNamespace(NOT_FOUND=-1))(panel, event)
+    if switch:
+        panel._category_list.Select.assert_called_once_with(2)
+        panel._on_category_select.assert_called_once_with(None)
+    else:
+        panel._category_list.Select.assert_not_called()
+        panel._on_category_select.assert_not_called()
+    panel._category_list.SetFocus.assert_not_called()
+    event.Skip.assert_called_once()
+
+
 @pytest.mark.parametrize("search,selected,subscribe", [
     (False, 0, False), (True, 0, True),
     (False, -1, False), (True, -1, False),

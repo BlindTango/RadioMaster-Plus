@@ -19,6 +19,7 @@ from radiomaster.ui.widgets.station_tree import StationTree
 from radiomaster.ui.widgets.now_playing import NowPlayingPanel
 from radiomaster.utils.paths import get_paths
 from radiomaster.utils.accessibility import context_menu_pos
+from radiomaster.utils.wx_safe import call_after_safe
 
 log = logging.getLogger("radiomaster")
 
@@ -175,14 +176,14 @@ class RadioPanel(scrolled.ScrolledPanel):
                 text = f"Status: Fetching station list for the first time... {percent}%"
             else:
                 text = f"Status: Fetching station list for the first time... ({bytes_read // 1024} KB)"
-            wx.CallAfter(self.set_status, text)
+            call_after_safe(self, self.set_status, text)
 
         def worker():
             result = self.station_updater.update_now(progress_cb=progress_cb)
             if not result.ok:
-                wx.CallAfter(self.set_status, f"Status: Could not load stations ({result.error})")
+                call_after_safe(self, self.set_status, f"Status: Could not load stations ({result.error})")
                 return
-            wx.CallAfter(self._apply_sections)
+            call_after_safe(self, self._apply_sections)
 
         threading.Thread(target=worker, daemon=True).start()
 

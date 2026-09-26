@@ -32,6 +32,9 @@ from radiomaster.ui.help_dialog import (
 @pytest.fixture
 def app_and_window():
     app = RadioMasterApp()
+    # wx.LogGui opens modal error windows when queued native warnings flush at
+    # shutdown. Keep diagnostics in pytest's stderr instead of blocking teardown.
+    wx.Log.SetActiveTarget(wx.LogStderr())
     win = app._main_window
     # First/Previous/Next/Last are correctly greyed out (and therefore
     # Tab-skipped) until there's station history to navigate -- exactly
@@ -1487,6 +1490,10 @@ class TestStationHealthCheck:
                                     "website_ok": 1, "geo_blocked": 0,
                                     "format_mismatch": 0, "detail": "test"}
             dlg._refresh_results()
+            deadline = time.monotonic() + 5
+            while dlg._results_list.FindItem(-1, marker) == wx.NOT_FOUND and time.monotonic() < deadline:
+                wx.Yield()
+                time.sleep(0.01)
             assert dlg._results_list.GetItemCount() >= 1
             # Select the marker row and hide it.
             for i in range(dlg._results_list.GetItemCount()):
@@ -1496,6 +1503,11 @@ class TestStationHealthCheck:
             with patch("radiomaster.ui.station_health_dialog.wx.MessageBox",
                        return_value=wx.YES):
                 dlg._on_hide_selected(MagicMock())
+                deadline = time.monotonic() + 5
+                while dlg._hiding and time.monotonic() < deadline:
+                    wx.Yield()
+                    time.sleep(0.01)
+                assert not dlg._hiding
             assert win._station_db.hidden_count() >= 1
             assert marker in win._station_db.hidden_uuids()
             assert all(s.uuid != marker for s in win._station_db.all_stations())

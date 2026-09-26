@@ -10,6 +10,8 @@ control surface and results view.
 
 from __future__ import annotations
 
+import logging
+import queue
 import threading
 from typing import Any
 
@@ -80,6 +82,31 @@ def _result_matches_filter(result: dict[str, Any], filter_idx: int) -> bool:
     return False
 
 
+class _HealthResultsList(wx.ListCtrl):
+    """Native virtual list: expose text on demand, without inserting 50,000 rows."""
+
+    def __init__(self, parent):
+        self.rows: list[tuple[str, tuple[str, str, str]]] = []
+        super().__init__(parent, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.LC_VIRTUAL)
+
+    def OnGetItemText(self, item: int, column: int) -> str:
+        if 0 <= item < len(self.rows) and 0 <= column < 3:
+            return self.rows[item][1][column]
+        return ""
+
+
+def _build_result_view(results, filter_idx):
+    """Pure worker-side filtering, sorting, and display formatting."""
+    matching = [(uuid, row) for uuid, row in results if _result_matches_filter(row, filter_idx)]
+    matching.sort(key=lambda pair: (
+        bool(pair[1].get("stream_ok")),
+        (pair[1].get("_name") or pair[1].get("name_hint") or pair[0]).casefold(),
+        pair[0],
+    ))
+    return [(uuid, (row.get("_name") or row.get("name_hint") or uuid,
+                    _problem_label(row), _format_detail(row))) for uuid, row in matching]
+
+
 class StationHealthDialog(wx.Dialog):
     """Control surface + results view for the station health scan."""
 
@@ -96,10 +123,22 @@ class StationHealthDialog(wx.Dialog):
         self._counts = {"checked": 0, "dead": 0, "name": 0, "website": 0,
                         "geo": 0, "format": 0}
         self._finished_announced = False
-        # uuid <-> stable row index mapping (SetItemData must be an int)
-        self._uuid_slots: dict[str, int] = {}
-        self._slot_uuids: dict[int, str] = {}
+        self._closed = False
+        self._view_generation = 0
+        self._view_jobs = queue.Queue()
+        self._save_jobs = queue.Queue()
+        self._live_uuids: set[str] = set()
+        self._hidden_uuids: set[str] = set()
+        self._unhidden_uuids: set[str] = set()
+        self._hiding = False
+        self._reported_errors: set[str] = set()
         self._setup_ui()
+        self._view_thread = threading.Thread(target=self._view_worker, daemon=True,
+                                             name="health-filter")
+        self._view_thread.start()
+        # Finish accepted writes even if the application closes immediately.
+        self._save_thread = threading.Thread(target=self._save_worker, name="health-save")
+        self._save_thread.start()
         # Persisted results load on a worker thread: building the name
         # map iterates the entire 50k+ catalog, which took multiple
         # seconds ON THE UI THREAD at dialog open -- a visible freeze
@@ -117,8 +156,22 @@ class StationHealthDialog(wx.Dialog):
 
     def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
         if event.GetEventObject() is self:
-            self._drain_timer.Stop()
+            self._stop_workers()
         event.Skip()
+
+    def Destroy(self) -> bool:
+        # wx can defer native destruction until idle. Stop accepting work now,
+        # rather than keeping worker queues alive until that event arrives.
+        self._stop_workers()
+        return super().Destroy()
+
+    def _stop_workers(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._view_generation += 1
+            self._view_jobs.put(None)
+            self._save_jobs.put(None)
+            self._drain_timer.Stop()
 
     # ------------------------------------------------------------------
     def _setup_ui(self) -> None:
@@ -167,7 +220,7 @@ class StationHealthDialog(wx.Dialog):
         sizer.Add(filter_row, 0, wx.EXPAND | wx.ALL, 6)
 
         # -- Results list ------------------------------------------------
-        self._results_list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self._results_list = _HealthResultsList(self)
         set_accessible_name(self._results_list, "Health Check Results")
         self._results_list.InsertColumn(0, "Station", width=240)
         self._results_list.InsertColumn(1, "Problem", width=120)
@@ -294,18 +347,12 @@ class StationHealthDialog(wx.Dialog):
         self._update_button_states()
 
     def _on_drain_timer(self, event: wx.TimerEvent) -> None:
-        """Drain finished results, persist them in one batch, and
-        append ONLY the new problem rows to the list -- never a full
-        rebuild. The original version rebuilt the entire list on every
-        tick; with a 50k-station catalog, hundreds of dead streams
-        arrive within minutes and each tick's DeleteAllItems + reinsert
-        of every row took seconds ON THE UI THREAD, back-to-back -- the
-        app froze exactly as reported. Appending just the new rows
-        keeps each tick sub-millisecond."""
+        """Consume a bounded batch; filtering and database writes run on workers."""
+        if self._closed:
+            return
         results = self._service.drain_results(500)
         if results:
             rows = []
-            new_problems: list[tuple[str, dict[str, Any]]] = []
             for r in results:
                 row = r.to_row()
                 row["_name"] = r.station_name  # display-only, stripped before persisting
@@ -321,37 +368,20 @@ class StationHealthDialog(wx.Dialog):
                     self._counts["website"] += 1
                 if r.format_mismatch:
                     self._counts["format"] += 1
-                if r.is_problem and r.uuid not in self._results:
+                self._live_uuids.add(r.uuid)
+                if r.is_problem:
                     self._results[r.uuid] = row
-                    new_problems.append((r.uuid, row))
-                elif r.is_problem:
-                    self._results[r.uuid] = row
-            self._db.record_health_results(rows)
-            if new_problems:
-                self._append_problem_rows(new_problems)
+                else:
+                    self._results.pop(r.uuid, None)
+            self._save_jobs.put(rows)
+            self._refresh_results()
         self._update_progress()
         # Completion: every station checked (or skipped), workers
         # exited, and this final batch drained -- announce exactly once.
-        if not self._finished_announced and self._service.is_finished():
+        if (not self._finished_announced and self._service.is_finished()
+                and not self._save_jobs.unfinished_tasks):
             self._finished_announced = True
             self._announce_completion(stopped=self._service.stopped)
-
-    def _append_problem_rows(self, new_problems: list[tuple[str, dict[str, Any]]]) -> None:
-        """Append only the rows that match the current filter, at the
-        end of the list -- no DeleteAllItems, no re-sorting of what's
-        already visible, no accessibility-tree churn for existing
-        rows. (Dead-first ordering is only applied on a full rebuild:
-        filter changes and dialog open.)"""
-        filter_idx = self._filter_choice.GetSelection()
-        for uuid, row in new_problems:
-            if not _result_matches_filter(row, filter_idx):
-                continue
-            idx = self._results_list.InsertItem(self._results_list.GetItemCount(),
-                                                 self._station_name(uuid))
-            self._results_list.SetItem(idx, 1, _problem_label(row))
-            self._results_list.SetItem(idx, 2, _format_detail(row))
-            self._results_list.SetItemData(idx, self._list_index_for_uuid(uuid))
-        self._update_button_states()
 
     def _announce_completion(self, stopped: bool = False) -> None:
         c = self._counts
@@ -392,75 +422,112 @@ class StationHealthDialog(wx.Dialog):
     # Results list
     # ------------------------------------------------------------------
     def _load_persisted_async(self) -> None:
-        """Worker-thread half of the persisted-results load (see
-        __init__): all the DB iteration happens off the UI thread; only
-        the final dict handoff and list fill touch the UI."""
-        names: dict[str, str] = {}
-        for s in self._db.all_stations():
-            names[s.uuid] = s.name
-        for s in self._db.get_custom_stations():
-            names.setdefault(s.uuid, s.name)
-        for s in self._db.get_favorite_stations():
-            names.setdefault(s.uuid, s.name)
-        loaded: dict[str, dict[str, Any]] = {}
-        for row in self._db.health_results(problems_only=True):
-            row["_name"] = names.get(row["uuid"], row["uuid"])
-            loaded[row["uuid"]] = row
-        call_after_safe(self, self._apply_persisted_results, loaded)
+        try:
+            names = {station.uuid: station.name for station in self._db.all_stations()}
+            for station in self._db.get_custom_stations() + self._db.get_favorite_stations():
+                names.setdefault(station.uuid, station.name)
+            hidden = self._db.hidden_uuids()
+            for uuid, name, _reason in self._db.hidden_stations():
+                names.setdefault(uuid, name)
+            loaded = {}
+            for row in self._db.health_results(problems_only=True):
+                row["_name"] = names.get(row["uuid"], row["uuid"])
+                loaded[row["uuid"]] = row
+            call_after_safe(self, self._apply_persisted_results, loaded, hidden)
+        except Exception as error:
+            logging.getLogger("radiomaster").exception("Could not load station health results")
+            call_after_safe(self, self._show_results_error, "load", str(error))
 
-    def _apply_persisted_results(self, loaded: dict[str, dict[str, Any]]) -> None:
-        """UI-thread half: merge the loaded rows and do ONE full
-        rebuild (the only full rebuild outside a filter change -- and
-        it happens once, before any scan results exist)."""
-        if not loaded:
+    def _apply_persisted_results(self, loaded: dict[str, dict[str, Any]],
+                                 hidden: set[str]) -> None:
+        if self._closed:
             return
-        self._results.update(loaded)
+        # A slow initial load must not overwrite a newer scan/recheck or restore
+        # a result the user hid while the database was being read.
+        self._results.update({uuid: row for uuid, row in loaded.items()
+                              if uuid not in self._live_uuids})
+        self._hidden_uuids.update(hidden - self._unhidden_uuids)
         self._refresh_results()
 
     def _refresh_results(self) -> None:
-        """Rebuild the visible rows for the current filter. A full
-        rebuild only happens when new problem rows arrived (rare --
-        problems are a small fraction of checks); selection is restored
-        by uuid afterward."""
-        selected_uuid = self._selected_uuid()
-        self._results_list.DeleteAllItems()
-        filter_idx = self._filter_choice.GetSelection()
-        # Sort: dead first (most actionable), then by name.
-        def sort_key(item):
-            uuid, row = item
-            dead = 0 if row.get("stream_ok") else 1
-            return (dead, self._station_name(uuid).lower())
-        for uuid, row in sorted(self._results.items(), key=sort_key):
-            if not _result_matches_filter(row, filter_idx):
+        if self._closed:
+            return
+        self._view_generation += 1
+        # Keep only the latest request while a filter worker is busy.
+        try:
+            while True:
+                self._view_jobs.get_nowait()
+        except queue.Empty:
+            pass
+        visible = tuple((uuid, row) for uuid, row in self._results.items()
+                        if uuid not in self._hidden_uuids)
+        self._view_jobs.put((self._view_generation, visible,
+                             self._filter_choice.GetSelection()))
+
+    def _view_worker(self) -> None:
+        while True:
+            job = self._view_jobs.get()
+            if job is None or self._closed:
+                return
+            generation, snapshot, filter_idx = job
+            try:
+                rows = _build_result_view(snapshot, filter_idx)
+            except Exception as error:
+                logging.getLogger("radiomaster").exception("Could not filter station health results")
+                call_after_safe(self, self._show_results_error, "filter", str(error))
                 continue
-            idx = self._results_list.InsertItem(self._results_list.GetItemCount(),
-                                                 self._station_name(uuid))
-            self._results_list.SetItem(idx, 1, _problem_label(row))
-            self._results_list.SetItem(idx, 2, _format_detail(row))
-            self._results_list.SetItemData(idx, self._list_index_for_uuid(uuid))
-        if selected_uuid:
-            for i in range(self._results_list.GetItemCount()):
-                if self._results_list.GetItemData(i) == self._uuid_index(selected_uuid):
-                    self._results_list.Select(i)
-                    self._results_list.EnsureVisible(i)
-                    break
+            if generation == self._view_generation and not self._closed:
+                call_after_safe(self, self._apply_result_view, generation, rows)
+
+    def _apply_result_view(self, generation, rows) -> None:
+        if self._closed or generation != self._view_generation:
+            return
+        ctrl = self._results_list
+        selected_uuid = self._selected_uuid()
+        same_order = (len(rows) == len(ctrl.rows)
+                      and all(a[0] == b[0] for a, b in zip(rows, ctrl.rows)))
+        ctrl.Freeze()
+        try:
+            if not same_order:
+                ctrl.SetItemState(-1, 0, wx.LIST_STATE_SELECTED | wx.LIST_STATE_FOCUSED)
+            ctrl.rows = rows
+            ctrl.SetItemCount(len(rows))
+            if selected_uuid and not same_order:
+                index = next((i for i, row in enumerate(rows) if row[0] == selected_uuid), None)
+                if index is not None:
+                    ctrl.Select(index)
+                    ctrl.Focus(index)
+                    ctrl.EnsureVisible(index)
+            ctrl.Refresh()
+        finally:
+            ctrl.Thaw()
+        if self._selected_uuid():
+            self._on_result_selected(None)
+        else:
+            self._detail_text.ChangeValue("")
         self._update_button_states()
 
-    # uuid <-> stable int slot for SetItemData (instance-level: a
-    # class-level dict would leak slots across dialog instances). A
-    # reverse map keeps _uuid_for_index O(1) -- the original linear scan
-    # over every slot ran per selected-row lookup.
-    def _list_index_for_uuid(self, uuid: str) -> int:
-        if uuid not in self._uuid_slots:
-            self._uuid_slots[uuid] = len(self._uuid_slots)
-            self._slot_uuids[self._uuid_slots[uuid]] = uuid
-        return self._uuid_slots[uuid]
+    def _save_worker(self) -> None:
+        # Flush batches already accepted even if the dialog has been closed.
+        while True:
+            rows = self._save_jobs.get()
+            try:
+                if rows is None:
+                    return
+                self._db.record_health_results(rows)
+            except Exception as error:
+                logging.getLogger("radiomaster").exception("Could not save station health results")
+                if not self._closed:
+                    call_after_safe(self, self._show_results_error, "save", str(error))
+            finally:
+                self._save_jobs.task_done()
 
-    def _uuid_index(self, uuid: str) -> int:
-        return self._list_index_for_uuid(uuid)
-
-    def _uuid_for_index(self, index: int) -> str | None:
-        return self._slot_uuids.get(index)
+    def _show_results_error(self, action: str, detail: str) -> None:
+        if self._closed or action in self._reported_errors:
+            return
+        self._reported_errors.add(action)
+        wx.MessageBox(f"Could not {action} station health results.\n\n{detail}",
+                      "Station Health Check", wx.OK | wx.ICON_ERROR, self)
 
     def _station_name(self, uuid: str) -> str:
         row = self._results.get(uuid, {})
@@ -470,11 +537,15 @@ class StationHealthDialog(wx.Dialog):
         idx = self._results_list.GetFirstSelected()
         if idx == wx.NOT_FOUND:
             return None
-        return self._uuid_for_index(self._results_list.GetItemData(idx))
+        rows = self._results_list.rows
+        uuid = rows[idx][0] if 0 <= idx < len(rows) else None
+        return uuid if uuid in self._results and uuid not in self._hidden_uuids else None
 
     def _on_result_selected(self, event) -> None:
         uuid = self._selected_uuid()
         if not uuid:
+            self._detail_text.ChangeValue("")
+            self._update_button_states()
             return
         row = self._results.get(uuid, {})
         lines = [f"Station: {self._station_name(uuid)}"]
@@ -494,7 +565,10 @@ class StationHealthDialog(wx.Dialog):
         if row.get("geo_blocked"):
             lines.append("This station appears to be geo-restricted from your location.")
         lines.append(f"Checked: {row.get('checked_at', 'unknown')}")
-        self._detail_text.SetValue("\n".join(lines))
+        text = "\n".join(lines)
+        if self._detail_text.GetValue() != text:
+            self._detail_text.ChangeValue(text)
+        self._update_button_states()
 
     # ------------------------------------------------------------------
     # Actions
@@ -504,12 +578,16 @@ class StationHealthDialog(wx.Dialog):
         self._btn_start.Enable(not running)
         self._btn_stop.Enable(running)
         has_selection = self._selected_uuid() is not None
-        self._btn_hide.Enable(has_selection)
+        self._btn_hide.Enable(has_selection and not self._hiding)
         self._btn_recheck.Enable(has_selection and not running)
         self._btn_play.Enable(has_selection)
-        self._btn_hide_dead.Enable(self._counts["dead"] > 0)
+        self._btn_hide_dead.Enable(not self._hiding and any(not row.get("stream_ok")
+                                       for uuid, row in self._results.items()
+                                       if uuid not in self._hidden_uuids))
 
     def _on_hide_selected(self, event: wx.CommandEvent) -> None:
+        if self._hiding:
+            return
         uuid = self._selected_uuid()
         if not uuid:
             return
@@ -517,30 +595,52 @@ class StationHealthDialog(wx.Dialog):
         if wx.MessageBox(f"Hide '{name}' from all station lists?",
                          "Hide Station", wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
             return
-        self._db.hide_station(uuid, reason=_problem_label(self._results.get(uuid, {})))
-        self._results.pop(uuid, None)
-        self._refresh_results()
+        self._hide_stations_async([uuid], _problem_label(self._results.get(uuid, {})))
 
     def _on_hide_all_dead(self, event: wx.CommandEvent) -> None:
-        dead = [uuid for uuid, row in self._results.items() if not row.get("stream_ok")]
+        if self._hiding:
+            return
+        dead = [uuid for uuid, row in self._results.items()
+                if not row.get("stream_ok") and uuid not in self._hidden_uuids]
         if not dead:
             return
         if wx.MessageBox(f"Hide all {len(dead)} stations with dead streams?",
                          "Hide Dead Stations", wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
             return
+        self._hide_stations_async(dead, "Dead stream")
+
+    def _hide_stations_async(self, dead: list[str], reason: str) -> None:
+        self._hiding = True
+        self._update_button_states()
         # Batched off the UI thread: hiding hundreds of dead stations
         # one INSERT-per-call on the UI thread was itself a multi-second
         # stall (each call is its own transaction with a disk sync).
         def hide_all():
-            for uuid in dead:
-                self._db.hide_station(uuid, reason="Dead stream")
-            call_after_safe(self, self._after_hide_all, dead)
+            try:
+                self._db.hide_stations(dead, reason=reason)
+            except Exception as error:
+                call_after_safe(self, self._hide_failed, str(error))
+            else:
+                call_after_safe(self, self._after_hide_all, dead)
 
-        threading.Thread(target=hide_all, daemon=True, name="health-hide-all").start()
+        threading.Thread(target=hide_all, name="health-hide-all").start()
+
+    def _hide_failed(self, detail: str) -> None:
+        if self._closed:
+            return
+        self._hiding = False
+        self._update_button_states()
+        self._show_results_error("hide", detail)
 
     def _after_hide_all(self, dead: list[str]) -> None:
+        if self._closed:
+            return
+        self._hiding = False
         for uuid in dead:
-            self._results.pop(uuid, None)
+            self._live_uuids.add(uuid)
+            self._hidden_uuids.add(uuid)
+            self._unhidden_uuids.discard(uuid)
+        self._update_button_states()
         self._refresh_results()
 
     def _on_recheck_selected(self, event: wx.CommandEvent) -> None:
@@ -569,8 +669,12 @@ class StationHealthDialog(wx.Dialog):
         threading.Thread(target=recheck, daemon=True, name="health-recheck").start()
 
     def _apply_recheck(self, result: HealthResult) -> None:
+        if self._closed:
+            return
         row = result.to_row()
-        self._db.record_health_results([row])
+        row["_name"] = result.station_name
+        self._live_uuids.add(result.uuid)
+        self._save_jobs.put([row])
         if result.is_problem:
             self._results[result.uuid] = row
         else:
@@ -616,6 +720,8 @@ class StationHealthDialog(wx.Dialog):
     def _on_manage_hidden(self, event: wx.CommandEvent) -> None:
         dlg = _HiddenStationsDialog(self, self._db)
         dlg.ShowModal()
+        self._hidden_uuids.difference_update(dlg.unhidden_uuids)
+        self._unhidden_uuids.update(dlg.unhidden_uuids)
         dlg.Destroy()
         # A station unhidden from there may reappear in results.
         self._refresh_results()
@@ -627,6 +733,7 @@ class _HiddenStationsDialog(wx.Dialog):
     def __init__(self, parent: wx.Window, station_db: StationDB) -> None:
         super().__init__(parent, title="Hidden Stations", size=(520, 380))
         self._db = station_db
+        self.unhidden_uuids: set[str] = set()
         sizer = wx.BoxSizer(wx.VERTICAL)
         self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         set_accessible_name(self._list, "Hidden Stations")
@@ -672,10 +779,12 @@ class _HiddenStationsDialog(wx.Dialog):
         if idx == wx.NOT_FOUND:
             return
         self._db.unhide_station(self._uuids[idx])
+        self.unhidden_uuids.add(self._uuids[idx])
         self._refresh()
 
     def _on_unhide_all(self, event: wx.CommandEvent) -> None:
         count = self._db.unhide_all()
+        self.unhidden_uuids.update(self._uuids)
         if count:
             wx.MessageBox(f"Unhid {count} stations.", "Done",
                           wx.OK | wx.ICON_INFORMATION, self)

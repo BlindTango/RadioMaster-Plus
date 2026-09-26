@@ -463,10 +463,14 @@ class StationDB:
     # _NOT_HIDDEN's comment for why this is a table and not a DELETE.
     # ------------------------------------------------------------------
     def hide_station(self, station_uuid: str, reason: str = "") -> None:
+        self.hide_stations([station_uuid], reason)
+
+    def hide_stations(self, station_uuids: list[str], reason: str = "") -> None:
+        """Hide a batch atomically, with a single disk transaction."""
         with self._lock, self._connect() as conn:
-            conn.execute(
+            conn.executemany(
                 "INSERT OR REPLACE INTO hidden_stations (uuid, reason) VALUES (?, ?)",
-                (station_uuid, reason),
+                [(uuid, reason) for uuid in station_uuids],
             )
 
     def unhide_station(self, station_uuid: str) -> None:
@@ -525,8 +529,10 @@ class StationDB:
         for r in results:
             rows.append((
                 r["uuid"], r.get("checked_at") or now,
-                int(bool(r.get("stream_ok"))), int(r.get("name_ok", 1) or 1),
-                int(r.get("website_ok", 1) or 1), int(bool(r.get("geo_blocked"))),
+                int(bool(r.get("stream_ok"))),
+                int(r.get("name_ok") if r.get("name_ok") is not None else 1),
+                int(r.get("website_ok") if r.get("website_ok") is not None else 1),
+                int(bool(r.get("geo_blocked"))),
                 r.get("status", ""), r.get("detail", ""),
                 r.get("codec", ""), int(r.get("sample_rate", 0) or 0),
                 int(r.get("channels", 0) or 0), int(r.get("bit_rate", 0) or 0),

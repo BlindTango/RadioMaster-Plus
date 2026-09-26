@@ -175,6 +175,7 @@ class PodcastPanel(wx.Panel):
         # Bind events
         self.search_btn.Bind(wx.EVT_BUTTON, self._on_directory_search)
         self.search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_directory_search)
+        self.search_ctrl.Bind(wx.EVT_TEXT, self._on_search_text)
         self._category_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_category_select)
         self._podcast_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_podcast_select)
         self._podcast_list.Bind(
@@ -294,6 +295,16 @@ class PodcastPanel(wx.Panel):
         # overridden back to no-selection/caret-at-end by the native
         # control's own default focus handling on MSW if done inline here.
         wx.CallAfter(self.search_ctrl.SelectAll)
+        event.Skip()
+
+    def _on_search_text(self, event: wx.CommandEvent) -> None:
+        """Switch to directory browsing as the user types, retaining edit focus."""
+        if self.search_ctrl.GetValue().strip() and self._selected_category() != "Directory":
+            idx = self._find_row(self._category_list, "Directory")
+            if idx != wx.NOT_FOUND:
+                self._category_list.Select(idx)
+                self._category_list.EnsureVisible(idx)
+                self._on_category_select(None)
         event.Skip()
 
     def _on_directory_search(self, event: wx.Event) -> None:

@@ -79,7 +79,9 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
     )),
     ("Play Podcasts, Local Media, and Audiobooks", (
         f"Podcasts: press {_key('panel_podcasts')}, search or choose a subscription, select an episode, "
-        f"and press Enter. Audiobooks: press {_key('panel_audiobooks')}, choose Browse Folder, select a "
+        "and press Enter. Typing in Podcast Search selects Directory automatically; "
+        "press Enter or Search to run the search. "
+        f"Audiobooks: press {_key('panel_audiobooks')}, choose Browse Folder, select a "
         f"chapter, then press Enter. Read with TTS works for DAISY chapters containing text. "
         f"Local media: press {_key('open_file')} for a file "
         "or use File > Open Folder, then select a playlist item and press Enter."
@@ -121,6 +123,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.93", (
+        "Station Health Check handles large result lists with background filtering and "
+        "saving, preserves the selected station during updates, and finishes queued saves "
+        "when the dialog closes. Hide All Dead removes all recorded dead-station results "
+        "from view. Late scan results do not bring hidden stations back; Manage Hidden "
+        "restores them. Name and website failures are now saved correctly.\n\n"
+        "Typing in the podcast Search field automatically selects Directory while keeping "
+        "keyboard focus in the search field. Press Enter or Search to submit the query.\n\n"
+        "Fixed a radio station download callback that could try to update the interface "
+        "after application shutdown. Updated the User Manual and Quick Start guide."
+    )),
     ("Version 1.1.92", (
         "Podcast management uses fewer Tab stops. In the Podcasts list, press Shift+F10 "
         "or the Applications key for Unsubscribe, Add RSS Feed, Import gpodder.net "

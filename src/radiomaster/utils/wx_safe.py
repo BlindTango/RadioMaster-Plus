@@ -23,7 +23,18 @@ import wx
 
 
 def call_after_safe(window: wx.Window, func: Callable, *args) -> None:
+    app = wx.GetApp()
+    if not app or not window:
+        return
+
     def run():
-        if window:
+        if app and wx.GetApp() is app and window:
             func(*args)
-    wx.CallAfter(run)
+
+    try:
+        wx.CallAfter(run)
+    except (RuntimeError, AssertionError):
+        # The native app may disappear between GetApp and wx.PostEvent inside
+        # CallAfter. Ignore only that shutdown race, not other programming errors.
+        if app and wx.GetApp() is app:
+            raise

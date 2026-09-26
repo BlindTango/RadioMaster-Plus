@@ -291,19 +291,26 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             The scan avoids streams currently being played or recorded. Reducing
             parallel connections can help on a slow connection. Results are retained
             locally so you can return to review them.
+            Filtering and saving run in the background, including with large result lists.
+            Closing the dialog lets already queued saves finish.
         """),
         _topic("Reviewing Results and Hiding Stations", """
             Use Show to select All problems, Dead streams, Name mismatches, Website
             down, Geo-blocked, or Format mismatches. Select a row to read its details.
             Recheck Selected tests it again; Play lets you try the selected station.
+            Your selected station is retained when the results update, as long as it
+            still matches the filter.
 
             Hide Selected excludes that station from normal browsing. Hide All Dead
             acts on the dead-station results after confirmation. A failed website does
             not necessarily mean the audio stream is dead; inspect the problem type.
+            Hiding runs in the background. Hidden stations remain excluded from this
+            results list even if a later scan result arrives for them.
 
             Choose Manage Hidden to review excluded stations. Unhide Selected restores
             one entry; Unhide All restores all hidden entries. Hiding is reversible and
             does not remove a station from the public Radio Browser service.
+            Unhidden stations with recorded problems reappear in the matching results.
         """),
     ]),
     ("Podcasts", [
@@ -326,6 +333,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             2. Select a search result.
             3. Choose Subscribe to save the podcast and load its episodes.
             4. Return to Subscriptions and select the show whenever you want its episodes.
+
+            Typing in Search automatically selects the Directory category and keeps
+            focus in the search field. Press Enter or choose Search to submit the query.
+            Clearing the field does not change the category.
 
             Directory search uses the available podcast directories. Podcast Index can
             provide a second search directory when its API Key and API Secret are entered
