@@ -95,6 +95,9 @@ def test_typing_search_switches_to_directory_without_reloading_each_keystroke(qu
         _find_row=MagicMock(return_value=2), _on_category_select=MagicMock(),
     )
     panel.search_ctrl.GetValue.return_value = query
+    panel._select_directory_category = lambda: panel_method(
+        "_select_directory_category", wx=SimpleNamespace(NOT_FOUND=-1),
+    )(panel)
     event = MagicMock()
     panel_method("_on_search_text", wx=SimpleNamespace(NOT_FOUND=-1))(panel, event)
     if switch:
@@ -104,6 +107,8 @@ def test_typing_search_switches_to_directory_without_reloading_each_keystroke(qu
         panel._category_list.Select.assert_not_called()
         panel._on_category_select.assert_not_called()
     panel._category_list.SetFocus.assert_not_called()
+    if query.strip():
+        panel._category_list.Focus.assert_called_once_with(2)
     event.Skip.assert_called_once()
 
 

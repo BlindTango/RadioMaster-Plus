@@ -1404,6 +1404,38 @@ class TestDownloadsHistoryRemoveAll:
 
 
 class TestPodcastContextMenuKeys:
+    @pytest.mark.parametrize("send_text_event", [True, False])
+    def test_first_search_sets_selected_and_focused_directory_row(
+            self, app_and_window, send_text_event):
+        _app, win = app_and_window
+        win._switch_tab(1)
+        panel = win._podcast_panel
+        assert panel._category_list.GetFocusedItem() == wx.NOT_FOUND
+        panel.search_ctrl.SetFocus()
+        if send_text_event:
+            panel.search_ctrl.SetValue("first search")
+            assert panel._selected_category() == "Directory"
+            assert panel._category_list.GetFocusedItem() == 2
+        else:
+            # Submitting must also work if the text arrived without EVT_TEXT.
+            panel.search_ctrl.ChangeValue("first search")
+        results = [{"title": "First result", "feed_url": "https://example.test/feed"}]
+        with patch("radiomaster.services.podcast_directory.search_all", return_value=results):
+            panel._on_directory_search(None)
+            assert panel._selected_category() == "Directory"
+            assert panel._category_list.GetFocusedItem() == 2
+            assert wx.Window.FindFocus() is panel.search_ctrl
+            deadline = time.monotonic() + 5
+            while not panel._viewing_search_results and time.monotonic() < deadline:
+                wx.Yield()
+                time.sleep(0.01)
+            assert panel._viewing_search_results
+        panel._category_list.SetFocusFromKbd()
+        wx.Yield()
+        assert panel._selected_category() == "Directory"
+        assert panel._category_list.GetFocusedItem() == 2
+        assert panel._podcast_data == results
+
     @pytest.mark.parametrize("list_name", ["_podcast_list", "_episode_list"])
     @pytest.mark.parametrize("key,shift", [(wx.WXK_WINDOWS_MENU, False), (wx.WXK_F10, True)])
     def test_keyboard_opens_empty_list_menu_once(self, app_and_window, list_name, key, shift):

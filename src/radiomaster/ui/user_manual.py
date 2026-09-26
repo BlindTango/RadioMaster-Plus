@@ -339,6 +339,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
 
             Typing in Search automatically selects the Directory category and keeps
             focus in the search field. Press Enter or choose Search to submit the query.
+            This also works on the first search after opening the app. When you move
+            into the category list, its focused row is Directory; your results remain
+            available in the Podcasts list.
             Clearing the field does not change the category.
 
             Directory search uses the available podcast directories. Podcast Index can

@@ -32,6 +32,7 @@ class StatusBar(wx.StatusBar):
         self.SetStatusWidths([-2, -1, -3, -2, -2])
         self._announcements_enabled = False
         self._last_announced = ""
+        self._last_accessible_name = ""
         self._accessible = set_accessible_name(self, "Status: Ready")
 
         self._set_defaults()
@@ -45,11 +46,22 @@ class StatusBar(wx.StatusBar):
         self.SetStatusText("", self.FIELD_FORMAT)
 
     def SetStatusText(self, text: str, number: int = 0) -> None:
-        """Keep every field available when a screen reader reads the bar."""
+        """Keep every field available when a screen reader reads the bar.
+
+        Only update the accessible name when the composed string actually
+        changes. The position timer calls set_time_info four times per
+        second, and each call used to rebuild and set the name unconditionally,
+        flooding NVDA with EVENT_OBJECT_NAMECHANGE events (1,300+ per session)
+        that caused native heap corruption and crashes. Caching the last name
+        and skipping identical updates eliminates the event storm entirely.
+        """
         super().SetStatusText(text, number)
         if hasattr(self, "_accessible"):
             fields = [self.GetStatusText(i) for i in range(self.GetFieldsCount())]
-            self._accessible.set_name("Status: " + "; ".join(filter(None, fields)))
+            name = "Status: " + "; ".join(filter(None, fields))
+            if name != self._last_accessible_name:
+                self._accessible.set_name(name)
+                self._last_accessible_name = name
 
     def set_status(self, text: str) -> None:
         """Set the main status field."""

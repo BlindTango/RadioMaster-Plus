@@ -88,7 +88,8 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
     )),
     ("Play Podcasts, Local Media, and Audiobooks", (
         f"Podcasts: press {_key('panel_podcasts')}, search or choose a subscription, select an episode, "
-        "and press Enter. Typing in Podcast Search selects Directory automatically; "
+        "and press Enter. Typing in Podcast Search selects Directory automatically, "
+        "including on your first search after opening the app; "
         "press Enter or Search to run the search. "
         f"Audiobooks: press {_key('panel_audiobooks')}, choose Browse Folder, select a "
         f"chapter, then press Enter. Read with TTS works for DAISY chapters containing text. "
@@ -132,6 +133,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.96", (
+        "Fixed Directory category navigation on the first podcast search after startup. "
+        "Typing or submitting a query now keeps the selected and focused category rows "
+        "together on Directory, while keyboard input remains in Search. Moving into the "
+        "category list after results arrive lands on Directory and preserves the results. "
+        "Updated the User Manual and Quick Start guide."
+    )),
     ("Version 1.1.95", (
         "Fixed the Applications/Menu key not opening the Podcasts list context menu. "
         "The Podcasts and Episodes lists now explicitly handle both the Applications "

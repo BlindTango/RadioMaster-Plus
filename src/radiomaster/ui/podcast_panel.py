@@ -325,13 +325,25 @@ class PodcastPanel(wx.Panel):
 
     def _on_search_text(self, event: wx.CommandEvent) -> None:
         """Switch to directory browsing as the user types, retaining edit focus."""
-        if self.search_ctrl.GetValue().strip() and self._selected_category() != "Directory":
-            idx = self._find_row(self._category_list, "Directory")
-            if idx != wx.NOT_FOUND:
-                self._category_list.Select(idx)
-                self._category_list.EnsureVisible(idx)
-                self._on_category_select(None)
+        if self.search_ctrl.GetValue().strip():
+            self._select_directory_category()
         event.Skip()
+
+    def _select_directory_category(self) -> None:
+        """Align the selected and focused rows without moving keyboard input focus."""
+        idx = self._find_row(self._category_list, "Directory")
+        if idx == wx.NOT_FOUND:
+            return
+        changed = self._selected_category() != "Directory"
+        if changed:
+            self._category_list.Select(idx)
+        # Select alone leaves a never-visited native list with no focused row.
+        # Focus marks the item for keyboard/screen-reader navigation; unlike
+        # SetFocus, it does not move input focus out of the search field.
+        self._category_list.Focus(idx)
+        self._category_list.EnsureVisible(idx)
+        if changed:
+            self._on_category_select(None)
 
     def _on_directory_search(self, event: wx.Event) -> None:
         """Search every configured podcast directory (see
@@ -344,6 +356,7 @@ class PodcastPanel(wx.Panel):
         query = self.search_ctrl.GetValue().strip()
         if not query:
             return
+        self._select_directory_category()
         # Leaves the just-searched term selected so typing right away
         # (without first clearing it) starts the next search fresh.
         self.search_ctrl.SelectAll()
@@ -373,13 +386,7 @@ class PodcastPanel(wx.Panel):
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_search_results(self, results: list[dict[str, Any]], query: str) -> None:
-        # Switching category to "Directory" doesn't fire EVT_LIST_ITEM_SELECTED
-        # (wx doesn't raise it for a programmatic Select()), so the results
-        # are populated directly here rather than relying on
-        # _on_category_select to do it.
-        idx = self._find_row(self._category_list, "Directory")
-        if idx != wx.NOT_FOUND:
-            self._category_list.Select(idx)
+        self._select_directory_category()
         self._episode_list.DeleteAllItems()
         self._podcast_list.DeleteAllItems()
         self._podcast_data = results
