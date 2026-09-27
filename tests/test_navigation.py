@@ -626,6 +626,7 @@ class TestAccessibilitySettings:
             bar.set_screen_reader_announcements(True)
             bar.set_status("Accessibility test")
             bar.set_status("Accessibility test")
+            bar._announce_status()
         notify.assert_called_once()
         assert bar._accessible.GetName(0) == (wx.ACC_OK, "Status: Accessibility test")
 

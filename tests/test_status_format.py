@@ -51,3 +51,48 @@ def test_screen_reader_can_read_all_fields_without_automatic_announcements():
     finally:
         frame.Destroy()
         app.ProcessPendingEvents()
+
+
+def test_status_burst_is_coalesced_and_progress_and_disable_cancel_pending():
+    app = wx.App.Get() or wx.App(False)
+    frame = wx.Frame(None)
+    bar = StatusBar(frame)
+    try:
+        with patch.object(wx.Accessible, "NotifyEvent") as notify:
+            bar.set_screen_reader_announcements(True)
+            for index in range(100):
+                bar.set_status(f"Connecting {index}")
+            notify.assert_not_called()
+            assert bar._announcement_timer.IsRunning()
+            bar._announce_status()
+            notify.assert_called_once_with(
+                wx.ACC_EVENT_OBJECT_NAMECHANGE, bar, wx.OBJID_CLIENT, 1
+            )
+            bar.set_status("Download 10%", False)
+            assert not bar._announcement_timer.IsRunning()
+            bar.set_status("Starting download")
+            bar.set_status("Download 20%", False)
+            assert not bar._announcement_timer.IsRunning()
+            bar.set_status("Finished")
+            bar.set_screen_reader_announcements(False)
+            assert not bar._announcement_timer.IsRunning()
+            bar._announce_status()
+            assert notify.call_count == 1
+        assert bar._accessible.GetChildCount() == (wx.ACC_OK, 5)
+        assert bar._accessible.GetRole(0) == (wx.ACC_OK, wx.ROLE_SYSTEM_STATUSBAR)
+        assert bar._accessible.GetName(1) == (wx.ACC_OK, "Finished")
+    finally:
+        frame.Destroy()
+        app.ProcessPendingEvents()
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows MSAA event regression")
+def test_live_status_fields_do_not_emit_native_name_changes():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    probe = Path(__file__).with_name("status_event_probe.py")
+    result = subprocess.run([sys.executable, str(probe)], capture_output=True,
+                            text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr

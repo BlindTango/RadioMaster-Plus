@@ -43,7 +43,7 @@ class RadioPanel(scrolled.ScrolledPanel):
 
     def __init__(self, parent, station_api: StationAPI, station_db: StationDB,
                  station_updater: StationUpdater, engine: PlaybackEngine,
-                 set_status: Callable[[str], None], db=None):
+                 set_status: Callable[..., None], db=None):
         super().__init__(parent)
         self.station_api = station_api
         self.station_db = station_db
@@ -176,7 +176,7 @@ class RadioPanel(scrolled.ScrolledPanel):
                 text = f"Status: Fetching station list for the first time... {percent}%"
             else:
                 text = f"Status: Fetching station list for the first time... ({bytes_read // 1024} KB)"
-            call_after_safe(self, self.set_status, text)
+            call_after_safe(self, self.set_status, text, False)
 
         def worker():
             result = self.station_updater.update_now(progress_cb=progress_cb)

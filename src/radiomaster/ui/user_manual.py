@@ -187,7 +187,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             are labelled as station reported. Detected values replace them when available.
             Unknown fields are omitted; a failed check retains the reported fallback or
             says Stream format unavailable. The status bar's screen-reader name includes
-            its populated fields. Automatic status announcements are optional in Settings.
+            its populated fields. Playback time, buffering, source, stream format, and
+            download percentages update silently and remain available to read on demand.
+            Automatic main-status announcements are optional in Settings. Brief bursts
+            of status changes are combined into one announcement after a short pause.
         """),
         _topic("Opening Files, Folders, and URLs", """
             File > Open File ({shortcut:open_file}) opens a local media file. File >

@@ -1899,10 +1899,10 @@ class MainWindow(wx.Frame):
             if total:
                 pct = int(downloaded * 100 / total)
                 call_after_safe(self, self._status_bar.set_status,
-                                f"Updating YouTube library... {pct}%")
+                                f"Updating YouTube library... {pct}%", False)
             else:
                 call_after_safe(self, self._status_bar.set_status,
-                                f"Updating YouTube library... {downloaded // 1024} KB")
+                                f"Updating YouTube library... {downloaded // 1024} KB", False)
 
         def worker():
             ok, message = service.update(progress_cb=progress_cb)

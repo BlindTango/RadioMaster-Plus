@@ -2,7 +2,7 @@
 
 import wx
 
-from radiomaster.utils.accessibility import set_accessible_name
+from radiomaster.utils.accessibility import _KEEPALIVE
 
 
 def _format_hms(seconds: float) -> str:
@@ -12,6 +12,31 @@ def _format_hms(seconds: float) -> str:
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+class _StatusAccessible(wx.Accessible):
+    """Expose current painted fields without generating native text events."""
+
+    def __init__(self, window, fields):
+        super().__init__(window)
+        self._fields = fields
+
+    def GetName(self, childId):
+        if childId == wx.ACC_SELF:
+            return wx.ACC_OK, "Status: " + "; ".join(filter(None, self._fields))
+        if 1 <= childId <= len(self._fields):
+            return wx.ACC_OK, self._fields[childId - 1]
+        return wx.ACC_NOT_IMPLEMENTED, ""
+
+    def GetChildCount(self):
+        return wx.ACC_OK, len(self._fields)
+
+    def GetRole(self, childId):
+        if childId == wx.ACC_SELF:
+            return wx.ACC_OK, wx.ROLE_SYSTEM_STATUSBAR
+        if 1 <= childId <= len(self._fields):
+            return wx.ACC_OK, wx.ROLE_SYSTEM_STATICTEXT
+        return wx.ACC_NOT_IMPLEMENTED, 0
 
 
 class StatusBar(wx.StatusBar):
@@ -32,55 +57,74 @@ class StatusBar(wx.StatusBar):
         self.SetStatusWidths([-2, -1, -3, -2, -2])
         self._announcements_enabled = False
         self._last_announced = ""
-        self._last_accessible_name = ""
-        self._accessible = set_accessible_name(self, "Status: Ready")
+        self._field_texts = ["Ready", "", "", "", ""]
+        self._accessible = _StatusAccessible(self, self._field_texts)
+        self.SetAccessible(self._accessible)
+        _KEEPALIVE.append(self._accessible)
+        self.SetName("Status")
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self._announcement_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._announce_status, self._announcement_timer)
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
-        self._set_defaults()
-
-    def _set_defaults(self) -> None:
-        """Set default status text."""
-        self.SetStatusText("Ready", self.FIELD_STATUS)
-        self.SetStatusText("", self.FIELD_BUFFERING)
-        self.SetStatusText("", self.FIELD_QUALITY)
-        self.SetStatusText("", self.FIELD_SOURCE)
-        self.SetStatusText("", self.FIELD_FORMAT)
+    def _on_paint(self, event):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(self.GetBackgroundColour()))
+        dc.Clear()
+        dc.SetFont(self.GetFont())
+        dc.SetTextForeground(self.GetForegroundColour())
+        for index, text in enumerate(self._field_texts):
+            rect = self.GetFieldRect(index)
+            rect.Deflate(3, 0)
+            if rect.width <= 0 or rect.height <= 0:
+                continue
+            dc.SetClippingRegion(rect)
+            label = wx.Control.Ellipsize(text, dc, wx.ELLIPSIZE_END, rect.width)
+            height = dc.GetTextExtent(label).height
+            dc.DrawText(label, rect.x, rect.y + max(0, (rect.height - height) // 2))
+            dc.DestroyClippingRegion()
 
     def SetStatusText(self, text: str, number: int = 0) -> None:
-        """Keep every field available when a screen reader reads the bar.
+        """Paint cached text; native SetStatusText emits unsolicited MSAA events."""
+        if self._field_texts[number] != text:
+            self._field_texts[number] = text
+            self.RefreshRect(self.GetFieldRect(number))
 
-        Only update the accessible name when the composed string actually
-        changes. The position timer calls set_time_info four times per
-        second, and each call used to rebuild and set the name unconditionally,
-        flooding NVDA with EVENT_OBJECT_NAMECHANGE events (1,300+ per session)
-        that caused native heap corruption and crashes. Caching the last name
-        and skipping identical updates eliminates the event storm entirely.
-        """
-        super().SetStatusText(text, number)
-        if hasattr(self, "_accessible"):
-            fields = [self.GetStatusText(i) for i in range(self.GetFieldsCount())]
-            name = "Status: " + "; ".join(filter(None, fields))
-            if name != self._last_accessible_name:
-                self._accessible.set_name(name)
-                self._last_accessible_name = name
+    def GetStatusText(self, number: int = 0) -> str:
+        return self._field_texts[number]
 
-    def set_status(self, text: str) -> None:
-        """Set the main status field."""
+    def set_status(self, text: str, announce: bool = True) -> None:
+        """Coalesce status changes; numerical download progress stays silent."""
         self.SetStatusText(text, self.FIELD_STATUS)
+        self._announcement_timer.Stop()
+        if not announce:
+            return
+        if self._announcements_enabled and text != self._last_announced:
+            self._announcement_timer.StartOnce(500)
+
+    def _announce_status(self, event=None):
+        self._announcement_timer.Stop()
+        text = self.GetStatusText(self.FIELD_STATUS)
         if self._announcements_enabled and text and text != self._last_announced:
             self._last_announced = text
             try:
                 wx.Accessible.NotifyEvent(
-                    wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 0
+                    wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 1
                 )
             except (AttributeError, RuntimeError):
-                # Some non-Windows wx builds do not expose MSAA events. The
-                # status remains available through the accessible object.
                 pass
+
+    def _on_destroy(self, event):
+        if event.GetEventObject() == self:
+            self._announcement_timer.Stop()
+        event.Skip()
 
     def set_screen_reader_announcements(self, enabled: bool) -> None:
         """Enable concise announcements for meaningful status changes."""
         self._announcements_enabled = bool(enabled)
         if not enabled:
+            self._announcement_timer.Stop()
             self._last_announced = ""
 
     def set_buffering(self, percent: int) -> None:

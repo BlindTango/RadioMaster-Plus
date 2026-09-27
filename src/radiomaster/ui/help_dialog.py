@@ -133,6 +133,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.98", (
+        "Status-bar accessibility: playback time, buffering, source, and format "
+        "remain readable without sending continuous native name-change events to NVDA. "
+        "Download percentages update silently. When automatic announcements are enabled, "
+        "brief bursts of main-status changes are combined into one announcement. "
+        "Turn off Announce status changes to screen readers in Settings to disable these announcements; "
+        "the status bar remains available to read on demand."
+    )),
     ("Version 1.1.97", (
         "Selecting a subscribed channel in the YouTube panel's My Channels list now "
         "loads its most recent videos into the results list, matching how the Podcasts "
