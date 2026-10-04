@@ -133,6 +133,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.99", (
+        "Podcast episode transitions now retire the previous audio monitor before "
+        "releasing its stream. Cancelled playback requests cannot start an old episode "
+        "over the next one.\n\n"
+        "An unresponsive audio process is now terminated after a bounded wait, "
+        "including when stopping or closing the application. Start playback again "
+        "to create a fresh audio process. Stream opening allows up to 45 seconds; "
+        "other audio commands allow up to 5 seconds."
+    )),
     ("Version 1.1.98", (
         "Status-bar accessibility: playback time, buffering, source, and format "
         "remain readable without sending continuous native name-change events to NVDA. "

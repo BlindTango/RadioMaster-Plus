@@ -778,6 +778,7 @@ class BassHost:
 
     def _cancel_pending_play(self):
         """Cancel any pending play operation and stop current stream."""
+        self._stop_meta_thread()
         with self._lock:
             if self._current_play_thread and self._current_play_thread.is_alive():
                 # Thread will check self._current_play_seq mismatch and abort
@@ -2321,9 +2322,9 @@ class BassHost:
 
     def _restart_meta_thread(self):
         self._stop_meta_thread()
-        self._meta_stop.clear()
+        self._meta_stop = threading.Event()
         self._meta_thread = threading.Thread(
-            target=self._monitor_loop, daemon=True)
+            target=self._monitor_loop, args=(self._meta_stop,), daemon=True)
         self._meta_thread.start()
 
     def _stop_meta_thread(self):
@@ -2332,9 +2333,8 @@ class BassHost:
         self._meta_thread = None
         if t and t.is_alive():
             t.join(timeout=2)
-        self._meta_stop.clear()
 
-    def _monitor_loop(self):
+    def _monitor_loop(self, stop_event):
         """ICY metadata polling + stall/stop/buffer-drain detection.
 
         Three failure modes are detected:
@@ -2360,92 +2360,92 @@ class BassHost:
         last_pos        = None
         _BUF_EMPTY_THRESHOLD = 2   # consecutive near-empty reads before stall
 
-        while not self._meta_stop.is_set():
-            for _ in range(6):   # 3-second hold, cancellable in 0.5s steps
-                if self._meta_stop.is_set():
-                    return
-                time.sleep(0.5)
+        while not stop_event.is_set():
+            if stop_event.wait(3.0):
+                return
 
             try:
                 with self._lock:
+                    if stop_event.is_set():
+                        return
                     h, dll = self._handle, self._dll
 
-                if not h or not dll:
-                    stall_count     = 0
-                    buf_empty_count = 0
-                    pos_stuck_count = 0
-                    last_pos        = None
-                    continue
-
-                # 1. ICY metadata
-                try:
-                    raw = dll.BASS_ChannelGetTags(h, _BASS_TAG_META)
-                    if raw and b"StreamTitle='" in raw:
-                        decoded = raw.decode("utf-8", "ignore")
-                        title = decoded.split("StreamTitle='")[1].split("';")[0]
-                        if title and title != last_title:
-                            last_title = title
-                            _event(type="meta", title=title)
-                except Exception:
-                    pass
-
-                # 2. Channel status
-                try:
-                    state = dll.BASS_ChannelIsActive(h)
-                except Exception:
-                    state = _BASS_ACTIVE_PLAYING
-
-                if state in (_BASS_ACTIVE_STALLED, _BASS_ACTIVE_STOPPED):
-                    stall_count += 1
-                    buf_empty_count = 0
-                    pos_stuck_count = 0
-                    last_pos        = None
-                    if stall_count >= self._STALL_THRESHOLD:
-                        if not self._meta_stop.is_set():
-                            _event(type="stall", state=state)
-                        stall_count = 0
-
-                elif state == _BASS_ACTIVE_PLAYING:
-                    stall_count = 0
-                    # 3. Buffer-drain check — catches AAC+ SBR decoder drift.
-                    # BASS_ChannelGetData with BASS_DATA_AVAILABLE returns
-                    # buffered decoded bytes without consuming them.
-                    # Returning 0 while PLAYING means the decoder has stalled
-                    # internally even though the channel is nominally active.
-                    available = None
-                    try:
-                        available = dll.BASS_ChannelGetData(h, None, _BASS_DATA_AVAILABLE)
-                        if available == 0:
-                            buf_empty_count += 1
-                            if buf_empty_count >= _BUF_EMPTY_THRESHOLD:
-                                if not self._meta_stop.is_set():
-                                    _event(type="stall", state=state)
-                                buf_empty_count = 0
-                        else:
-                            buf_empty_count = 0
-                    except Exception:
+                    if not h or not dll:
+                        stall_count     = 0
                         buf_empty_count = 0
-
-                    # 4. Position-stuck check — channel says PLAYING and the
-                    # buffer isn't empty, but the actual playback cursor has
-                    # frozen, so no audio is reaching the output. This is
-                    # invisible to checks 1-3, which is why it kept being
-                    # reported as "title updates but no sound".
-                    try:
-                        pos = dll.BASS_ChannelGetPosition(h, _BASS_POS_BYTE)
-                        if pos is not None and pos >= 0:
-                            if last_pos is not None and pos == last_pos:
-                                pos_stuck_count += 1
-                                if pos_stuck_count >= self._STALL_THRESHOLD:
-                                    if not self._meta_stop.is_set():
-                                        _event(type="stall", state=state)
-                                    pos_stuck_count = 0
-                            else:
-                                pos_stuck_count = 0
-                            last_pos = pos
-                    except Exception:
                         pos_stuck_count = 0
-                # PAUSED: leave counters unchanged
+                        last_pos        = None
+                        continue
+
+                    # 1. ICY metadata
+                    try:
+                        raw = dll.BASS_ChannelGetTags(h, _BASS_TAG_META)
+                        if raw and b"StreamTitle='" in raw:
+                            decoded = raw.decode("utf-8", "ignore")
+                            title = decoded.split("StreamTitle='")[1].split("';")[0]
+                            if title and title != last_title:
+                                last_title = title
+                                _event(type="meta", title=title)
+                    except Exception:
+                        pass
+
+                    # 2. Channel status
+                    try:
+                        state = dll.BASS_ChannelIsActive(h)
+                    except Exception:
+                        state = _BASS_ACTIVE_PLAYING
+
+                    if state in (_BASS_ACTIVE_STALLED, _BASS_ACTIVE_STOPPED):
+                        stall_count += 1
+                        buf_empty_count = 0
+                        pos_stuck_count = 0
+                        last_pos        = None
+                        if stall_count >= self._STALL_THRESHOLD:
+                            if not stop_event.is_set():
+                                _event(type="stall", state=state)
+                            stall_count = 0
+
+                    elif state == _BASS_ACTIVE_PLAYING:
+                        stall_count = 0
+                        # 3. Buffer-drain check — catches AAC+ SBR decoder drift.
+                        # BASS_ChannelGetData with BASS_DATA_AVAILABLE returns
+                        # buffered decoded bytes without consuming them.
+                        # Returning 0 while PLAYING means the decoder has stalled
+                        # internally even though the channel is nominally active.
+                        available = None
+                        try:
+                            available = dll.BASS_ChannelGetData(h, None, _BASS_DATA_AVAILABLE)
+                            if available == 0:
+                                buf_empty_count += 1
+                                if buf_empty_count >= _BUF_EMPTY_THRESHOLD:
+                                    if not stop_event.is_set():
+                                        _event(type="stall", state=state)
+                                    buf_empty_count = 0
+                            else:
+                                buf_empty_count = 0
+                        except Exception:
+                            buf_empty_count = 0
+
+                        # 4. Position-stuck check — channel says PLAYING and the
+                        # buffer isn't empty, but the actual playback cursor has
+                        # frozen, so no audio is reaching the output. This is
+                        # invisible to checks 1-3, which is why it kept being
+                        # reported as "title updates but no sound".
+                        try:
+                            pos = dll.BASS_ChannelGetPosition(h, _BASS_POS_BYTE)
+                            if pos is not None and pos >= 0:
+                                if last_pos is not None and pos == last_pos:
+                                    pos_stuck_count += 1
+                                    if pos_stuck_count >= self._STALL_THRESHOLD:
+                                        if not stop_event.is_set():
+                                            _event(type="stall", state=state)
+                                        pos_stuck_count = 0
+                                else:
+                                    pos_stuck_count = 0
+                                last_pos = pos
+                        except Exception:
+                            pos_stuck_count = 0
+                    # PAUSED: leave counters unchanged
 
             except Exception:
                 pass

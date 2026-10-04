@@ -1197,6 +1197,12 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             that moving a file can make an old History entry unable to find it.
         """),
         _topic("Troubleshooting", """
+            If audio stops responding during podcast playback or an episode change,
+            RadioMaster+ terminates the unresponsive audio process. Stream opening
+            can take up to 45 seconds; Stop and other audio commands wait up to
+            5 seconds. Select the episode and press Enter to start playback again
+            with a fresh audio process. Your saved playback settings are retained.
+
             No sound: check Play/Pause, Volume, Mute, Pan, Sound Output Device, Windows
             volume, and the selected device. Try a known local file and another station.
             A problem limited to one source is different from no audio anywhere.

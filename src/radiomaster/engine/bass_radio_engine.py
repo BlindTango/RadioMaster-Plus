@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -44,6 +45,8 @@ class BassRadioEngine:
     STATE_PLAYING = "playing"
     STATE_PAUSED = "paused"
     STATE_BUFFERING = "buffering"
+    REQUEST_TIMEOUT = 5.0
+    OPEN_TIMEOUT = 45.0
 
     @classmethod
     def create_if_available(cls) -> "BassRadioEngine | None":
@@ -68,6 +71,7 @@ class BassRadioEngine:
         self._generation = 0
         self._lock = threading.RLock()
         self._io_lock = threading.RLock()
+        self._host_failed = threading.Event()
         self._on_state_change: Callable[[str], None] | None = None
         self._on_position_update: Callable[[float, float], None] | None = None
         self._on_buffering: Callable[[int], None] | None = None
@@ -76,12 +80,13 @@ class BassRadioEngine:
         self._on_track_finished: Callable[[], None] | None = None
         self._process = subprocess.Popen(
             command, stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
             encoding="utf-8", errors="replace", bufsize=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             env=environment,
         )
-        ready = self._read_response()
+        with self._response_deadline(self.OPEN_TIMEOUT):
+            ready = self._read_response()
         if not ready.get("ok") or not ready.get("ready"):
             self._terminate_host()
             raise RuntimeError(ready.get("error", "BASS host did not become ready"))
@@ -104,8 +109,7 @@ class BassRadioEngine:
         while True:
             line = self._process.stdout.readline()
             if not line:
-                detail = self._process.stderr.read().strip() if self._process.stderr else ""
-                raise RuntimeError(detail or "BASS host exited unexpectedly")
+                raise RuntimeError("BASS audio process stopped responding or exited")
             response = json.loads(line)
             if not response.get("event"):
                 return response
@@ -118,14 +122,34 @@ class BassRadioEngine:
                 if self._on_buffering:
                     self._on_buffering(0)
 
-    def _request(self, command: dict) -> dict:
-        with self._io_lock:
-            if self._process.poll() is not None:
-                raise RuntimeError("BASS host is no longer running")
-            assert self._process.stdin is not None
-            self._process.stdin.write(json.dumps(command) + "\n")
-            self._process.stdin.flush()
-            return self._read_response()
+    @property
+    def available(self) -> bool:
+        return not self._host_failed.is_set() and self._process.poll() is None
+
+    @contextmanager
+    def _response_deadline(self, timeout):
+        """Release blocked pipe I/O even when a native decoder hangs."""
+        timer = threading.Timer(timeout, self._terminate_host)
+        timer.daemon = True
+        timer.start()
+        try:
+            yield
+        finally:
+            timer.cancel()
+
+    def _request(self, command: dict, generation: int | None = None) -> dict:
+        # Include lock waiting so Stop can interrupt a stalled stream open.
+        timeout = self.OPEN_TIMEOUT if command["cmd"] == "play" else self.REQUEST_TIMEOUT
+        with self._response_deadline(timeout):
+            with self._io_lock:
+                if generation is not None and generation != self._generation:
+                    return {"ok": False, "cancelled": True}
+                if not self.available:
+                    raise RuntimeError("BASS host is no longer running; start playback again")
+                assert self._process.stdin is not None
+                self._process.stdin.write(json.dumps(command) + "\n")
+                self._process.stdin.flush()
+                return self._read_response()
 
     def play(self, url: str, title: str = "", artist: str = "",
              duration: float = 0.0, seekable: bool | None = None) -> None:
@@ -149,12 +173,14 @@ class BassRadioEngine:
         try:
             result = self._request({"cmd": "play", "url": url,
                                     "volume": self._volume, "seq": generation,
-                                    "seekable": self._seekable})
+                                    "seekable": self._seekable}, generation=generation)
             if not result.get("ok"):
                 raise RuntimeError(result.get("error", "stream open failed"))
             last = time.monotonic()
             while generation == self._generation:
-                active = self._request({"cmd": "status"}).get("state", -1)
+                active = self._request({"cmd": "status"}, generation=generation).get("state", -1)
+                if generation != self._generation:
+                    return
                 now = time.monotonic()
                 if active == BASS_ACTIVE_PLAYING:
                     self._position += now - last
@@ -168,7 +194,9 @@ class BassRadioEngine:
                     break
                 last = now
                 if self._seekable:
-                    media = self._request({"cmd": "media_status"})
+                    media = self._request({"cmd": "media_status"}, generation=generation)
+                    if generation != self._generation:
+                        return
                     self._position = max(0.0, float(media.get("position_seconds", 0.0)))
                     reported_duration = max(0.0, float(media.get("length_seconds", 0.0)))
                     if reported_duration:
@@ -192,7 +220,11 @@ class BassRadioEngine:
                     self._on_track_finished()
 
     def stop(self, wait: bool = True) -> None:
-        del wait
+        if not wait:
+            self._generation += 1
+            self._state = self.STATE_STOPPED
+            self._terminate_host()
+            return
         with self._lock:
             self._generation += 1
             changed = self._state != self.STATE_STOPPED
@@ -282,6 +314,7 @@ class BassRadioEngine:
         return False
 
     def close(self) -> None:
+        self._generation += 1
         try:
             self._request({"cmd": "quit"})
         except Exception:
@@ -289,6 +322,7 @@ class BassRadioEngine:
         self._terminate_host()
 
     def _terminate_host(self) -> None:
+        self._host_failed.set()
         if self._process.poll() is None:
             self._process.terminate()
             try:

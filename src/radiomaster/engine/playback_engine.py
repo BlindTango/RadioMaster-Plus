@@ -105,7 +105,10 @@ class PlaybackEngine:
 
     def _ensure_bass_radio(self):
         if self._bass_radio is not None:
-            return self._bass_radio
+            if self._bass_radio.available:
+                return self._bass_radio
+            self._bass_radio.close()
+            self._bass_radio = None
         from radiomaster.engine.bass_radio_engine import BassRadioEngine
         bass = BassRadioEngine.create_if_available()
         if bass:
