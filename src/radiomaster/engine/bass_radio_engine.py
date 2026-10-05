@@ -85,8 +85,12 @@ class BassRadioEngine:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             env=environment,
         )
-        with self._response_deadline(self.OPEN_TIMEOUT):
-            ready = self._read_response()
+        try:
+            with self._response_deadline(self.OPEN_TIMEOUT):
+                ready = self._read_response()
+        except Exception:
+            self._terminate_host()
+            raise
         if not ready.get("ok") or not ready.get("ready"):
             self._terminate_host()
             raise RuntimeError(ready.get("error", "BASS host did not become ready"))

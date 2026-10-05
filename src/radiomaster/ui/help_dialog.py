@@ -133,6 +133,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.100", (
+        "Playback starts are processed one at a time so rapid station changes cannot "
+        "launch competing audio processes. Failed audio-process startup now cleans up "
+        "the child process. Station click tracking skips overlapping requests to reduce "
+        "network pressure.\n\n"
+        "Streams without ICY metadata framing, including HLS playlists, no longer "
+        "trigger repeated metadata requests. A closed metadata connection is detected "
+        "so the watcher can reconnect instead of spinning. The User Manual now explains "
+        "missing track titles and station or podcast failures caused by DNS errors."
+    )),
     ("Version 1.1.99", (
         "Podcast episode transitions now retire the previous audio monitor before "
         "releasing its stream. Cancelled playback requests cannot start an old episode "

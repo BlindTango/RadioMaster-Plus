@@ -363,6 +363,10 @@ class RadioPanel(scrolled.ScrolledPanel):
                         response.close()
                     except Exception:
                         pass
+                    if response.status_code == 200 and meta_interval <= 0:
+                        # HLS and streams without icy-metaint do not carry
+                        # ICY framing. Reopening cannot produce metadata.
+                        return
                 consecutive_failures += 1
                 if consecutive_failures >= self._MAX_ICY_CONSECUTIVE_FAILURES:
                     log.warning(f"Giving up on ICY metadata for {url} after "

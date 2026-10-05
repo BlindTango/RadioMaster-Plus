@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 import os
+from functools import wraps
 from typing import Any, Callable
 
 from radiomaster.utils.tools import get_ffplay
@@ -12,6 +13,14 @@ from radiomaster.utils.logging_setup import log_io
 from radiomaster.engine.video_filters import build_effects_filters
 
 log = logging.getLogger("radiomaster")
+
+
+def _serialize_play(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._play_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class PlaybackEngine:
@@ -102,6 +111,9 @@ class PlaybackEngine:
         # Start BASS lazily on the first audio request.
         self._bass_radio = None
         self._using_bass_radio = False
+        # Radio selections arrive on independent worker threads. Only one
+        # may replace/configure the native host and start playback at a time.
+        self._play_lock = threading.RLock()
 
     def _ensure_bass_radio(self):
         if self._bass_radio is not None:
@@ -146,6 +158,7 @@ class PlaybackEngine:
             return self._bass_radio.state
         return self._state
 
+    @_serialize_play
     def play(self, url: str, title: str = "", artist: str = "",
               is_video: bool = False, duration: float = 0.0,
               http_headers: dict[str, str] | None = None,

@@ -6,6 +6,7 @@ import json
 import logging
 import socket
 import time
+import threading
 from dataclasses import dataclass, asdict
 from typing import Callable, Optional
 
@@ -147,6 +148,7 @@ class StationAPI:
                 seen.setdefault(url, None)
             self._base_urls = list(seen.keys())
         self._session = requests.Session()
+        self._click_lock = threading.Lock()
         from radiomaster.utils.network import get_user_agent, get_proxies
         self._session.headers["User-Agent"] = get_user_agent(USER_AGENT)
         self.proxies = proxies if proxies is not None else get_proxies()
@@ -213,9 +215,16 @@ class StationAPI:
         return [Station.from_api(r) for r in raw]
 
     def click(self, station_uuid: str) -> None:
+        # Click tracking is best effort. Rapid station changes must not
+        # create an unbounded queue of requests competing with playback.
+        if not self._click_lock.acquire(blocking=False):
+            return
         try:
-            self._session.get(
+            with self._session.get(
                 f"{self._base_urls[0]}/json/url/{station_uuid}", timeout=5, proxies=self.proxies
-            )
+            ):
+                pass
         except requests.RequestException:
             pass
+        finally:
+            self._click_lock.release()

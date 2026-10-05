@@ -78,14 +78,17 @@ class StreamReader:
         every N seconds did."""
         if meta_interval <= 0:
             return None
-        response.raw.read(meta_interval)
+        if len(response.raw.read(meta_interval)) != meta_interval:
+            raise EOFError("ICY stream ended during audio data")
         meta_length_byte = response.raw.read(1)
         if not meta_length_byte:
-            return None
+            raise EOFError("ICY stream ended before metadata length")
         length = int.from_bytes(meta_length_byte, "big") * 16
         if length <= 0:
             return None
         meta_data = response.raw.read(length)
+        if len(meta_data) != length:
+            raise EOFError("ICY stream ended during metadata")
         meta_str = meta_data.decode("utf-8", errors="replace")
         if "StreamTitle=" in meta_str:
             match = re.search(r"StreamTitle='([^']*)'", meta_str)

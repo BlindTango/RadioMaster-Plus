@@ -1215,6 +1215,16 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Missing bitrate or track title: the station may not supply it, or detection
             may fail. Reported format is a fallback, not a verified measurement. Read
             the status bar as well as the station results and confirm the running version.
+            HLS playlists and other streams may have no ICY track-title metadata even
+            while audio plays normally. Metadata polling stops when the stream does
+            not advertise ICY framing. If an established metadata connection closes,
+            the watcher attempts to reconnect.
+
+            A log message saying "Failed to resolve" or "NameResolutionError" means
+            the server name could not be resolved. Check your connection and Network
+            settings, and retry later. If only one station or podcast feed fails, its
+            address or provider may be unavailable. A failed episode refresh does not
+            remove the subscription or its previously saved episodes.
 
             Audio playback requires the bundled Un4seen BASS engine. If it cannot
             start, check your audio output device and reinstall RadioMaster+ if its
