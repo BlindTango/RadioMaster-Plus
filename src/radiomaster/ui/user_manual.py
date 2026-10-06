@@ -49,6 +49,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         """),
         _topic("Installation and First Launch", """
             Run the Windows installer and choose a standard installation or Portable.
+            Select Destination Location appears even when updating an existing copy.
+            Edit the path or choose Browse, then verify the folder on the final
+            confirmation before installing.
             Portable installation lets you choose a folder without creating the normal
             shortcuts and file associations. Keep the executable and its accompanying
             folders together; copying only the executable is not sufficient.
@@ -1151,9 +1154,13 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             that version for automatic prompting; Remind Me Later postpones the update.
 
             After the download, confirm Ready to Install. RadioMaster+ exits and the
-            installer opens. Follow its prompts and verify the destination is the copy
-            you use. For a portable copy, choose its existing portable folder, not a
-            different installation. Keep the entire application folder together.
+            installer opens with the running copy's folder and portable mode selected.
+            The destination page always lets you change the folder, including during
+            an update; the final confirmation also shows the destination.
+            Verify the destination before continuing, especially if you have multiple
+            copies or moved a portable folder to another drive. When updating an older
+            version, select Portable and enter its current folder yourself if necessary.
+            Keep the entire application folder together.
 
             Reopen the installed copy and use Help > About RadioMaster+ to verify its
             version. Building or downloading a new version elsewhere does not replace a

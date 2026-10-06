@@ -23,6 +23,15 @@ GITHUB_REPO = "BlindTango/RadioMaster-Plus"
 _USER_AGENT = "RadioMasterPlus-Updater"
 
 
+def installer_command(installer_path: str) -> list[str]:
+    """Update the running copy, including a portable copy moved to another drive."""
+    from radiomaster.utils.paths import _app_dir, is_portable_mode
+
+    directory = os.path.abspath(_app_dir())
+    return [installer_path, f"/DIR={directory}",
+            f"/PORTABLE={int(is_portable_mode())}"]
+
+
 class UpdateCheckError(RuntimeError):
     pass
 

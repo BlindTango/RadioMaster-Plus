@@ -14,7 +14,7 @@
 ; of that page AND a redundant native one stacked in front of it.
 
 #define MyAppName "RadioMaster+"
-#define MyAppVersion "1.1.101"
+#define MyAppVersion "1.1.102"
 #define MyAppPublisher "RadioMaster+ Team"
 #define MyAppURL "https://radiomaster.app"
 #define MyAppExeName "RadioMaster+.exe"
@@ -28,6 +28,9 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/support
 AppUpdatesURL={#MyAppURL}/download
 DefaultDirName={autopf}\{#MyAppName}
+; Always let users inspect and change the destination, including upgrades.
+DisableDirPage=no
+AlwaysShowDirOnReadyPage=yes
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
@@ -131,7 +134,10 @@ begin
     True, False);
   InstallModePage.Add('Full installation (Start Menu shortcuts, file associations, uninstaller)');
   InstallModePage.Add('Portable (copy to any folder you choose, e.g. a USB drive - no shortcuts)');
-  InstallModePage.SelectedValueIndex := 0;
+  if ExpandConstant('{param:PORTABLE|0}') = '1' then
+    InstallModePage.SelectedValueIndex := 1
+  else
+    InstallModePage.SelectedValueIndex := 0;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -140,7 +146,9 @@ begin
   // install -- an upgrade keeps whichever folder Setup already detected
   // the existing install in, so "run the installer to update" always
   // lands in the same place instead of leaving the question open.
-  if (CurPageID = wpSelectDir) and not IsUpgrade then
+  // An explicit /DIR from the running app takes precedence over defaults.
+  if (CurPageID = wpSelectDir) and not IsUpgrade and
+     (ExpandConstant('{param:DIR|}') = '') then
   begin
     if IsPortableMode then
       WizardForm.DirEdit.Text := ExpandConstant('{sd}\RadioMaster+_Portable')

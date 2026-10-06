@@ -60,6 +60,16 @@ def render_help_topics(topics: list[tuple[str, str]], config) -> list[tuple[str,
     return rendered
 
 QUICK_START_TOPICS: list[tuple[str, str]] = [
+    ("Install or Update in the Right Folder", (
+        "Choose Full installation or Portable in Setup. Select Destination Location "
+        "appears for new installations and updates: edit the folder path or use Browse. "
+        "For a portable copy, select its existing application folder on the drive you "
+        "use. Verify the destination on the final confirmation before installing.\n\n"
+        "Help > Check for Updates opens Setup with the running copy's folder and "
+        "portable mode preselected. You can still change the destination. When "
+        "updating an older version, check for a remembered folder on another drive. "
+        "After installing, launch the intended copy and check Help > About RadioMaster+."
+    )),
     ("Five-Minute Quick Start", (
         "1. Use an assigned panel shortcut to choose a main tab: {panel_shortcuts}.\n"
         "2. On Radio, select a station and press Enter. On Podcasts or YouTube, "
@@ -133,6 +143,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.102", (
+        "The installer always shows Select Destination Location, including during "
+        "updates. You can edit the path or browse to another folder, and the final "
+        "confirmation shows the selected destination.\n\n"
+        "In-app updates pass the running copy's folder and portable mode to Setup. "
+        "A portable copy moved to another drive no longer defaults to an older "
+        "registered installation. The User Manual and Quick Start Guide explain "
+        "how to verify or change the update folder."
+    )),
     ("Version 1.1.101", (
         "Starting a radio station, podcast episode, or other item automatically "
         "replaces the current playback source. An unresponsive previous audio "

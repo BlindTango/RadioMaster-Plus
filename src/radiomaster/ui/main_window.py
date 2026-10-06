@@ -1947,7 +1947,8 @@ class MainWindow(wx.Frame):
     def _on_ready_to_install(self, installer_path: str) -> None:
         import subprocess
         try:
-            subprocess.Popen([installer_path])
+            from radiomaster.services.update_checker import installer_command
+            subprocess.Popen(installer_command(installer_path))
         except OSError as exc:
             wx.MessageBox(f"Could not launch the installer: {exc}", "Update", wx.OK | wx.ICON_ERROR, self)
             return
