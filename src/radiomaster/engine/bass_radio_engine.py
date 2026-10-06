@@ -78,6 +78,7 @@ class BassRadioEngine:
         self._on_error: Callable[[str], None] | None = None
         self._on_track_change: Callable[[str, str], None] | None = None
         self._on_track_finished: Callable[[], None] | None = None
+        self._on_stream_stalled: Callable[[], None] | None = None
         self._process = subprocess.Popen(
             command, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -121,10 +122,13 @@ class BassRadioEngine:
             if event_type == "meta" and self._on_track_change:
                 self._on_track_change(str(response.get("title", "")), "")
             elif event_type == "stall":
+                log.warning("BASS reported a stalled radio stream")
                 self._state = self.STATE_BUFFERING
                 self._notify_state()
                 if self._on_buffering:
                     self._on_buffering(0)
+                if self._on_stream_stalled:
+                    self._on_stream_stalled()
 
     @property
     def available(self) -> bool:
@@ -194,6 +198,8 @@ class BassRadioEngine:
                 elif active == BASS_ACTIVE_PAUSED:
                     state = self.STATE_PAUSED
                 else:
+                    if not self._seekable:
+                        log.warning("Live radio stream '%s' stopped (BASS state %s)", title, active)
                     completed = True
                     break
                 last = now
@@ -360,3 +366,6 @@ class BassRadioEngine:
 
     def on_track_finished(self, callback) -> None:
         self._on_track_finished = callback
+
+    def on_stream_stalled(self, callback) -> None:
+        self._on_stream_stalled = callback

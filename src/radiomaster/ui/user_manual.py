@@ -261,8 +261,14 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             separate from saved Favorites.
 
             Settings > Radio > Auto-reconnect on stream loss controls recovery attempts.
-            Set the number of attempts and the interval between them. Turning automatic
-            reconnection off disables its dependent settings. Automatically play the
+            Set the number of attempts and the interval between them. A dropped stream or
+            detected decoder stall opens a fresh audio host after the interval. Recovery
+            gives up at the attempt limit; ten seconds of healthy playback restores the
+            retry allowance. Press Stop, choose another source, or disable auto-reconnect
+            to cancel pending recovery. Paused items and completed podcasts or local
+            media are not restarted. If recovery gives up, select the station and press
+            Enter for a fresh attempt. Logs record drops, stalls, retries, and limits.
+            Turning automatic reconnection off disables its dependent settings. Automatically play the
             last station on launch resumes the last station connection on a future start.
 
             A failed stream can report a connection, format, or access problem. Try a

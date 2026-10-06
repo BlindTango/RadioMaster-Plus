@@ -117,6 +117,7 @@ class PlaybackEngine:
         self._playback_generation = 0
         self._video_inputs: dict = {}
         self._video_stream = None
+        self._radio_healthy_since: float | None = None
 
     def _ensure_bass_radio(self):
         if self._bass_radio is not None:
@@ -127,7 +128,8 @@ class PlaybackEngine:
         from radiomaster.engine.bass_radio_engine import BassRadioEngine
         bass = BassRadioEngine.create_if_available()
         if bass:
-            bass.on_state_change(lambda _s: self._notify_state())
+            bass.on_state_change(lambda state: self._on_bass_state(bass, state))
+            bass.on_stream_stalled(lambda: self._schedule_radio_reconnect(bass, stalled=True))
             bass.on_position_update(
                 lambda p, d: self._on_position_update(p, d) if self._on_position_update else None
             )
@@ -149,6 +151,62 @@ class PlaybackEngine:
                 bass.set_output_device(self._output_device)
         self._bass_radio = bass
         return bass
+
+    def _on_bass_state(self, bass, state: str) -> None:
+        if bass is not self._bass_radio or not self._using_bass_radio:
+            return
+        if state == self.STATE_PLAYING:
+            if self._radio_healthy_since is None:
+                self._radio_healthy_since = time.monotonic()
+        else:
+            if self._radio_healthy_since is not None:
+                if time.monotonic() - self._radio_healthy_since >= 10:
+                    self._reconnect_attempts = 0
+                self._radio_healthy_since = None
+            if state == self.STATE_STOPPED:
+                self._schedule_radio_reconnect(bass)
+        self._notify_state()
+
+    def _schedule_radio_reconnect(self, bass, stalled: bool = False) -> None:
+        if (bass is not self._bass_radio or not self._using_bass_radio
+                or not self._is_live or self._is_video_active or not self._auto_reconnect):
+            return
+        if self._reconnect_attempts >= self._MAX_RECONNECT_ATTEMPTS:
+            log.warning("Radio reconnect limit reached for '%s' after %s attempts",
+                        self._current_title, self._reconnect_attempts)
+            return
+        generation = self._playback_generation
+        with self._restart_lock:
+            if self._reconnect_timer is not None:
+                return
+            timer = threading.Timer(self._reconnect_interval,
+                                    self._reconnect_radio,
+                                    args=(bass, generation, stalled))
+            timer.daemon = True
+            self._reconnect_timer = timer
+            timer.start()
+
+    def _reconnect_radio(self, bass, generation: int, stalled: bool) -> None:
+        with self._play_lock:
+            if (generation != self._playback_generation or bass is not self._bass_radio
+                    or not self._using_bass_radio or not self._is_live
+                    or not self._auto_reconnect or self._is_video_active):
+                return
+            with self._restart_lock:
+                self._reconnect_timer = None
+            if not stalled and bass.state != self.STATE_STOPPED:
+                return
+            if bass.state == self.STATE_PAUSED:
+                return
+            if self._reconnect_attempts >= self._MAX_RECONNECT_ATTEMPTS:
+                log.warning("Radio reconnect limit reached for '%s'", self._current_title)
+                return
+            attempt = self._reconnect_attempts + 1
+            log.warning("Reconnecting radio '%s' (attempt %s of %s)",
+                        self._current_title, attempt, self._MAX_RECONNECT_ATTEMPTS)
+            self.play(self._current_url, self._current_title, self._current_artist,
+                      is_live=True)
+            self._reconnect_attempts = attempt
 
 
     # ---------------------------------------------------------------------
@@ -194,6 +252,7 @@ class PlaybackEngine:
         self._http_headers = http_headers or {}
         self._video_inputs = video_inputs or {}
         self._reconnect_attempts = 0
+        self._radio_healthy_since = None
         self._replaygain_db = self._compute_replaygain(url)
 
         if is_video:
@@ -429,6 +488,11 @@ class PlaybackEngine:
         _MAX_RECONNECT_ATTEMPTS times. Never applies to finite-duration
         media (local files, on-demand URLs) reaching a normal end."""
         self._auto_reconnect = enabled
+        if not enabled:
+            with self._restart_lock:
+                if self._reconnect_timer is not None:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
 
     def set_reconnect_settings(self, max_attempts: int, interval: float) -> None:
         """Configure the reconnect-attempt budget and delay between

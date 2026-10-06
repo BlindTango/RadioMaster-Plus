@@ -88,6 +88,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "recording. If a station will not play, use Tools > Station Health Check to scan "
         "for dead streams and hide them from browse lists."
     )),
+    ("Recover a Dropped Radio Station", (
+        "In Settings > Radio, enable Auto-reconnect on stream loss and choose "
+        "the attempt limit and retry interval. A dropped or stalled live station "
+        "is reopened automatically. Stop, a new playback selection, or disabling "
+        "auto-reconnect cancels pending retries. Paused items and finished podcast "
+        "episodes or local files are not restarted.\n\n"
+        "If recovery gives up, select the station and press Enter to try again, "
+        "or try another station. The application log records disconnects, stalls, "
+        "retry attempts, and retry limits for troubleshooting."
+    )),
     ("Check Station Availability", (
         "Open Tools > Station Health Check to scan the station catalogue for dead streams, "
         "name mismatches, unavailable websites, geographic restrictions, and format "
@@ -143,6 +153,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.103", (
+        "Radio playback now honors Auto-reconnect on stream loss for the BASS "
+        "audio engine. A disconnected stream or detected decoder stall triggers "
+        "a fresh audio host after the configured interval, up to the configured "
+        "attempt limit. Healthy playback restores the retry allowance.\n\n"
+        "Pressing Stop, choosing another source, or disabling auto-reconnect "
+        "cancels pending recovery. Paused playback and completed podcast episodes "
+        "or local files do not restart automatically. Logs now record radio "
+        "disconnects, stalls, recovery attempts, and exhausted retry limits. "
+        "The help system explains the recovery settings and manual restart."
+    )),
     ("Version 1.1.102", (
         "The installer always shows Select Destination Location, including during "
         "updates. You can edit the path or browse to another folder, and the final "
