@@ -746,6 +746,7 @@ class MainWindow(wx.Frame):
                     self._engine.current_url, title=self._engine.current_title,
                     artist=self._engine.current_artist, is_video=self._engine.is_video,
                     duration=self._engine.duration, is_live=self._engine._is_live,
+                    video_inputs=self._engine._video_inputs,
                 )
 
     def _on_play_pause_accel(self) -> None:

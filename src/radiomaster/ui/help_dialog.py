@@ -98,8 +98,8 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
     )),
     ("Play YouTube", (
         f"Press {_key('panel_youtube')}, enter a search, choose Videos, Channels, or Playlists, and "
-        "activate a result. RadioMaster+ prepares the best available video and audio "
-        "before opening playback, so large or 4K videos can take longer to start. "
+        "activate a result. RadioMaster+ resolves a playable stream and opens it "
+        "without downloading the entire video first. "
         "Use Help > Update YouTube Library if extraction stops working."
     )),
     ("Download and Reuse Saved Files", (
@@ -133,6 +133,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.1.101", (
+        "Starting a radio station, podcast episode, or other item automatically "
+        "replaces the current playback source. An unresponsive previous audio "
+        "process no longer requires pressing Stop before playing another item. "
+        "Activating a podcast episode plays the activated row, and delayed radio "
+        "metadata cannot overwrite the next item's title.\n\n"
+        "YouTube playback now streams video and audio as they arrive instead of "
+        "waiting for a full download. The bundled JavaScript runtime is supplied "
+        "to the YouTube library, and delayed YouTube results cannot interrupt a "
+        "newer playback selection. The help system explains streaming and source switching."
+    )),
     ("Version 1.1.100", (
         "Playback starts are processed one at a time so rapid station changes cannot "
         "launch competing audio processes. Failed audio-process startup now cleans up "

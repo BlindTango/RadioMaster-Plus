@@ -414,10 +414,17 @@ class RadioPanel(scrolled.ScrolledPanel):
         for song in self._iter_icy_songs(url, lambda: generation == self._now_playing_generation):
             if song != last_song:
                 last_song = song
-                wx.CallAfter(self.now_playing.set_now_playing, song)
-                artist, title = _parse_icy_song(song)
-                if title and self.on_now_playing_changed:
-                    wx.CallAfter(self.on_now_playing_changed, artist, title)
+                wx.CallAfter(self._publish_radio_song, url, generation, song)
+
+    def _publish_radio_song(self, url: str, generation: int, song: str) -> None:
+        """Do not let the previous station overwrite another panel's track."""
+        if (generation != self._now_playing_generation
+                or self.engine.current_url != url or not self.engine._is_live):
+            return
+        self.now_playing.set_now_playing(song)
+        artist, title = _parse_icy_song(song)
+        if title and self.on_now_playing_changed:
+            self.on_now_playing_changed(artist, title)
 
     # ------------------------------------------------------------------
     # Station history (Previous/Next/First/Last on the transport bar)

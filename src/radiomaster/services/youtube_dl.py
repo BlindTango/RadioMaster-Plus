@@ -9,7 +9,7 @@ from typing import Any
 logger = logging.getLogger("radiomaster")
 
 
-from radiomaster.utils.tools import get_ytdlp
+from radiomaster.utils.tools import get_ytdlp, get_tools_dir
 from radiomaster.utils.network import get_yt_dlp_proxy_args
 
 # yt-dlp.exe is a console-subsystem executable -- every subprocess.run()
@@ -19,6 +19,16 @@ from radiomaster.utils.network import get_yt_dlp_proxy_args
 # suppressed it. Every ffmpeg/ffplay Popen() call elsewhere in this
 # codebase already does this; yt-dlp's own calls never did.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def _extraction_args() -> list[str]:
+    """Make bundled helpers discoverable without modifying the user's PATH."""
+    tools_dir = get_tools_dir()
+    args = [*get_yt_dlp_proxy_args(), "--ffmpeg-location", tools_dir]
+    deno = os.path.join(tools_dir, "deno.exe")
+    if os.path.isfile(deno):
+        args.extend(["--js-runtimes", f"deno:{deno}"])
+    return args
 
 
 class YouTubeService:
@@ -33,28 +43,9 @@ class YouTubeService:
         self._check_available()
 
     def _check_available(self) -> None:
-        """Check if yt-dlp is installed.
-
-        Only ever logs a warning -- never raises. This used to catch
-        FileNotFoundError alone, but yt-dlp.exe is itself a real
-        PyInstaller-built onefile executable with its own cold-start
-        overhead (self-extraction, plus antivirus scanning a freshly
-        installed/updated binary), which can genuinely take longer than
-        a tight timeout -- when it did, subprocess.TimeoutExpired went
-        completely uncaught out of the constructor. Since YouTubeService()
-        is instantiated fresh on every single search/download action (not
-        once at startup), that meant ANY slow cold start turned into a
-        user-visible "Search failed: Command [...] timed out after 5
-        seconds" on the very next thing they tried, unrelated to whether
-        the actual search/download itself would have worked fine.
-        """
-        try:
-            subprocess.run([get_ytdlp(), "--version"], capture_output=True, timeout=15,
-                          creationflags=_NO_WINDOW)
-        except FileNotFoundError:
+        """Check installation without launching another extractor process."""
+        if not os.path.isfile(get_ytdlp()):
             logger.warning("yt-dlp not found. YouTube features will be unavailable.")
-        except Exception as e:
-            logger.warning(f"yt-dlp version check failed (continuing anyway): {e}")
 
     def get_stream_url(self, url: str) -> str | None:
         """Get a single playable stream URL for a video.
@@ -73,7 +64,7 @@ class YouTubeService:
         """
         try:
             result = subprocess.run(
-                [get_ytdlp(), *get_yt_dlp_proxy_args(), "-g", "--no-playlist",
+                [get_ytdlp(), *_extraction_args(), "-g", "--no-playlist",
                  "-f", "best[ext=mp4]/best", url],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
@@ -85,8 +76,7 @@ class YouTubeService:
         return None
 
     def get_stream_info(self, url: str) -> dict[str, Any] | None:
-        """Resolve a playable stream URL the same way get_stream_url()
-        does, but also returns the HTTP headers (User-Agent above all)
+        """Resolve video/audio inputs and their HTTP headers (User-Agent above all)
         yt-dlp itself would have sent for that specific format, plus the
         title/duration -- all from the one -j call instead of get_stream_url()
         + a separate get_info() round trip.
@@ -103,13 +93,18 @@ class YouTubeService:
         what get_stream_url() alone could never do."""
         try:
             result = subprocess.run(
-                [get_ytdlp(), *get_yt_dlp_proxy_args(), "-j", "--no-playlist",
-                 "-f", "best[ext=mp4]/best", url],
+                [get_ytdlp(), *_extraction_args(), "-j", "--no-playlist",
+                 "-f", "bestvideo+bestaudio/best", url],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
             if result.returncode == 0 and result.stdout.strip():
                 info = json.loads(result.stdout.strip().splitlines()[0])
                 stream_url = info.get("url")
+                formats = info.get("requested_formats") or []
+                video = next((f for f in formats if f.get("vcodec", "none") != "none"), None)
+                audio = next((f for f in formats if f.get("acodec", "none") != "none"), None)
+                if video and audio:
+                    stream_url = video.get("url")
                 if not stream_url:
                     return None
                 return {
@@ -121,7 +116,13 @@ class YouTubeService:
                     "channel": info.get("channel") or info.get("uploader") or "",
                     "upload_date": info.get("upload_date") or "",
                     "view_count": info.get("view_count"),
+                    "video_inputs": ({"video_url": video["url"], "audio_url": audio["url"],
+                                      "video_headers": video.get("http_headers") or {},
+                                      "audio_headers": audio.get("http_headers") or {}}
+                                     if video and audio else None),
                 }
+            if result.returncode != 0:
+                logger.error("YouTube stream extraction failed: %s", result.stderr.strip())
         except Exception as e:
             logger.error(f"Failed to get stream info: {e}")
         return None
@@ -130,7 +131,7 @@ class YouTubeService:
         """Get video metadata."""
         try:
             result = subprocess.run(
-                [get_ytdlp(), *get_yt_dlp_proxy_args(), "-j", "--no-playlist", url],
+                [get_ytdlp(), *_extraction_args(), "-j", "--no-playlist", url],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
             if result.returncode == 0:
@@ -203,7 +204,7 @@ class YouTubeService:
         timeout = max(30, 30 + max_results // 2)
         try:
             result = subprocess.run(
-                [get_ytdlp(), *get_yt_dlp_proxy_args(), target,
+                [get_ytdlp(), *_extraction_args(), target,
                  "-j", *extra_args, "--flat-playlist"],
                 capture_output=True, text=True, timeout=timeout, creationflags=_NO_WINDOW,
             )
@@ -232,7 +233,7 @@ class YouTubeService:
             url += "/videos"
         try:
             result = subprocess.run(
-                [get_ytdlp(), *get_yt_dlp_proxy_args(), url,
+                [get_ytdlp(), *_extraction_args(), url,
                  "-j", "--flat-playlist", "--playlist-end", str(max_results)],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
@@ -255,7 +256,7 @@ class YouTubeService:
                  extract_audio: bool = False) -> bool:
         """Download a video or audio."""
         cmd = [
-            get_ytdlp(), *get_yt_dlp_proxy_args(),
+            get_ytdlp(), *_extraction_args(),
             "--no-playlist", "-o", f"{output_dir}/%(title)s.%(ext)s",
         ]
         if extract_audio:
@@ -275,7 +276,7 @@ class YouTubeService:
         """Get entries from a playlist."""
         try:
             result = subprocess.run(
-                [get_ytdlp(), *get_yt_dlp_proxy_args(), "-j", "--flat-playlist", url],
+                [get_ytdlp(), *_extraction_args(), "-j", "--flat-playlist", url],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
             if result.returncode == 0:
@@ -308,8 +309,8 @@ class YouTubeService:
         Modern YouTube serves its highest-quality video and audio as
         separate adaptive streams. yt-dlp downloads the best of each and
         FFmpeg merges them without re-encoding, preserving the source
-        resolution and audio bitrate. This is the primary YouTube playback
-        path; a lower-quality pre-muxed stream is used only if this fails.
+        resolution and audio bitrate. Interactive playback streams these
+        inputs directly instead of waiting for this download.
 
         Returns the temp file path on success, or None on failure. The
         caller owns the file and should delete it when playback ends.
@@ -319,7 +320,7 @@ class YouTubeService:
         os.close(fd)
         os.remove(tmp_path)  # let yt-dlp create the file itself
         cmd = [
-            get_ytdlp(), *get_yt_dlp_proxy_args(),
+            get_ytdlp(), *_extraction_args(),
             "-f", "bestvideo+bestaudio/best",
             "--concurrent-fragments", "4",
             "--merge-output-format", "mp4",

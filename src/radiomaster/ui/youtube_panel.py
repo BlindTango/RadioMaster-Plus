@@ -39,6 +39,7 @@ class YouTubePanel(wx.Panel):
         # against the request it was given before actually calling
         # engine.play(); a stale one is silently dropped.
         self._play_request_seq = 0
+        self._playback_generation_at_request = None
         # The *source* (page) URL/title/duration behind whatever's
         # currently playing -- separate from the engine's own
         # _current_url, which by the time playback starts is already the
@@ -78,38 +79,19 @@ class YouTubePanel(wx.Panel):
 
     def _resolve_and_play(self, url: str, title: str, duration: float, seq: int,
                           stream: dict | None = None) -> None:
-        """Resolve a playable stream for *url* and start playback.
-
-        Runs on a worker thread. Modern YouTube puts its highest-quality
-        video and audio in separate adaptive streams. A single stream URL
-        therefore normally means accepting a much lower-quality pre-muxed
-        format (often itag 18/360p). Prepare and merge ``bestvideo`` plus
-        ``bestaudio`` first so normal playback uses the best source quality.
-
-        The old single-URL route remains as a resilience fallback if the
-        high-quality download/merge fails. The temp file is tracked in
-        _temp_playback_file so it can be cleaned up later.
-
-        *stream*, when given, is an already-resolved get_stream_info()
-        result (e.g. from _on_play_url, which needs it for the title and
-        duration). It is retained for the fallback without another yt-dlp
-        round trip."""
+        """Resolve one stream without waiting for a whole video download."""
         from radiomaster.services.youtube_dl import YouTubeService
-        service = YouTubeService()
-        self._set_status(f"Status: Preparing best-quality playback for '{title}'...")
-        tmp_path = service.download_to_temp(url)
-        if tmp_path:
-            wx.CallAfter(self._apply_play_result, tmp_path, title, duration, seq, None,
-                         is_temp_file=True)
-            return
-
-        # High-quality adaptive playback could not be prepared. Preserve
-        # the former direct-stream behavior rather than failing outright.
         if stream is None:
-            stream = service.get_stream_info(url)
+            stream = YouTubeService().get_stream_info(url)
+        if seq != self._play_request_seq:
+            return
+        if stream:
+            title = stream.get("title") or title
+            duration = float(stream.get("duration") or duration)
         stream_url = (stream or {}).get('url')
         headers = (stream or {}).get('http_headers')
-        wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq, headers)
+        wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq, headers,
+                     video_info=stream)
 
     def _setup_ui(self) -> None:
         """Create the YouTube panel layout."""
@@ -592,6 +574,8 @@ class YouTubePanel(wx.Panel):
         if dlg.ShowModal() == wx.ID_OK:
             url = dlg.GetValue().strip()
             if url:
+                self._engine.stop(wait=False)
+                self._playback_generation_at_request = self._engine.playback_generation
                 self._set_status(f"Status: Resolving stream for '{url}'...")
                 self._play_request_seq += 1
                 seq = self._play_request_seq
@@ -604,8 +588,6 @@ class YouTubePanel(wx.Panel):
                     stream = service.get_stream_info(url)
                     title = (stream or {}).get('title') or url
                     duration = (stream or {}).get('duration', 0.0)
-                    if stream:
-                        wx.CallAfter(self._publish_video_info, stream)
                     self._current_source_title = title
                     self._current_source_duration = duration
                     self._resolve_and_play(url, title, duration, seq, stream)
@@ -640,6 +622,8 @@ class YouTubePanel(wx.Panel):
         # whole app the only way out -- the exact same bug already fixed
         # for podcast episodes (v1.1.18), just never ported to video.
         duration = float(video.get('duration') or 0.0)
+        self._engine.stop(wait=False)
+        self._playback_generation_at_request = self._engine.playback_generation
         self._set_status(f"Status: Resolving stream for '{title}'...")
         self._play_request_seq += 1
         seq = self._play_request_seq
@@ -648,18 +632,10 @@ class YouTubePanel(wx.Panel):
         self._current_source_duration = duration
         self._stream_rejected_retried = False
         self._video_info_seq += 1
-        info_seq = self._video_info_seq
         self._publish_video_info(video)
 
         def worker():
-            from radiomaster.services.youtube_dl import YouTubeService
-            service = YouTubeService()
-            info = self._load_full_video_info(service, video_url, video, info_seq)
-            resolved_title = info.get("title") or title
-            resolved_duration = float(info.get("duration") or duration)
-            self._current_source_title = resolved_title
-            self._current_source_duration = resolved_duration
-            self._resolve_and_play(video_url, resolved_title, resolved_duration, seq)
+            self._resolve_and_play(video_url, title, duration, seq)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -667,8 +643,11 @@ class YouTubePanel(wx.Panel):
     def _apply_play_result(self, stream_url: str | None, title: str,
                             duration: float = 0.0, seq: int = 0,
                             http_headers: dict | None = None,
-                            is_temp_file: bool = False) -> None:
-        if seq and seq != self._play_request_seq:
+                            is_temp_file: bool = False,
+                            video_info: dict | None = None) -> None:
+        if ((seq and seq != self._play_request_seq)
+                or (self._playback_generation_at_request is not None
+                    and self._playback_generation_at_request != self._engine.playback_generation)):
             # A newer play request has started (or finished) since this
             # one was kicked off -- e.g. two quick double-clicks each
             # resolving their own stream in the background. Applying
@@ -689,13 +668,21 @@ class YouTubePanel(wx.Panel):
             wx.MessageBox("Unable to resolve a playable stream for the selected video.",
                          "Error", wx.OK | wx.ICON_ERROR)
             return
+        if video_info:
+            self._publish_video_info(video_info)
+        self._current_source_title = title
+        self._current_source_duration = duration
         # If we're switching to a new source, drop any previous temp file.
         if not is_temp_file:
             self._cleanup_temp_file()
         else:
             self._temp_playback_file = stream_url
+        options = {}
+        if (video_info or {}).get("video_inputs"):
+            options["video_inputs"] = video_info["video_inputs"]
         self._engine.play(stream_url, title=title, is_video=True, duration=duration,
-                          http_headers=http_headers)
+                          http_headers=http_headers, **options)
+        self._playback_generation_at_request = self._engine.playback_generation
         self._set_status(f"Status: Playing '{title}'")
 
     def _on_stream_rejected(self) -> None:
@@ -708,6 +695,8 @@ class YouTubePanel(wx.Panel):
         wx.CallAfter(self._retry_after_stream_rejection)
 
     def _retry_after_stream_rejection(self) -> None:
+        if self._playback_generation_at_request != self._engine.playback_generation:
+            return
         if not self._current_source_url or self._stream_rejected_retried:
             if self._stream_rejected_retried:
                 wx.MessageBox(

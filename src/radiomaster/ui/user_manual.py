@@ -548,11 +548,14 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         _topic("Playing Videos and Direct Links", """
             To play a search result, select a video and activate it. To use a link,
             choose Play URL and paste the YouTube address. Wait while the player resolves
-            the stream; some videos require preparation before playback starts.
+            the stream. The player combines video and audio as they arrive, without
+            waiting for the entire video to download. Starting a new item replaces
+            the currently playing source, including a radio station.
 
             Quality offers best, 1080p, 720p, 480p, 360p, and audio only. Availability
             depends on the video. Select audio only for listening without video. The
-            application may prepare a temporary local file when direct playback fails.
+            Quality setting applies to downloads. Direct streaming selects the best
+            available video and audio formats.
 
             If a video is unavailable or playback is rejected, read the error, update
             the YouTube library from Help, and try again. Private, removed, restricted,

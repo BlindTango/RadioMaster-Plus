@@ -13,6 +13,7 @@ same wx.Window.Navigate() calls wx's own keyboard handling makes for a
 real Tab press, without needing a running MainLoop or OS-level input.
 """
 
+import io
 import time
 from unittest.mock import MagicMock, patch
 
@@ -30,7 +31,28 @@ from radiomaster.ui.help_dialog import (
 
 
 @pytest.fixture
-def app_and_window():
+def app_and_window(tmp_path, monkeypatch):
+    from radiomaster.utils.config import ConfigManager
+
+    paths = {name: str(tmp_path / name) for name in (
+        "config", "data", "cache", "downloads", "recordings", "logs",
+    )}
+    # Patch imported aliases before the source function so importing a
+    # previously unloaded module cannot retain a temporary test closure.
+    monkeypatch.setattr("radiomaster.ui.settings_dialog.get_paths", lambda: paths)
+    monkeypatch.setattr("radiomaster.services.station_db.get_paths", lambda: paths)
+    monkeypatch.setattr("radiomaster.app.get_paths", lambda: paths)
+    monkeypatch.setattr("radiomaster.utils.paths.get_paths", lambda: paths)
+    monkeypatch.setattr(ConfigManager, "_instance", ConfigManager._instance)
+    config = ConfigManager(paths["config"])
+    config.set("updates.check_on_startup", value=False)
+    config.set("updates.ytdlp_auto_update", value=False)
+    config.set("radio.station_update_frequency", value="off")
+    config.save()
+    # Network discovery is not part of a keyboard/focus check.
+    monkeypatch.setattr("radiomaster.services.station_api._discover_servers", lambda: [])
+    monkeypatch.setattr("radiomaster.services.station_api.StationAPI.bulk_stations",
+                        lambda *args, **kwargs: [])
     app = RadioMasterApp()
     # wx.LogGui opens modal error windows when queued native warnings flush at
     # shutdown. Keep diagnostics in pytest's stderr instead of blocking teardown.
@@ -47,10 +69,15 @@ def app_and_window():
     win._radio_panel._push_history(Station(uuid="c", name="C", url="http://c"))
     win._radio_panel._history_index = 1  # middle: both Previous and Next have somewhere to go
     win._update_transport_button_states()
-    yield app, win
-    win._lyrics_timer.Stop()
-    win.Destroy()
-    app.OnExit()
+    try:
+        yield app, win
+    finally:
+        win._lyrics_timer.Stop()
+        win._station_update_scheduler.shutdown()
+        win._health_service.stop()
+        win._global_hotkey_manager.unregister_all()
+        app.OnExit()
+        win.Destroy()
 
 
 def _nav(win: wx.Window, forward: bool) -> wx.Window:
@@ -1134,6 +1161,15 @@ class TestRecording:
     nothing at all, especially for a screen-reader user relying on the
     button's own accessible name to know whether it worked."""
 
+    @staticmethod
+    def _process():
+        # A pipe must return bytes and reach EOF. A bare MagicMock returns
+        # truthy mocks forever, making the split-recording worker spin and
+        # retain an unbounded call history.
+        process = MagicMock()
+        process.stdout = io.BytesIO()
+        return process
+
     def test_record_toggles_transport_bar_button_state(self, app_and_window) -> None:
         app, win = app_and_window
         panel = win._radio_panel
@@ -1143,7 +1179,7 @@ class TestRecording:
 
         with patch("subprocess.Popen") as mock_popen, \
                 patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
-            mock_popen.return_value = MagicMock()
+            mock_popen.return_value = self._process()
             panel._on_record()
         assert win._now_playing._btn_record.GetLabelText() == "● Recording On"
 
@@ -1161,7 +1197,7 @@ class TestRecording:
 
         with patch("subprocess.Popen") as mock_popen, \
                 patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
-            mock_popen.return_value = MagicMock()
+            mock_popen.return_value = self._process()
             panel._on_record()
         assert len(panel._recordings) == 1
 
@@ -1179,9 +1215,7 @@ class TestRecording:
         at all even while genuinely recording.
 
         Uses a distinctive station name and checks for that specific row
-        rather than assuming the list is otherwise empty -- app_and_window
-        uses the app's real (not test-isolated) SQLite database, which
-        can carry rows over between runs.
+        in the fixture's isolated SQLite database.
         """
         app, win = app_and_window
         marker = f"DownloadsPanelTest-{id(self)}"
@@ -1209,7 +1243,7 @@ class TestRecording:
                         else real_get(*args, **kwargs)
                     ),
                 ):
-            mock_popen.return_value = MagicMock()
+            mock_popen.return_value = self._process()
             panel._on_record()
 
         expected_title = f"Recording: {marker}"
@@ -1232,7 +1266,7 @@ class TestRecording:
 
         with patch("subprocess.Popen") as mock_popen, \
                 patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
-            mock_popen.side_effect = lambda *a, **k: MagicMock()
+            mock_popen.side_effect = lambda *a, **k: self._process()
 
             panel._selected_station = station_a
             panel._on_record()
@@ -1264,7 +1298,7 @@ class TestRecording:
 
         with patch("subprocess.Popen") as mock_popen, \
                 patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
-            mock_popen.side_effect = lambda *a, **k: MagicMock()
+            mock_popen.side_effect = lambda *a, **k: self._process()
             panel._selected_station = station_a
             panel._on_record()  # A is now recording
 
@@ -1288,7 +1322,7 @@ class TestRecording:
 
         with patch("subprocess.Popen") as mock_popen, \
                 patch("radiomaster.services.stream_prober.probe_stream_format", return_value=None):
-            mock_popen.side_effect = lambda *a, **k: MagicMock()
+            mock_popen.side_effect = lambda *a, **k: self._process()
             panel._selected_station = station_a
             panel._on_record()
             panel._selected_station = station_b
@@ -1309,10 +1343,8 @@ class TestRecording:
 
 class TestDownloadsHistoryRemoveAll:
     """The History context menu's Remove All clears every completed/
-    failed entry at once. app_and_window uses the app's real (not
-    test-isolated) SQLite database, so these tests patch
-    DownloadRepository.delete_history rather than actually clearing the
-    user's real history -- the genuine delete semantics (only
+    failed entry at once. These tests patch DownloadRepository.delete_history
+    to check confirmation and dispatch -- the genuine delete semantics (only
     completed/failed rows go, queued/downloading stay) are covered
     against a throwaway database in test_database.py."""
 

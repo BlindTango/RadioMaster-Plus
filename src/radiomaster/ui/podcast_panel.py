@@ -85,7 +85,9 @@ class PodcastPanel(wx.Panel):
         self._save_position()
 
     def _save_position(self) -> None:
-        if self._current_episode_id is not None and self._engine.state in ("playing", "paused"):
+        if (self._current_episode_id is not None
+                and self._engine.current_url == self._last_played_url
+                and self._engine.state in ("playing", "paused")):
             from radiomaster.database.repository import EpisodeRepository
             EpisodeRepository(self._db).update_position(
                 self._current_episode_id, self._engine.position
@@ -1010,7 +1012,9 @@ class PodcastPanel(wx.Panel):
 
     def _on_play(self, event: wx.Event) -> None:
         """Play the selected episode, resuming from saved position if any."""
-        idx = self._episode_list.GetFirstSelected()
+        idx = (event.GetIndex() if isinstance(event, wx.ListEvent)
+               and event.GetEventType() == wx.EVT_LIST_ITEM_ACTIVATED.typeId
+               else self._episode_list.GetFirstSelected())
         if idx < 0 or not hasattr(self, '_episode_data') or idx >= len(self._episode_data):
             return
         self._play_episode_at(idx, offer_resume=True)

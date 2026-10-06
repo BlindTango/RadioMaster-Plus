@@ -114,6 +114,9 @@ class PlaybackEngine:
         # Radio selections arrive on independent worker threads. Only one
         # may replace/configure the native host and start playback at a time.
         self._play_lock = threading.RLock()
+        self._playback_generation = 0
+        self._video_inputs: dict = {}
+        self._video_stream = None
 
     def _ensure_bass_radio(self):
         if self._bass_radio is not None:
@@ -152,6 +155,11 @@ class PlaybackEngine:
     # Public accessors
     # ---------------------------------------------------------------------
     @property
+    def playback_generation(self) -> int:
+        """Changes whenever playback is stopped or replaced."""
+        return self._playback_generation
+
+    @property
     def state(self) -> str:
         """Current playback state (stopped, playing, paused, buffering)."""
         if self._using_bass_radio and self._bass_radio:
@@ -162,7 +170,7 @@ class PlaybackEngine:
     def play(self, url: str, title: str = "", artist: str = "",
               is_video: bool = False, duration: float = 0.0,
               http_headers: dict[str, str] | None = None,
-              is_live: bool = False) -> None:
+              is_live: bool = False, video_inputs: dict | None = None) -> None:
         """Start playback of a URL or file.
 
         http_headers (video only): HTTP headers -- User-Agent above all --
@@ -172,7 +180,10 @@ class PlaybackEngine:
         User-Agent got a flat 403 for some videos (confirmed live) while
         others played fine with no visible pattern. See youtube_dl.py's
         get_stream_info() for where these come from."""
-        self.stop()
+        # A source switch must release the old decoder immediately. Waiting
+        # for its command pipe can stall the UI or kill the host halfway
+        # through configuring the replacement stream.
+        self.stop(wait=False)
         self._current_url = url
         self._current_title = title
         self._current_artist = artist
@@ -181,6 +192,7 @@ class PlaybackEngine:
         self._is_video_active = is_video
         self._duration = duration
         self._http_headers = http_headers or {}
+        self._video_inputs = video_inputs or {}
         self._reconnect_attempts = 0
         self._replaygain_db = self._compute_replaygain(url)
 
@@ -239,6 +251,10 @@ class PlaybackEngine:
         call is a safe no-op on the backend that wasn't in use.
 
         *wait=False* skips process waits during application shutdown."""
+        self._playback_generation += 1
+        if self._video_stream is not None:
+            self._video_stream.close()
+            self._video_stream = None
         if self._bass_radio:
             self._bass_radio.stop(wait=wait)
         self._using_bass_radio = False
@@ -509,6 +525,12 @@ class PlaybackEngine:
         is a one-attempt override used only by _watch_for_audio_device_failure's
         retry -- it never touches the saved Settings > Playback > Output
         Device value itself, only what this particular launch asks SDL for."""
+        if is_video and self._video_inputs:
+            from radiomaster.services.video_stream import VideoStream
+            if self._video_stream is not None:
+                self._video_stream.close()
+            self._video_stream = VideoStream(self._video_inputs)
+            url = self._video_stream.start()
         cmd = self._build_ffplay_command(url, is_video)
         # ffplay has no CLI flag for choosing an output device -- it goes
         # through SDL2, which picks the device from this env var on the
