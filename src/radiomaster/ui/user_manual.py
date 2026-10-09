@@ -135,12 +135,18 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Activate a list item with Enter to choose what to play. Stop
             ({shortcut:stop}) ends playback; it is unavailable when nothing is active.
 
-            The position slider seeks within media that has a known duration. The
+            Tab to Playback Position below the time display to seek within media.
+            Left and Right move one second; Page Up and Page Down move ten seconds.
+            Home moves to the start and End moves to the end. Dragging the slider
+            seeks when you release it. The
             transport Rewind and Fast Forward buttons move 30 seconds. The seek
             shortcuts move 10 seconds: {shortcut:seek_backward} and {shortcut:seek_forward}.
             Elapsed, total, and remaining times are shown for finite media.
 
-            Live radio has no fixed timeline: seek controls are disabled and only
+            During live time-shift playback, the slider is named Time-shift Position
+            and covers the recorded buffer. End returns to live; the time display
+            shows how far behind live you are. Jump Back starts the buffer first.
+            Unbuffered live radio has no fixed timeline: seek controls are disabled and only
             elapsed time is meaningful. Pause is not a guaranteed time-shift recording
             of everything broadcast while paused. Stop listening does not stop an
             independent radio recording; use Record or Downloads > Stop Recording.

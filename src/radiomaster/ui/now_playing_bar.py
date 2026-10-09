@@ -5,7 +5,6 @@ import os
 from typing import Callable
 from PIL import Image
 from io import BytesIO
-import requests
 
 from radiomaster.utils.accessibility import set_accessible_name
 
@@ -15,6 +14,8 @@ class NowPlayingBar(wx.Panel):
 
     def __init__(self, parent: wx.Window) -> None:
         super().__init__(parent, style=wx.TAB_TRAVERSAL)
+        self._seek_dragging = False
+        self._last_seek_value = None
         self._setup_ui()
         self._bind_events()
 
@@ -180,9 +181,15 @@ class NowPlayingBar(wx.Panel):
         main_sizer.Add(info_sizer, 0, wx.EXPAND)
 
         # === Position slider (THIRD) ===
+        main_sizer.Add(wx.StaticText(self, label="Seek:"), 0, wx.LEFT | wx.TOP, 4)
         self._position_slider = wx.Slider(self, value=0, minValue=0, maxValue=1000,
                                           style=wx.SL_HORIZONTAL | wx.SL_AUTOTICKS)
         self._position_slider.SetName("Playback Position")
+        self._position_slider.SetLineSize(1)
+        self._position_slider.SetPageSize(10)
+        self._position_slider.SetToolTip(
+            "Seek with Left/Right (1 second), Page Up/Down (10 seconds), or Home/End. "
+            "In time-shift playback, End returns to live.")
         main_sizer.Add(self._position_slider, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 4)
 
         self.SetSizer(main_sizer)
@@ -208,6 +215,8 @@ class NowPlayingBar(wx.Panel):
         self._btn_jump_back.Bind(wx.EVT_BUTTON, lambda e: self._on_jump_back_cb() if self._on_jump_back_cb else None)
         self._btn_jump_fwd.Bind(wx.EVT_BUTTON, lambda e: self._on_jump_fwd_cb() if self._on_jump_fwd_cb else None)
         self._position_slider.Bind(wx.EVT_SLIDER, self._on_slider_seek)
+        self._position_slider.Bind(wx.EVT_SCROLL_THUMBTRACK, self._on_seek_drag)
+        self._position_slider.Bind(wx.EVT_SCROLL_THUMBRELEASE, self._on_seek_release)
         self._volume_slider.Bind(wx.EVT_SLIDER, self._on_volume_change)
         self._rate_slider.Bind(wx.EVT_SLIDER, self._on_rate_change)
         self._pan_slider.Bind(wx.EVT_SLIDER, self._on_pan_change)
@@ -230,8 +239,20 @@ class NowPlayingBar(wx.Panel):
 
     def _on_slider_seek(self, event: wx.CommandEvent) -> None:
         """Handle position slider change."""
-        if self._on_seek_cb:
-            self._on_seek_cb(self._position_slider.GetValue())
+        value = self._position_slider.GetValue()
+        if (not self._seek_dragging and self._position_slider.IsEnabled()
+                and self._on_seek_cb and value != self._last_seek_value):
+            self._last_seek_value = value
+            self._on_seek_cb(value)
+
+    def _on_seek_drag(self, event: wx.ScrollEvent) -> None:
+        self._seek_dragging = True
+        event.Skip()
+
+    def _on_seek_release(self, event: wx.ScrollEvent) -> None:
+        self._seek_dragging = False
+        self._on_slider_seek(event)
+        event.Skip()
 
     def _on_volume_change(self, event: wx.CommandEvent) -> None:
         """Handle volume slider change."""
@@ -258,9 +279,10 @@ class NowPlayingBar(wx.Panel):
 
     def set_seekable(self, seekable: bool) -> None:
         """Enable/disable Fast Forward, Rewind, and the position slider --
-        there's nothing to seek to on a live radio stream (no fixed
-        timeline), so these are greyed out whenever the current content
-        has no real duration."""
+        finite media and an active time-shift buffer provide a timeline."""
+        if not seekable:
+            self._seek_dragging = False
+            self._last_seek_value = None
         self._btn_ffwd.Enable(seekable)
         self._btn_rewind.Enable(seekable)
         self._position_slider.Enable(seekable)
@@ -286,16 +308,21 @@ class NowPlayingBar(wx.Panel):
         """Set the track/show name."""
         self._track_text.SetValue(text)
 
-    def set_time(self, elapsed: float, total: float) -> None:
+    def set_time(self, elapsed: float, total: float, *, timeshift: bool = False) -> None:
         """Set the time display and position slider."""
         from radiomaster.utils.helpers import format_time
-        remaining = total - elapsed if total > 0 else 0
-        self._time_label.SetLabel(
-            f"{format_time(elapsed)} / {format_time(total)} / {format_time(remaining)}"
-        )
-        if total > 0:
-            self._position_slider.SetRange(0, int(total))
-            self._position_slider.SetValue(int(elapsed))
+        remaining = max(0, total - elapsed) if total > 0 else 0
+        text = (f"{format_time(remaining)} behind live" if timeshift else
+                f"{format_time(elapsed)} / {format_time(total)} / {format_time(remaining)}")
+        self._time_label.SetLabel(text)
+        name = "Time-shift Position" if timeshift else "Playback Position"
+        if self._position_slider.GetName() != name:
+            self._position_slider.SetName(name)
+        if not self._seek_dragging:
+            self._last_seek_value = None
+            maximum = max(1, int(total))
+            self._position_slider.SetRange(0, maximum)
+            self._position_slider.SetValue(max(0, min(int(elapsed), maximum)) if total > 0 else 0)
 
     def set_volume(self, volume: float) -> None:
         """Set the volume slider position (0.0 to 1.0)."""

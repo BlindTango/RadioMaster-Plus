@@ -614,8 +614,38 @@ class PlaybackEngine:
             except Exception:
                 pass
 
+    @property
+    def timeshift_active(self) -> bool:
+        return bool(self._is_live and self._using_bass_radio and self._timeshift_path
+                    and self._timeshift_generation == self._playback_generation)
+
+    @property
+    def seek_duration(self) -> float:
+        """The available seek timeline, including the growing live buffer."""
+        if self.timeshift_active:
+            return self._timeshift_buffer_length(self.duration)
+        return 0.0 if self._is_live else self.duration
+
+    @_serialize_play
     def seek(self, position_seconds: float) -> None:
         """Seek to a position in the current track."""
+        if self.timeshift_active and self._bass_radio:
+            _position, native_length = self._bass_radio.timeshift_status()
+            length = self._timeshift_buffer_length(native_length)
+            target = max(0.0, min(position_seconds, length))
+            if length - target <= 5.0:
+                self._return_to_live()
+                self._notify_timeshift("Caught up to live.")
+            elif target > native_length - 5.0:
+                if self._bass_radio.timeshift_play(self._timeshift_path, volume=self._volume,
+                                                  start_seconds=target):
+                    self._notify_timeshift(f"Behind live by {int(length - target)} seconds.")
+            else:
+                self._bass_radio.seek(target)
+                self._notify_timeshift(f"Behind live by {int(length - target)} seconds.")
+            return
+        if self._is_live:
+            return
         if self._using_bass_radio and self._bass_radio:
             self._bass_radio.seek(position_seconds)
             return
@@ -1254,7 +1284,7 @@ class PlaybackEngine:
     @property
     def duration(self) -> float:
         if self._using_bass_radio:
-            return 0.0
+            return 0.0 if self._is_live else self._bass_radio.duration
         return self._duration
 
     @property

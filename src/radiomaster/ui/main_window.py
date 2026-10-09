@@ -567,12 +567,13 @@ class MainWindow(wx.Frame):
         Stop has nothing to stop when nothing is playing or paused (e.g.
         at launch, before anything's ever been played -- it was never
         greyed out at all before, so it was always clickable even then).
-        Fast Forward/Rewind/the position slider have nothing to seek to on
-        a live radio stream (duration is always 0 for one), and
+        Fast Forward/Rewind/the position slider use the finite media duration
+        or active time-shift buffer; unbuffered radio has no timeline. Also,
         First/Previous/Next/Last -- station history navigation, on the
         Radio tab -- have nowhere to go past either end of that history."""
         self._now_playing.set_stoppable(self._engine.state != "stopped")
-        self._now_playing.set_seekable(self._engine.duration > 0)
+        self._now_playing.set_seekable(self._engine.seek_duration > 0
+                                      and self._engine.state in ("playing", "paused"))
         self._now_playing.set_rate_enabled(
             self._listbook.GetSelection() != self._TAB_RADIO
         )
@@ -1488,7 +1489,9 @@ class MainWindow(wx.Frame):
 
     def _on_engine_position(self, position: float, duration: float) -> None:
         """Handle playback position updates."""
-        self._now_playing.set_time(position, duration)
+        duration = self._engine.seek_duration
+        self._now_playing.set_time(position, duration, timeshift=self._engine.timeshift_active)
+        self._now_playing.set_seekable(duration > 0 and self._engine.state in ("playing", "paused"))
         # duration > 0 (a finite podcast episode) shows elapsed/total/
         # remaining; duration == 0 (an unbounded radio stream) shows just
         # elapsed -- how long the current connection has been playing.

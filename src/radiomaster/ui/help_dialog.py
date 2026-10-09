@@ -98,6 +98,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "or try another station. The application log records disconnects, stalls, "
         "retry attempts, and retry limits for troubleshooting."
     )),
+    ("What's New in Version 1.2.3", (
+        "The seek slider now works for media files and active live time-shift buffers. "
+        "Tab to Playback Position below the time display. Left/Right move one second; "
+        "Page Up/Page Down move ten seconds; Home/End jump to the start/end. "
+        "Dragging seeks when you release the slider.\n\n"
+        "During live time-shift playback the slider is named Time-shift Position. "
+        "It covers the growing recorded buffer; End returns to live playback, "
+        "and the time display shows how far behind live you are."
+    )),
     ("What's New in Version 1.2.2", (
         "Internet Archive: open Sources, choose Internet Archive, then press Enter "
         "on a collection, an item, and an audio file. Search results open items. "
@@ -148,6 +157,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         f"Local media: press {_key('open_file')} for a file "
         "or use File > Open Folder, then select a playlist item and press Enter."
     )),
+    ("Seek Through Media and Time-Shift", (
+        "Tab to Playback Position below the time display. Left/Right move one second; "
+        "Page Up/Page Down move ten seconds; Home/End jump to the start/end. "
+        "You can also drag the slider; playback seeks when you release it. "
+        "For live radio, start Jump Back first. During buffer playback the slider "
+        "is named Time-shift Position, spans the recorded audio, and End returns to live."
+    )),
     ("Play YouTube", (
         f"Press {_key('panel_youtube')}, enter a search, choose Videos, Channels, or Playlists, and "
         "activate a result. RadioMaster+ resolves a playable stream and opens it "
@@ -185,6 +201,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.2.3", (
+        "Seek slider: media files now expose their actual audio duration, enabling "
+        "the position slider. It supports one-second arrow steps, ten-second page "
+        "steps, Home/End, and mouse dragging. Playback updates no longer move the "
+        "thumb during a drag; seeking occurs on release.\n\n"
+        "Live time-shift: the slider follows the growing recorded buffer and can "
+        "seek into audio recorded after buffer playback began. End returns to live. "
+        "Unbuffered live radio keeps seek controls disabled.\n\n"
+        "Updated the User Manual and Quick Start Guide with seek controls and "
+        "time-shift navigation."
+    )),
     ("Version 1.2.2", (
         "Internet Archive now browses collections, items, and their actual audio files, "
         "including AAC. Search results open the item's file list. Failed sources can "
