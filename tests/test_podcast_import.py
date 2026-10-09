@@ -355,6 +355,9 @@ def test_empty_episode_menu_can_refresh_selected_subscription(selected, search, 
     items["Download &All"].Enable.assert_called_once_with(False)
     panel._episode_list.PopupMenu.assert_called_once_with(menu, (10, 10))
     if enabled:
-        menu.Bind.call_args.args[1](None)
+        # Refresh uses self.Bind (panel.Bind), not menu.Bind, so the
+        # handler runs after the menu dismisses (fixes "refresh does
+        # not close the menu").
+        panel.Bind.call_args.args[1](None)
         panel._refresh_subscription.assert_called_once_with(podcast)
     menu.Destroy.assert_called_once()

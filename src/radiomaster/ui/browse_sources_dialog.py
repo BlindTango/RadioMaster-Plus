@@ -53,6 +53,12 @@ class BrowseSourcesDialog(wx.Dialog):
         self.Centre()
         self._checklist.SetFocus()
 
+        # CreateSeparatedButtonSizer makes standard OK/Cancel buttons but
+        # does not wire them -- without these binds, both buttons do
+        # nothing (the dialog never closes).
+        self.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_OK), id=wx.ID_OK)
+        self.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL), id=wx.ID_CANCEL)
+
     def selected_ids(self) -> list[str]:
         """The source ids checked in the list (call after ShowModal OK)."""
         sources = self._registry.all_sources()

@@ -385,15 +385,21 @@ class StationTree(wx.Panel):
     # thread; this class only renders, so every method here is cheap.
     # ------------------------------------------------------------------
 
-    def show_sources(self, source_labels: list[tuple[str, str]]) -> None:
-        """Switch to the Sources section. *source_labels* is (label, id)
-        per enabled source, in registry order."""
+    def show_sources(self, source_labels: list[tuple[str, str]],
+                     switch_section: bool = True) -> None:
+        """Populate the Sources section's group list. When
+        *switch_section* is True (user action), switches to the Sources
+        section; when False (startup priming), just stores the data so
+        _on_section_changed can render it instantly when the user arrives.
+        """
+        self._source_labels = [label for label, _sid in source_labels]
+        self._source_ids = [sid for _label, sid in source_labels]
+        if not source_labels or not switch_section:
+            return
         idx = [key for _, key, *_ in SECTION_CHOICES].index(SECTION_SOURCES)
         self.section_choice.SetSelection(idx)
         self._current_section = SECTION_SOURCES
         self._update_group_label(SECTION_SOURCES)
-        self._source_labels = [label for label, _sid in source_labels]
-        self._source_ids = [sid for _label, sid in source_labels]
         self._current_groups = [(label, 0) for label in self._source_labels]
         self.group_list.set_groups(self._current_groups)
         if self._current_groups:
@@ -549,15 +555,16 @@ class StationTree(wx.Panel):
             self._show_section(key)
         elif key == SECTION_SOURCES:
             # The Sources section's group list is populated by
-            # show_sources(); when the user arrives here before any
-            # source has been selected, ask the panel for the list.
-            if not getattr(self, "_source_ids", None):
-                if self.on_sources_needed:
-                    self.on_sources_needed()
-            else:
+            # show_sources() (called at startup or by on_sources_needed).
+            # If the data is already there, just render it; otherwise ask.
+            self._current_section = SECTION_SOURCES
+            self._update_group_label(SECTION_SOURCES)
+            if self._source_ids:
                 self._current_groups = [(label, 0) for label in self._source_labels]
                 self.group_list.set_groups(self._current_groups)
                 self._select_group_index(0)
+            elif self.on_sources_needed:
+                self.on_sources_needed()
         elif key == SECTION_CUSTOM:
             self._current_section = SECTION_CUSTOM
             self._update_group_label(SECTION_CUSTOM)

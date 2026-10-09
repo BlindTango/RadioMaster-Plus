@@ -928,7 +928,12 @@ class PodcastPanel(wx.Panel):
         refresh_item = menu.Append(wx.ID_ANY, "Re&fresh Episodes")
         refresh_item.Enable(bool(podcast.get("id") and podcast.get("feed_url"))
                             and podcast["id"] not in self._refreshing_podcasts)
-        menu.Bind(wx.EVT_MENU, lambda e: self._refresh_subscription(podcast), refresh_item)
+        # Use self.Bind (not menu.Bind) so the handler runs after the
+        # menu dismisses, matching how every other item in this menu
+        # works -- menu.Bind can leave the menu visually open while the
+        # handler runs, which is what "refresh does not close the menu"
+        # reported.
+        self.Bind(wx.EVT_MENU, lambda e: self._refresh_subscription(podcast), refresh_item)
 
         try:
             self._episode_list.PopupMenu(menu, context_menu_pos(self._episode_list, event))

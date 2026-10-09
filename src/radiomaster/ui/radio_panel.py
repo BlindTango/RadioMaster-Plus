@@ -181,6 +181,12 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.tree.add_custom_section(self.station_db.get_custom_stations())
         self.tree.set_favorite_stations(self.station_db.get_favorite_stations())
 
+        # Pre-populate the Sources section so it is ready when the user
+        # selects it -- without this, the section appears empty until
+        # on_sources_needed fires from _on_section_changed, which can
+        # race with the section switch and leave the group list blank.
+        self.tree.show_sources(self._source_labels(), switch_section=False)
+
         self.tree.station_list.Bind(wx.EVT_CONTEXT_MENU, self._on_station_context_menu)
 
         self._load_stations()
@@ -359,7 +365,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         return [(s.label, s.id) for s in self._source_registry.enabled_sources()]
 
     def _on_sources_needed(self) -> None:
-        self.tree.show_sources(self._source_labels())
+        self.tree.show_sources(self._source_labels(), switch_section=True)
 
     def _on_source_selected(self, source_id: str) -> None:
         """Lazily browse the selected source on a worker thread. A
