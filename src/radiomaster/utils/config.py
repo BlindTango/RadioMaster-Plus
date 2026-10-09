@@ -50,6 +50,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # Set whenever a station starts playing (see RadioPanel._play_station);
         # empty until then.
         "last_station": {},
+        # Which multi-source catalog sources are enabled (list of source
+        # ids, see services/sources/registry.py). Absent = the defaults
+        # in that module; unknown ids are ignored.
+        "enabled_sources": None,
     },
     "audiobooks": {
         "tts_engine": "sapi5",

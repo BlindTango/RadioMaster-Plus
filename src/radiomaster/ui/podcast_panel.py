@@ -236,8 +236,9 @@ class PodcastPanel(wx.Panel):
     # ------------------------------------------------------------------
     def _on_category_select(self, event: wx.CommandEvent) -> None:
         """Populate the podcast list when a category is selected."""
-        from radiomaster.database.repository import PodcastRepository
+        from radiomaster.database.repository import PodcastRepository, EpisodeRepository
         repo = PodcastRepository(self._db)
+        episode_repo = EpisodeRepository(self._db)
         self._podcast_list.DeleteAllItems()
         self._episode_list.DeleteAllItems()
         self._podcast_data: list[dict[str, Any]] = []
@@ -247,8 +248,21 @@ class PodcastPanel(wx.Panel):
         self._update_subscription_buttons()
         cat = self._selected_category()
         if cat == "Subscriptions":
+            # Folders first (borrowed from Quill Radio's podcast
+            # organization), then unfiled shows -- each show row carries
+            # its "(N unheard)" badge so the count is spoken in the row.
+            folders = repo.get_folders()
+            for folder in folders:
+                self._append_row(self._podcast_list,
+                                 f"{folder['name']} (folder)", "")
+                self._podcast_data.append({"_folder": folder})
             for p in repo.get_all():
-                self._append_row(self._podcast_list, p.get("title", "Unknown"), p.get("author", ""))
+                if p.get("folder_id"):
+                    continue
+                unheard = episode_repo.unheard_count(p["id"])
+                label = (f"{p.get('title', 'Unknown')} ({unheard} unheard)"
+                         if unheard else p.get("title", "Unknown"))
+                self._append_row(self._podcast_list, label, p.get("author", ""))
                 self._podcast_data.append(p)
         elif cat == "Custom Feeds":
             for p in repo.get_all():
@@ -259,6 +273,17 @@ class PodcastPanel(wx.Panel):
             self._podcast_list.DeleteAllItems()
             self._podcast_data = []
             self._append_row(self._podcast_list, "(Use Search above to find podcasts to subscribe to)")
+
+    def _refresh_subscriptions(self) -> None:
+        """Re-populate the Subscriptions list in place (after a folder
+        verb or a badge-changing action) without disturbing the
+        category selection."""
+        idx = self._find_row(self._category_list, "Subscriptions")
+        if idx != wx.NOT_FOUND and self._selected_category() == "Subscriptions":
+            self._category_list.Select(idx)
+            self._on_category_select(
+                wx.CommandEvent(wx.EVT_LIST_ITEM_SELECTED.typeId,
+                                self._category_list.GetId()))
 
     def _update_subscription_buttons(self) -> None:
         idx = self._podcast_list.GetFirstSelected()
@@ -274,6 +299,7 @@ class PodcastPanel(wx.Panel):
 
     def _on_podcast_context_menu(self, event: wx.ContextMenuEvent) -> None:
         """Manage feeds with right-click, Shift+F10, or the Menu key."""
+        from radiomaster.database.repository import EpisodeRepository
         ctrl = self._podcast_list
         if event.GetPosition() != wx.DefaultPosition:
             idx, _ = ctrl.HitTest(ctrl.ScreenToClient(event.GetPosition()))
@@ -296,6 +322,26 @@ class PodcastPanel(wx.Panel):
         add_feed = menu.Append(wx.ID_ANY, "&Add RSS Feed...")
         menu.Bind(wx.EVT_MENU, self._on_add_feed, add_feed)
         menu.AppendSeparator()
+        # Folder verbs + Mark All as Played (borrowed from Quill Radio):
+        # each announces its result; Mark All stays but dims when there
+        # is nothing left to mark -- a vanished item is a fail.
+        if subscribed:
+            mark_all = menu.Append(wx.ID_ANY, "&Mark All as Played...")
+            has_unheard = bool(rows[idx]) and EpisodeRepository(
+                self._db).unheard_count(rows[idx]["id"]) > 0
+            mark_all.Enable(has_unheard)
+            menu.Bind(wx.EVT_MENU, self._on_mark_all_played, mark_all)
+            move_to_folder = menu.Append(wx.ID_ANY, "Move to &Folder...")
+            menu.Bind(wx.EVT_MENU, self._on_move_to_folder, move_to_folder)
+        new_folder = menu.Append(wx.ID_ANY, "New &Folder...")
+        menu.Bind(wx.EVT_MENU, self._on_new_folder, new_folder)
+        selected_is_folder = bool(rows) and 0 <= idx < len(rows) and "_folder" in rows[idx]
+        if selected_is_folder:
+            rename_folder = menu.Append(wx.ID_ANY, "Rename Fol&der...")
+            menu.Bind(wx.EVT_MENU, self._on_rename_folder, rename_folder)
+            delete_folder = menu.Append(wx.ID_ANY, "Delete F&older...")
+            menu.Bind(wx.EVT_MENU, self._on_delete_folder, delete_folder)
+        menu.AppendSeparator()
         gpodder = menu.Append(wx.ID_ANY, "Import &gpodder.net Subscriptions")
         gpodder.Enable(not getattr(self, "_importing_gpodder", False))
         menu.Bind(wx.EVT_MENU, self._on_sync_gpodder, gpodder)
@@ -308,6 +354,108 @@ class PodcastPanel(wx.Panel):
             ctrl.PopupMenu(menu, context_menu_pos(ctrl, event))
         finally:
             menu.Destroy()
+
+    # ------------------------------------------------------------------
+    # Folder verbs and Mark All as Played -- every outcome is spoken.
+    # ------------------------------------------------------------------
+
+    def _on_new_folder(self, event: wx.CommandEvent) -> None:
+        from radiomaster.database.repository import PodcastRepository
+        name = wx.GetTextFromUser("Folder name:", "New Folder", parent=self)
+        name = name.strip()
+        if not name:
+            return
+        try:
+            PodcastRepository(self._db).create_folder(name)
+        except Exception:
+            self._set_status(f"Status: A folder named {name} already exists.")
+            return
+        self._refresh_subscriptions()
+        self._set_status(f"Status: Created folder {name}.")
+
+    def _on_move_to_folder(self, event: wx.CommandEvent) -> None:
+        from radiomaster.database.repository import PodcastRepository
+        idx = self._podcast_list.GetFirstSelected()
+        rows = getattr(self, "_podcast_data", [])
+        if not (0 <= idx < len(rows)) or "_folder" in rows[idx]:
+            return
+        podcast = rows[idx]
+        repo = PodcastRepository(self._db)
+        folders = repo.get_folders()
+        choices = [f["name"] for f in folders] + ["(Main list)"]
+        choice = wx.GetSingleChoice("Move to which folder?", "Move to Folder",
+                                    choices, parent=self)
+        if not choice:
+            return
+        folder_id = None
+        if choice != "(Main list)":
+            folder_id = next((f["id"] for f in folders if f["name"] == choice), None)
+        repo.move_to_folder(podcast["id"], folder_id)
+        self._refresh_subscriptions()
+        target = choice if choice != "(Main list)" else "the main list"
+        self._set_status(f"Status: Moved {podcast.get('title', 'the show')} to {target}.")
+
+    def _on_rename_folder(self, event: wx.CommandEvent) -> None:
+        from radiomaster.database.repository import PodcastRepository
+        idx = self._podcast_list.GetFirstSelected()
+        rows = getattr(self, "_podcast_data", [])
+        if not (0 <= idx < len(rows)) or "_folder" not in rows[idx]:
+            return
+        folder = rows[idx]["_folder"]
+        new_name = wx.GetTextFromUser("New folder name:", "Rename Folder",
+                                      folder["name"], parent=self)
+        new_name = new_name.strip()
+        if not new_name or new_name == folder["name"]:
+            return
+        try:
+            PodcastRepository(self._db).rename_folder(folder["id"], new_name)
+        except Exception:
+            self._set_status(f"Status: A folder named {new_name} already exists.")
+            return
+        self._refresh_subscriptions()
+        self._set_status(f"Status: Renamed {folder['name']} to {new_name}.")
+
+    def _on_delete_folder(self, event: wx.CommandEvent) -> None:
+        from radiomaster.database.repository import PodcastRepository
+        idx = self._podcast_list.GetFirstSelected()
+        rows = getattr(self, "_podcast_data", [])
+        if not (0 <= idx < len(rows)) or "_folder" not in rows[idx]:
+            return
+        folder = rows[idx]["_folder"]
+        repo = PodcastRepository(self._db)
+        shows = len(repo.get_all())
+        in_folder = len(self._db.fetchall(
+            "SELECT id FROM podcasts WHERE folder_id = ?", (folder["id"],)))
+        confirm = wx.MessageBox(
+            f"Delete folder {folder['name']}? Its {in_folder} show(s) move to "
+            f"the main list.", "Delete Folder",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION)
+        if confirm != wx.YES:
+            return
+        moved = repo.delete_folder(folder["id"])
+        self._refresh_subscriptions()
+        self._set_status(
+            f"Status: Deleted folder {folder['name']}. {moved} show(s) moved "
+            f"to the main list.")
+
+    def _on_mark_all_played(self, event: wx.CommandEvent) -> None:
+        from radiomaster.database.repository import EpisodeRepository, PodcastRepository
+        idx = self._podcast_list.GetFirstSelected()
+        rows = getattr(self, "_podcast_data", [])
+        if not (0 <= idx < len(rows)) or "_folder" in rows[idx]:
+            return
+        podcast = rows[idx]
+        confirm = wx.MessageBox(
+            f"Mark every unheard episode of {podcast.get('title', 'this show')} "
+            f"as played?", "Mark All as Played",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION)
+        if confirm != wx.YES:
+            return
+        count = EpisodeRepository(self._db).mark_all_played(podcast["id"])
+        self._refresh_subscriptions()
+        self._set_status(
+            f"Status: Marked {count} episode(s) of "
+            f"{podcast.get('title', 'the show')} as played.")
 
     def _selected_category(self) -> str:
         idx = self._category_list.GetFirstSelected()
@@ -1059,6 +1207,17 @@ class PodcastPanel(wx.Panel):
         # itunes:duration in the feed) is what tells the engine this one
         # actually ends.
         self._engine.play(url, title=ep.get("title", ""), duration=float(ep.get("duration") or 0.0))
+
+        # Per-show speed (borrowed from Quill Radio): a show remembered
+        # at 1.5x starts at 1.5x without touching the global rate slider.
+        # Applied only at episode start, so the global slider stays in
+        # charge for everything else.
+        podcast_id = ep.get("podcast_id")
+        if podcast_id:
+            from radiomaster.database.repository import PodcastRepository
+            show_rate = PodcastRepository(self._db).get_playback_rate(podcast_id)
+            if show_rate and abs(show_rate - 1.0) > 0.001:
+                self._engine.set_rate(show_rate)
 
         if resume_position > 0:
             import threading

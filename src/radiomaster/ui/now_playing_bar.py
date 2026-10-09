@@ -29,6 +29,8 @@ class NowPlayingBar(wx.Panel):
         self._on_rewind_cb: Callable[[], None] | None = None
         self._on_record_cb: Callable[[], None] | None = None
         self._on_mute_cb: Callable[[], None] | None = None
+        self._on_jump_back_cb: Callable[[], None] | None = None
+        self._on_jump_fwd_cb: Callable[[], None] | None = None
         self._on_seek_cb: Callable[[int], None] | None = None
         self._on_volume_cb: Callable[[float], None] | None = None
         self._on_rate_cb: Callable[[float], None] | None = None
@@ -129,6 +131,16 @@ class NowPlayingBar(wx.Panel):
         set_accessible_name(self._btn_mute, "Mute Off")
         controls_sizer.Add(self._btn_mute, 0, wx.LEFT, 4)
 
+        # Live time-shift jumps (borrowed from Quill Radio's live DVR):
+        # only meaningful while a live station plays -- MainWindow keeps
+        # them disabled otherwise (see set_timeshift_enabled).
+        self._btn_jump_back = wx.Button(self, label="Jump &Back 15s", size=(115, 30), id=wx.NewIdRef())
+        set_accessible_name(self._btn_jump_back, "Jump back 15 seconds on live radio")
+        controls_sizer.Add(self._btn_jump_back, 0, wx.LEFT, 4)
+        self._btn_jump_fwd = wx.Button(self, label="Jump &Forward 15s", size=(125, 30), id=wx.NewIdRef())
+        set_accessible_name(self._btn_jump_fwd, "Jump forward 15 seconds on live radio")
+        controls_sizer.Add(self._btn_jump_fwd, 0, wx.LEFT, 4)
+
         # Stretch spacers on both sides center the transport row when the
         # window is wider than the row needs (e.g. maximized on a large
         # monitor) instead of leaving it packed at the left edge with a
@@ -193,6 +205,8 @@ class NowPlayingBar(wx.Panel):
         self._btn_last.Bind(wx.EVT_BUTTON, lambda e: self._on_last_cb() if self._on_last_cb else None)
         self._btn_record.Bind(wx.EVT_BUTTON, lambda e: self._on_record_cb() if self._on_record_cb else None)
         self._btn_mute.Bind(wx.EVT_BUTTON, lambda e: self._on_mute_cb() if self._on_mute_cb else None)
+        self._btn_jump_back.Bind(wx.EVT_BUTTON, lambda e: self._on_jump_back_cb() if self._on_jump_back_cb else None)
+        self._btn_jump_fwd.Bind(wx.EVT_BUTTON, lambda e: self._on_jump_fwd_cb() if self._on_jump_fwd_cb else None)
         self._position_slider.Bind(wx.EVT_SLIDER, self._on_slider_seek)
         self._volume_slider.Bind(wx.EVT_SLIDER, self._on_volume_change)
         self._rate_slider.Bind(wx.EVT_SLIDER, self._on_rate_change)
@@ -382,6 +396,21 @@ class NowPlayingBar(wx.Panel):
     def on_mute(self, cb: Callable[[], None]) -> None:
         """Set callback for mute toggle."""
         self._on_mute_cb = cb
+
+    def on_jump_back(self, cb: Callable[[], None]) -> None:
+        """Set callback for the Jump Back 15s button."""
+        self._on_jump_back_cb = cb
+
+    def on_jump_forward(self, cb: Callable[[], None]) -> None:
+        """Set callback for the Jump Forward 15s button."""
+        self._on_jump_fwd_cb = cb
+
+    def set_timeshift_enabled(self, enabled: bool) -> None:
+        """Grey the jump buttons out unless a live station is playing --
+        greyed out says 'not for this content' where a silent no-op
+        would say nothing at all."""
+        self._btn_jump_back.Enable(enabled)
+        self._btn_jump_fwd.Enable(enabled)
 
     def set_recording(self, is_recording: bool) -> None:
         """Update record button state."""

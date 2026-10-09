@@ -273,6 +273,31 @@ class BassRadioEngine:
             self._position = float(result.get("position_seconds", position_seconds))
             self._duration = float(result.get("length_seconds", self._duration))
 
+    def timeshift_play(self, path: str, volume: float = 1.0,
+                       start_seconds: float = 0.0) -> bool:
+        """Play a local time-shift buffer file (the host's
+        timeshift_play command -- see bass_host.play_timeshift_file).
+        Returns True when the host accepted the file."""
+        result = self._request({"cmd": "timeshift_play", "path": path,
+                                "volume": max(0.0, min(2.0, volume)),
+                                "start_seconds": max(0.0, start_seconds)})
+        return bool(result.get("ok"))
+
+    def timeshift_seek(self, delta_seconds: float) -> tuple[bool, float, float]:
+        """Seek by a relative number of seconds within the open
+        time-shift buffer. Returns (ok, position, length)."""
+        result = self._request({"cmd": "timeshift_seek",
+                                "delta_seconds": float(delta_seconds)})
+        return (bool(result.get("seeked")),
+                float(result.get("position_seconds", 0.0)),
+                float(result.get("length_seconds", 0.0)))
+
+    def timeshift_status(self) -> tuple[float, float]:
+        """(position, length) of the open time-shift buffer, or (0, 0)."""
+        result = self._request({"cmd": "timeshift_status"})
+        return (float(result.get("position_seconds", 0.0)),
+                float(result.get("length_seconds", 0.0)))
+
     def set_rate(self, rate: float) -> None:
         self._rate = max(0.5, min(3.0, rate))
         pitch_tempo = self._effects.get("pitch_tempo", {})

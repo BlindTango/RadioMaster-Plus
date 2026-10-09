@@ -118,6 +118,14 @@ class PlaybackEngine:
         self._video_inputs: dict = {}
         self._video_stream = None
         self._radio_healthy_since: float | None = None
+        # Live time-shift (Jump Back/Forward 15s): an ffmpeg tee keeps
+        # writing the live stream to a temp buffer file while the user is
+        # behind live; the BASS host plays that file instead of the
+        # stream (see jump_back/jump_forward). None when not in use.
+        self._timeshift_path: str | None = None
+        self._timeshift_process: subprocess.Popen | None = None
+        self._timeshift_live_url: str = ""
+        self._timeshift_generation: int = 0
 
     def _ensure_bass_radio(self):
         if self._bass_radio is not None:
@@ -284,6 +292,155 @@ class PlaybackEngine:
         """Advance using BASS's existing stream switch (no overlap mixing)."""
         self.play(url, title, artist, duration=duration, is_live=is_live)
 
+    # ---------------------------------------------------------------------
+    # Live time-shift: Jump Back / Jump Forward 15 seconds
+    # ---------------------------------------------------------------------
+    # Borrowed from Quill Radio's live DVR: a live stream is unpausable
+    # and unseekable on its own, but an ffmpeg tee writing the stream to
+    # a growing temp file gives the BASS host something seekable to play.
+    # Jump Back starts the tee and switches to the buffer; Jump Forward
+    # seeks toward the live edge and returns to the live stream when
+    # caught up. The tee stops and the temp file is removed when the user
+    # returns to live or switches stations.
+
+    TIMESIFT_JUMP_SECONDS = 15.0
+
+    def _start_timeshift_tee(self, url: str) -> str | None:
+        """Start (or reuse) the ffmpeg tee writing *url* to a temp file.
+        Returns the buffer path, or None when ffmpeg is unavailable."""
+        if self._timeshift_process is not None and self._timeshift_path:
+            if self._timeshift_live_url == url:
+                return self._timeshift_path
+            self._stop_timeshift_tee()
+        from radiomaster.utils.tools import get_ffmpeg
+        ffmpeg = get_ffmpeg()
+        if not ffmpeg:
+            return None
+        import tempfile
+        handle, path = tempfile.mkstemp(prefix="rmplus_timeshift_", suffix=".mp3")
+        os.close(handle)
+        # -movflags is MP4-only; a plain MP3 stream tee needs nothing
+        # special. copy keeps it cheap (no re-encode).
+        try:
+            self._timeshift_process = subprocess.Popen(
+                [ffmpeg, "-y", "-loglevel", "error",
+                 "-i", url, "-c", "copy", "-f", "mp3", path],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            log.warning("Could not start timeshift tee", exc_info=True)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return None
+        self._timeshift_path = path
+        self._timeshift_live_url = url
+        return path
+
+    def _stop_timeshift_tee(self) -> None:
+        """Stop the tee and remove its buffer file."""
+        process, path = self._timeshift_process, self._timeshift_path
+        self._timeshift_process = None
+        self._timeshift_path = None
+        self._timeshift_live_url = ""
+        if process is not None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+        if path:
+            # Give ffmpeg a moment to close the file before removing it;
+            # on Windows an open file cannot be deleted.
+            def _remove():
+                for _ in range(20):
+                    try:
+                        os.remove(path)
+                        return
+                    except OSError:
+                        time.sleep(0.25)
+            threading.Thread(target=_remove, daemon=True).start()
+
+    @_serialize_play
+    def jump_back(self, seconds: float = TIMESIFT_JUMP_SECONDS) -> bool:
+        """Jump back *seconds* behind live on the current live stream.
+        Returns True when the jump happened; False (with the caller
+        expected to say why) when there is nothing live to jump in."""
+        if not self._is_live or self._is_video_active or not self._current_url:
+            return False
+        bass = self._ensure_bass_radio()
+        if bass is None:
+            return False
+        path = self._start_timeshift_tee(self._current_url)
+        if path is None:
+            return False
+        # Wait for the tee to have *seconds* of audio behind the live
+        # edge before switching -- switching instantly would land at the
+        # buffer's start (nothing recorded yet) and sound like a stop.
+        def _switch():
+            generation = self._playback_generation
+            deadline = time.monotonic() + seconds + 5.0
+            while time.monotonic() < deadline:
+                if generation != self._playback_generation:
+                    return  # user moved on
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    return
+                # MP3 at a typical 128kbps is ~16 KB/s; wait until the
+                # file holds at least the jump's worth of audio (with a
+                # generous divisor for higher-bitrate streams).
+                if size >= seconds * 16000:
+                    break
+                time.sleep(0.25)
+            if generation != self._playback_generation:
+                return
+            with self._play_lock:
+                if generation != self._playback_generation:
+                    return
+                self._timeshift_generation = generation
+                bass.timeshift_play(path, volume=self._volume,
+                                    start_seconds=max(0.0, size / 16000.0 - seconds))
+        threading.Thread(target=_switch, daemon=True).start()
+        return True
+
+    @_serialize_play
+    def jump_forward(self, seconds: float = TIMESIFT_JUMP_SECONDS) -> bool:
+        """Jump forward *seconds* toward the live edge. At (or past) the
+        edge, playback returns to the live stream and the tee stops.
+        Returns False when not currently behind live."""
+        bass = self._bass_radio
+        if (bass is None or not self._using_bass_radio
+                or self._timeshift_path is None):
+            return False
+        ok, position, length = bass.timeshift_seek(seconds)
+        if not ok:
+            return False
+        # The host clamps forward seeks short of the file's tail (its
+        # own _TIMESHIFT_TAIL_SAFETY_SECONDS); being within a few seconds
+        # of the tail means we are at the live edge.
+        if length - position <= 5.0:
+            self._return_to_live()
+        return True
+
+    def _return_to_live(self) -> None:
+        """Leave the time-shift buffer and resume the live stream."""
+        url, title, artist = (self._current_url, self._current_title,
+                              self._current_artist)
+        self._stop_timeshift_tee()
+        self._timeshift_generation = 0
+        self.play(url, title, artist, is_live=True)
+
+    def timeshift_behind_seconds(self) -> float:
+        """How far behind live playback currently is (0 when live)."""
+        bass = self._bass_radio
+        if bass is None or self._timeshift_path is None:
+            return 0.0
+        position, length = bass.timeshift_status()
+        return max(0.0, length - position)
+
 
     def set_replaygain_mode(self, mode: str) -> None:
         """Set ReplayGain mode: "none", "track", or "album"."""
@@ -314,6 +471,11 @@ class PlaybackEngine:
         if self._video_stream is not None:
             self._video_stream.close()
             self._video_stream = None
+        # A stopped stream is back at the live edge by definition -- the
+        # tee and its buffer file go too (a leftover tee would keep
+        # downloading the stream in the background after Stop).
+        self._stop_timeshift_tee()
+        self._timeshift_generation = 0
         if self._bass_radio:
             self._bass_radio.stop(wait=wait)
         self._using_bass_radio = False

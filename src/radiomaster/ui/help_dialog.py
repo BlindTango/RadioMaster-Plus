@@ -98,6 +98,19 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "or try another station. The application log records disconnects, stalls, "
         "retry attempts, and retry limits for troubleshooting."
     )),
+    ("What's New in Version 1.2", (
+        "Five feature areas from Quill Radio are now in RadioMaster+:\n\n"
+        "1. Jump Back 15s and Jump Forward 15s on the transport bar let you "
+        "rewind and catch up on a live station.\n"
+        "2. Tools > Song History shows what played, with Copy and Search Lyrics.\n"
+        "3. The Sources section adds SomaFM, ACB Media, and the Internet Archive. "
+        "Tools > Choose Browse Sources controls which appear.\n"
+        "4. File > Continue Listening gathers every unfinished episode, audiobook, "
+        "and file into one list.\n"
+        "5. Podcast folders, unheard badges, and per-show speed (Ctrl+Shift+Up/Down).\n\n"
+        "Also: Tools > Station Catalog Status, Tools > Listening Statistics, a "
+        "first-run wizard, and a launch log that says why if the app cannot start."
+    )),
     ("Check Station Availability", (
         "Open Tools > Station Health Check to scan the station catalogue for dead streams, "
         "name mismatches, unavailable websites, geographic restrictions, and format "
@@ -153,6 +166,38 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.2.0", (
+        "Five feature areas borrowed from Quill Radio, the screen-reader-first "
+        "internet radio player, are now in RadioMaster+.\n\n"
+        "Reliability: a launch log records everything that happens before the "
+        "main log begins. When startup fails, one message says why in words, "
+        "where the log is, and where to report it. Running from inside a zip "
+        "without extracting is detected and explained.\n\n"
+        "Live time-shift: Jump Back 15s and Jump Forward 15s buttons on the "
+        "transport bar let you rewind and catch up on a live station. The status "
+        "bar says how far behind live you are and announces when you are caught up.\n\n"
+        "Song History: Tools > Song History shows what played, newest first, with "
+        "Copy and Search Lyrics on the context menu.\n\n"
+        "Multi-source catalog: the Sources section adds SomaFM (listener-supported "
+        "independent radio), ACB Media (the American Council of the Blind's ten "
+        "live streams), and the Internet Archive (searchable public audio) alongside "
+        "the Radio Browser catalog. Search fans out across all enabled sources; "
+        "Tools > Choose Browse Sources controls which appear.\n\n"
+        "Continue Listening: File > Continue Listening gathers every unfinished "
+        "podcast episode, audiobook, and local file into one list, newest first, "
+        "with Resume and Forget This One on the context menu.\n\n"
+        "Podcast folders and badges: organize subscriptions into folders from the "
+        "context menu. Each show's row carries an '(N unheard)' badge. Mark All as "
+        "Played marks every unheard episode at once. Per-show speed (Ctrl+Shift+Up "
+        "and Down) remembers a playback speed for each show without touching the "
+        "global rate slider.\n\n"
+        "Catalog Status and Listening Statistics: Tools > Station Catalog Status "
+        "shows how many stations are stored, when they were last updated, and the "
+        "refresh schedule. Tools > Listening Statistics shows how long you have "
+        "listened, counting only actual playing time.\n\n"
+        "First-run wizard: a new copy shows arrow-through welcome pages; Skip "
+        "leaves in one keystroke and never asks again."
+    )),
     ("Version 1.1.103", (
         "Radio playback now honors Auto-reconnect on stream loss for the BASS "
         "audio engine. A disconnected stream or detected decoder stall triggers "

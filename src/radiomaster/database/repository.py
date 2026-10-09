@@ -120,6 +120,58 @@ class PodcastRepository:
         self._db.execute("DELETE FROM podcasts WHERE id = ?", (podcast_id,))
         self._db.commit()
 
+    # ------------------------------------------------------------------
+    # Folders (borrowed from Quill Radio's podcast organization)
+    # ------------------------------------------------------------------
+
+    def create_folder(self, name: str) -> int:
+        cursor = self._db.execute(
+            "INSERT INTO podcast_folders (name) VALUES (?)", (name,))
+        self._db.commit()
+        return cursor.lastrowid
+
+    def rename_folder(self, folder_id: int, new_name: str) -> None:
+        self._db.execute(
+            "UPDATE podcast_folders SET name = ? WHERE id = ?",
+            (new_name, folder_id,))
+        self._db.commit()
+
+    def delete_folder(self, folder_id: int) -> int:
+        """Delete a folder; its shows move to the main list (folder_id
+        NULLed first). Returns how many shows moved."""
+        moved = len(self._db.fetchall(
+            "SELECT id FROM podcasts WHERE folder_id = ?", (folder_id,)))
+        self._db.execute(
+            "UPDATE podcasts SET folder_id = NULL WHERE folder_id = ?",
+            (folder_id,))
+        self._db.execute("DELETE FROM podcast_folders WHERE id = ?", (folder_id,))
+        self._db.commit()
+        return moved
+
+    def get_folders(self) -> list[dict[str, Any]]:
+        return self._db.fetchall(
+            "SELECT * FROM podcast_folders ORDER BY name")
+
+    def move_to_folder(self, podcast_id: int, folder_id: int | None) -> None:
+        self._db.execute(
+            "UPDATE podcasts SET folder_id = ? WHERE id = ?",
+            (folder_id, podcast_id,))
+        self._db.commit()
+
+    def set_playback_rate(self, podcast_id: int, rate: float) -> None:
+        """Remember a per-show playback speed (1.0 = the global rate)."""
+        self._db.execute(
+            "UPDATE podcasts SET playback_rate = ? WHERE id = ?",
+            (max(0.5, min(3.0, rate)), podcast_id,))
+        self._db.commit()
+
+    def get_playback_rate(self, podcast_id: int) -> float:
+        rows = self._db.fetchall(
+            "SELECT playback_rate FROM podcasts WHERE id = ?", (podcast_id,))
+        if rows and rows[0]["playback_rate"]:
+            return float(rows[0]["playback_rate"])
+        return 1.0
+
 
 class EpisodeRepository:
     """CRUD operations for individual podcast episodes (play progress)."""
@@ -140,6 +192,27 @@ class EpisodeRepository:
             (int(is_played), episode_id),
         )
         self._db.commit()
+
+    def mark_all_played(self, podcast_id: int) -> int:
+        """Mark every unheard episode of one show played. Returns the
+        count (the caller announces it)."""
+        cursor = self._db.execute(
+            "UPDATE episodes SET is_played = 1 "
+            "WHERE podcast_id = ? AND is_played = 0",
+            (podcast_id,),
+        )
+        self._db.commit()
+        return cursor.rowcount
+
+    def unheard_count(self, podcast_id: int) -> int:
+        """How many episodes of one show are unplayed -- the "(N unheard)"
+        badge's number."""
+        rows = self._db.fetchall(
+            "SELECT COUNT(*) AS n FROM episodes "
+            "WHERE podcast_id = ? AND is_played = 0",
+            (podcast_id,),
+        )
+        return int(rows[0]["n"]) if rows else 0
 
     def get(self, episode_id: int) -> dict[str, Any] | None:
         results = self._db.fetchall("SELECT * FROM episodes WHERE id = ?", (episode_id,))

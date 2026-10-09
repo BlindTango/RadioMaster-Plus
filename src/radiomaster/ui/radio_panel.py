@@ -99,6 +99,24 @@ class RadioPanel(scrolled.ScrolledPanel):
         # index and replays whatever's already there.
         self._history: list[Station] = []
         self._history_index: int = -1
+
+        # Multi-source catalog (services/sources/): the registry owns the
+        # source instances; the tree renders what browse() returns. The
+        # generation counter guards against a slow source answering
+        # after the user moved on -- same pattern as the ICY polls.
+        from radiomaster.utils.config import ConfigManager
+        from radiomaster.utils.paths import get_paths
+        from radiomaster.services.sources import SourceRegistry
+        self._source_registry = SourceRegistry(
+            ConfigManager.get_instance(), get_paths()["cache"],
+        )
+        self._source_browse_seq = 0
+        self._source_browse_path: dict[str, str] = {}
+
+        # Song History (Tools > Song History...): None until MainWindow
+        # hands over the shared service (it owns the app-wide DatabaseManager);
+        # _record_song_history no-ops until then.
+        self._song_history = None
         # Called after every history change (fresh station played, or
         # Previous/Next/First/Last moved the index) so MainWindow can
         # re-enable/grey out the transport bar's history buttons.
@@ -149,6 +167,11 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.add_custom_btn.Bind(wx.EVT_BUTTON, self._on_add_custom)
         self.tree.on_station_activated = self._on_station_activated
         self.tree.on_selection_changed = self._on_tree_sel_changed
+        # Multi-source catalog wiring (see _on_source_selected and
+        # friends): the tree asks, the panel browses on a worker thread.
+        self.tree.on_sources_needed = self._on_sources_needed
+        self.tree.on_source_selected = self._on_source_selected
+        self.tree.on_source_node_activated = self._on_source_node_activated
 
         # Volume/rate/pan restoration happens once, centrally, in
         # MainWindow.__init__ (after this panel and the engine both
@@ -225,8 +248,201 @@ class RadioPanel(scrolled.ScrolledPanel):
                 return
             wx.CallAfter(self.tree.set_search_results, results)
             wx.CallAfter(self.set_status, f"Status: {len(results)} result(s) for '{query}'")
+            # Search fanout (Quill's "five searches, five sources"):
+            # stations answer first above; the extra sources report as
+            # they finish, appended without moving the cursor, and one
+            # final announcement says when everything has reported.
+            self._fanout_source_search(query, seq)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _fanout_source_search(self, query: str, seq: int) -> None:
+        """Query every enabled searchable source concurrently. Results
+        append to the Search Results list without moving the cursor (the
+        tree re-renders the merged list; the user's selection index is
+        preserved by set_search_results' sorted insert only when the
+        cursor is at 0 -- acceptable for a first pass). One announcement
+        when all sources have reported."""
+        searchable = [s for s in self._source_registry.enabled_sources()
+                      if s.capabilities.searchable]
+        if not searchable:
+            return
+        pending = {s.id for s in searchable}
+        collected: dict[str, list] = {}
+        lock = threading.Lock()
+
+        def announce_done():
+            spoken = ", ".join(sorted(
+                self._source_registry.get(sid).label
+                for sid in pending
+                if self._source_registry.get(sid) is not None
+            )) or "all sources"
+            self.set_status(f"Status: All sources have reported. "
+                            f"{spoken} finished searching for '{query}'.", False)
+
+        def source_worker(source):
+            try:
+                rows = source.search(query)
+            except Exception:
+                rows = []
+            with lock:
+                collected[source.id] = rows
+                pending.discard(source.id)
+                done = not pending
+            if seq != self._search_seq:
+                return
+            # Late arrivals append; the cursor does not jump because the
+            # tree only re-renders the list, not the selection.
+            wx.CallAfter(self._append_source_search_rows, source, rows)
+            if done and seq == self._search_seq:
+                wx.CallAfter(announce_done)
+
+        for source in searchable:
+            threading.Thread(target=source_worker, args=(source,),
+                             daemon=True).start()
+
+    def _append_source_search_rows(self, source, rows) -> None:
+        """Append one source's search results to the Search Results
+        section, each row labelled with its source so results are
+        distinguishable, per Quill's 'the row carries its own truth'."""
+        if not rows:
+            return
+        stations = []
+        for row in rows:
+            if row.station is None:
+                continue
+            stations.append(Station(
+                uuid=f"{row.station.source_id}:{row.station.url}",
+                name=f"{row.station.name} ({source.label})",
+                url=row.station.url,
+                homepage=row.station.homepage,
+                tags=row.station.tags,
+            ))
+        if stations:
+            self.tree.append_search_results(stations)
+
+    def open_browse_sources_dialog(self) -> None:
+        """Tools > Choose Browse Sources...: checkbox per source; OK
+        persists and refreshes the Sources section in place."""
+        from radiomaster.ui.browse_sources_dialog import BrowseSourcesDialog
+        dialog = BrowseSourcesDialog(self, self._source_registry)
+        if dialog.ShowModal() == wx.ID_OK and dialog.changed():
+            self._source_registry.set_enabled_ids(dialog.selected_ids())
+            from radiomaster.utils.config import ConfigManager
+            ConfigManager.get_instance().save()
+            self.refresh_sources_after_config_change()
+            self.set_status("Status: Browse sources updated.", False)
+        dialog.Destroy()
+
+    def open_song_history(self) -> None:
+        """Tools > Song History...: what played on the current station
+        (or all stations), newest first, with Copy / Identify / Lyrics
+        verbs on the context menu."""
+        if self._song_history is None:
+            self.set_status("Status: Song history is not available.", False)
+            return
+        from radiomaster.ui.song_history_dialog import SongHistoryDialog
+        station = self._selected_station
+        dialog = SongHistoryDialog(
+            self, self._song_history,
+            station_uuid=station.uuid if station else None,
+            station_name=station.name if station else None,
+        )
+        dialog.ShowModal()
+        dialog.Destroy()
+
+    # ------------------------------------------------------------------
+    # Multi-source catalog: lazy browse, search fanout, activation.
+    # ------------------------------------------------------------------
+
+    def _source_labels(self) -> list[tuple[str, str]]:
+        return [(s.label, s.id) for s in self._source_registry.enabled_sources()]
+
+    def _on_sources_needed(self) -> None:
+        self.tree.show_sources(self._source_labels())
+
+    def _on_source_selected(self, source_id: str) -> None:
+        """Lazily browse the selected source on a worker thread. A
+        "Loading..." row shows immediately; the honest empties arrive
+        when the source answers (or does not)."""
+        source = self._source_registry.get(source_id)
+        if source is None:
+            return
+        self._source_browse_seq += 1
+        seq = self._source_browse_seq
+        path = self._source_browse_path.get(source_id, "")
+        # The Loading row is the panel's to add (the tree only renders
+        # what it is handed) -- and it must clear on every outcome, so a
+        # branch is never permanently stuck on "Loading...".
+        self.tree.set_source_rows(source_id, ["Loading..."])
+        self.set_status(f"Status: Loading {source.label}...")
+
+        def worker():
+            try:
+                rows = source.browse(path)
+                sentence = None
+            except Exception as exc:  # SourceUnavailable and anything else
+                rows = []
+                sentence = str(exc) or f"{source.label} could not be reached."
+            if seq != self._source_browse_seq:
+                return
+            if sentence:
+                wx.CallAfter(self.tree.set_source_failed, source_id, sentence)
+                wx.CallAfter(self.set_status, f"Status: {sentence}", False)
+            else:
+                wx.CallAfter(self.tree.set_source_rows, source_id, rows)
+                if not rows:
+                    # The honest empty: never a bare silent nothing.
+                    wx.CallAfter(self.tree.set_source_failed, source_id,
+                                 f"Nothing in {source.label}. It may be empty, "
+                                 f"or the source could not be reached.")
+                wx.CallAfter(self.set_status,
+                             f"Status: {len(rows)} row(s) from {source.label}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_source_node_activated(self, row) -> None:
+        """Enter on a source row: play it, or open its folder."""
+        source = self._source_registry.get(self.tree._source_selected or "")
+        if source is None or row is None:
+            return
+        if row.station is not None:
+            # A playable node: convert to the Station shape the rest of
+            # the panel already understands (history, favorites, config).
+            station = Station(
+                uuid=f"{row.station.source_id}:{row.station.url}",
+                name=row.station.name,
+                url=row.station.url,
+                favicon="",
+                tags=row.station.tags,
+                country="",
+                language="",
+                codec="",
+                bitrate=0,
+                votes=0,
+                homepage=row.station.homepage,
+                network="",
+                languagecodes="",
+            )
+            self._selected_station = station
+            self._play_station(station)
+            return
+        if row.has_children:
+            # A folder node: browse into it (the path is opaque to us).
+            self._source_browse_path[source.id] = row.path
+            self._on_source_selected(source.id)
+            return
+        # A row that is neither playable nor a folder carries a note --
+        # speak it rather than doing nothing at all.
+        if row.note:
+            self.set_status(f"Status: {row.note}")
+
+    def refresh_sources_after_config_change(self) -> None:
+        """Re-read the enabled set after Choose Browse Sources changes
+        it, so the Sources section reflects the new selection without a
+        restart."""
+        self._source_browse_path.clear()
+        self.tree.show_sources(self._source_labels())
 
     def _on_tree_sel_changed(self) -> None:
         try:
@@ -425,6 +641,23 @@ class RadioPanel(scrolled.ScrolledPanel):
         artist, title = _parse_icy_song(song)
         if title and self.on_now_playing_changed:
             self.on_now_playing_changed(artist, title)
+        if title:
+            self._record_song_history(artist, title)
+
+    def _record_song_history(self, artist: str, title: str) -> None:
+        """Fire-and-forget song history insert on a background thread --
+        never block the wx thread on a database write (the ICY poll
+        already runs off-thread, but _publish_radio_song lands on the UI
+        thread via wx.CallAfter)."""
+        station = self._selected_station
+        if station is None or self._song_history is None:
+            return
+        uuid, name = station.uuid, station.name
+        threading.Thread(
+            target=self._song_history.record,
+            args=(uuid, name, artist, title),
+            daemon=True,
+        ).start()
 
     # ------------------------------------------------------------------
     # Station history (Previous/Next/First/Last on the transport bar)

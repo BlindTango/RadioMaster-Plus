@@ -291,6 +291,57 @@ MIGRATIONS: list[tuple[int, str]] = [
             subscribed_at TEXT DEFAULT (datetime('now'))
         );
     """),
+    # Listening Statistics (Tools > Listening Statistics...): one row per
+    # continuous stretch of actual playback. Pause/stop ends a session and
+    # resume starts a new one, so seconds_listened only ever counts time
+    # the audio was really audible -- see services/stats_service.py.
+    (24, """
+        CREATE TABLE IF NOT EXISTS listening_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_id TEXT,
+            title TEXT,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            seconds_listened INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_listening_sessions_started
+            ON listening_sessions(started_at);
+        CREATE INDEX IF NOT EXISTS idx_listening_sessions_source
+            ON listening_sessions(source_type, source_id);
+    """),
+    # Song History (Tools > Song History...): every ICY StreamTitle the
+    # radio panel sees, newest first, capped per station so the table
+    # cannot grow without bound on a long listening session -- see
+    # services/song_history.py.
+    (25, """
+        CREATE TABLE IF NOT EXISTS song_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            station_uuid TEXT NOT NULL,
+            station_name TEXT NOT NULL,
+            artist TEXT DEFAULT '',
+            title TEXT NOT NULL,
+            played_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_song_history_station
+            ON song_history(station_uuid, played_at DESC);
+    """),
+    # Podcast folders + per-show speed (borrowed from Quill Radio's
+    # podcast organization): folders group subscriptions in the podcast
+    # list (NULL folder_id = the main list), and playback_rate remembers
+    # a speed per show so a fast-talk show stays fast without touching
+    # the global rate slider.
+    (26, """
+        CREATE TABLE IF NOT EXISTS podcast_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+    """),
+    (27, """
+        ALTER TABLE podcasts ADD COLUMN folder_id INTEGER REFERENCES podcast_folders(id);
+        ALTER TABLE podcasts ADD COLUMN playback_rate REAL DEFAULT 1.0;
+    """),
 ]
 
 

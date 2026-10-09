@@ -93,6 +93,17 @@ class MainWindow(wx.Frame):
         self._station_update_scheduler.start(
             self._config.get("radio.station_update_frequency", default="weekly")
         )
+        # Listening Statistics (Tools > Listening Statistics...): records
+        # real playback time from engine state changes. Created before
+        # _setup_engine_callbacks() runs so the callback chain below can
+        # include it.
+        from radiomaster.services.stats_service import StatsService
+        self._stats_service = StatsService(self._db)
+        # Song History (Tools > Song History...): the radio panel inserts
+        # rows from its ICY watcher; the service is handed over after the
+        # panel exists (see _setup_ui).
+        from radiomaster.services.song_history import SongHistoryService
+        self._song_history_service = SongHistoryService(self._db)
 
         # TAB_TRAVERSAL must be part of the constructor's style, not added
         # afterward via SetWindowStyleFlag() -- wx's control-container
@@ -167,6 +178,18 @@ class MainWindow(wx.Frame):
         # stream can stall for a couple of seconds and must not block
         # startup.
         wx.CallAfter(self._radio_panel.play_last_station_if_enabled)
+
+        # First-run wizard: shown once, only when the completion flag is
+        # unset (Skip/Finish both set it -- see _show_first_run_wizard).
+        # Deferred so the main window paints first. The guard checks the
+        # flag again inside CallAfter so a test that sets the flag after
+        # __init__ (or tears down the window before the deferred call
+        # fires) never sees a wizard on a dead window.
+        if not self._config.get("general.first_run_complete", default=False):
+            def _deferred_first_run():
+                if not self._config.get("general.first_run_complete", default=False):
+                    self._show_first_run_wizard()
+            wx.CallAfter(_deferred_first_run)
 
         if self._config.get("updates.check_on_startup", default=True) and self._update_check_due():
             self._check_updates(silent=True)
@@ -254,6 +277,9 @@ class MainWindow(wx.Frame):
         self._menu_ids["open_folder"] = wx.NewIdRef()
         file_menu.Append(self._menu_ids["open_folder"], "Open &Folder...\tCtrl+Shift+O")
         file_menu.AppendSeparator()
+        self._menu_ids["continue_listening"] = wx.NewIdRef()
+        file_menu.Append(self._menu_ids["continue_listening"], "&Continue Listening...")
+        file_menu.AppendSeparator()
         self._menu_ids["import_opml"] = wx.NewIdRef()
         file_menu.Append(self._menu_ids["import_opml"], "Import OPML...")
         self._menu_ids["export_opml"] = wx.NewIdRef()
@@ -326,6 +352,14 @@ class MainWindow(wx.Frame):
         tools_menu.AppendSeparator()
         self._menu_ids["station_health"] = wx.NewIdRef()
         tools_menu.Append(self._menu_ids["station_health"], "Station &Health Check...")
+        self._menu_ids["browse_sources"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["browse_sources"], "Choose &Browse Sources...")
+        self._menu_ids["catalog_status"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["catalog_status"], "Station Catalog &Status...")
+        self._menu_ids["stats"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["stats"], "Listening St&atistics...")
+        self._menu_ids["song_history"] = wx.NewIdRef()
+        tools_menu.Append(self._menu_ids["song_history"], "Song &History...")
         tools_menu.AppendSeparator()
         tools_menu.Append(wx.ID_PREFERENCES, "&Settings...\tCtrl+,")
         menubar.Append(tools_menu, "&Tools")
@@ -402,6 +436,9 @@ class MainWindow(wx.Frame):
         )
         self._radio_panel.on_history_changed = self._update_transport_button_states
         self._radio_panel.on_now_playing_changed = self._on_radio_now_playing_changed
+        # Song History inserts happen on the radio panel's ICY watcher
+        # threads; the service (and its DatabaseManager) is owned here.
+        self._radio_panel._song_history = self._song_history_service
         # Station list context menu's Volume/Pan/Rate submenus (see
         # RadioPanel._on_station_context_menu) delegate here rather than
         # touching self._engine directly, so the transport bar's own
@@ -554,7 +591,18 @@ class MainWindow(wx.Frame):
         # PlaybackEngine's monitor thread fires these callbacks from a
         # background thread; wx UI calls must be marshalled back to the
         # main thread or the app crashes/hangs during playback.
-        self._engine.on_state_change(lambda state: wx.CallAfter(self._on_engine_state, state))
+        # on_state_change is a single slot, so the stats recorder is
+        # chained in front of the UI handler rather than overwriting it.
+        def _state_chain(state: str) -> None:
+            self._stats_service.on_state_change(
+                state,
+                source_type=self._stats_source_type(),
+                source_id=self._engine.current_url,
+                title=self._engine.current_title,
+            )
+            wx.CallAfter(self._on_engine_state, state)
+
+        self._engine.on_state_change(_state_chain)
         self._engine.on_position_update(lambda pos, dur: wx.CallAfter(self._on_engine_position, pos, dur))
         self._engine.on_error(lambda message: wx.CallAfter(self._on_engine_error, message))
         self._engine.on_buffering(lambda percent: wx.CallAfter(self._status_bar.set_buffering, percent))
@@ -579,6 +627,8 @@ class MainWindow(wx.Frame):
         self._now_playing.on_pan(self._on_pan_change)
         self._now_playing.on_ffwd(lambda: self._fast_forward())
         self._now_playing.on_rewind(lambda: self._rewind())
+        self._now_playing.on_jump_back(self._jump_back_live)
+        self._now_playing.on_jump_forward(self._jump_forward_live)
 
     def _setup_accelerators(self) -> None:
         """Build every live accelerator from the editor's command catalogue."""
@@ -599,6 +649,7 @@ class MainWindow(wx.Frame):
             "rate_up": lambda: self._on_rate_step(0.1), "rate_down": lambda: self._on_rate_step(-0.1),
             "speed_up": lambda: self._on_rate_step(0.1),
             "speed_down": lambda: self._on_rate_step(-0.1),
+            "show_rate_up": self._show_rate_step, "show_rate_down": lambda: self._show_rate_step(-0.1),
             "pan_left": lambda: self._on_pan_step(-0.1), "pan_right": lambda: self._on_pan_step(0.1),
             "first_track": self._first_track, "previous_track": self._prev_track,
             "next_track": self._next_track, "last_track": self._last_track,
@@ -612,6 +663,10 @@ class MainWindow(wx.Frame):
             "download_manager": lambda: self._switch_tab(5), "recording_scheduler": lambda: self._switch_tab(6),
             "track_identifier": self._show_track_identifier, "track_splitter": self._show_track_splitter,
             "keyboard_shortcuts": self._show_shortcut_editor,
+            "catalog_status": self._show_catalog_status, "stats": self._show_stats,
+            "song_history": lambda: self._radio_panel.open_song_history(),
+            "seek_back_15": self._jump_back_live, "seek_forward_15": self._jump_forward_live,
+            "continue_listening": self._show_continue_listening,
             "settings": self._show_settings, "user_manual": self._show_user_manual,
             "quick_start": self._show_quick_start, "release_notes": self._show_release_notes,
             "update_ytdlp": self._update_ytdlp, "check_updates": self._check_updates, "about": self._show_about,
@@ -792,6 +847,9 @@ class MainWindow(wx.Frame):
 
         self._radio_panel.shutdown_recordings()
         self._engine.stop(wait=False)
+        # Persist any still-open listening session before the process
+        # exits, or the final stretch of playback is never recorded.
+        self._stats_service.flush()
         self._station_update_scheduler.shutdown()
         self._config.save()
         self._global_hotkey_manager.unregister_all()
@@ -874,6 +932,14 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_splitter(), id=self._menu_ids["track_splitter"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_shortcut_editor(), id=self._menu_ids["shortcut_editor"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_station_health(), id=self._menu_ids["station_health"])
+        self.Bind(wx.EVT_MENU, lambda e: self._radio_panel.open_browse_sources_dialog(),
+                  id=self._menu_ids["browse_sources"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_catalog_status(), id=self._menu_ids["catalog_status"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_stats(), id=self._menu_ids["stats"])
+        self.Bind(wx.EVT_MENU, lambda e: self._radio_panel.open_song_history(),
+                  id=self._menu_ids["song_history"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_continue_listening(),
+                  id=self._menu_ids["continue_listening"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_settings(), id=wx.ID_PREFERENCES)
 
         # Help menu
@@ -1251,6 +1317,12 @@ class MainWindow(wx.Frame):
             self._lyrics_request_generation += 1
         self._now_playing.set_playing(state == "playing")
         self._update_transport_button_states()
+        # The time-shift jumps only make sense on a playing live stream --
+        # grey them out otherwise so the button says "not for this
+        # content" instead of silently doing nothing when pressed.
+        self._now_playing.set_timeshift_enabled(
+            state == "playing" and self._engine._is_live
+            and not self._engine._is_video_active)
         # Video is rendered by ffplay's own native window (the engine
         # launches ffplay without -nodisp for video), so there is no
         # separate in-app video frame to show -- showing a redundant
@@ -1723,6 +1795,53 @@ class MainWindow(wx.Frame):
         # browse lists so hidden stations disappear immediately.
         self._radio_panel.refresh_after_station_update()
 
+    def _show_catalog_status(self) -> None:
+        """Show the Station Catalog Status dialog and announce its
+        summary on open -- a silent success is a fail."""
+        from radiomaster.ui.catalog_status_dialog import CatalogStatusDialog
+        dlg = CatalogStatusDialog(
+            self, self._station_db, self._station_updater,
+            frequency=self._config.get("radio.station_update_frequency", default="weekly"),
+            on_update_finished=self._radio_panel.refresh_after_station_update,
+        )
+        self._status_bar.set_status(dlg.summary_sentence())
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _show_stats(self) -> None:
+        """Show the Listening Statistics dialog and announce this week's
+        total on open."""
+        from radiomaster.ui.stats_dialog import StatsDialog
+        dlg = StatsDialog(self, self._stats_service)
+        self._status_bar.set_status(dlg.summary_sentence())
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _show_first_run_wizard(self) -> None:
+        """Show the first-run wizard once, when the flag is unset. Skip
+        and Finish both set general.first_run_complete so it never asks
+        again."""
+        from radiomaster.ui.first_run_dialog import FirstRunDialog
+        dlg = FirstRunDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
+        self._config.set("general.first_run_complete", value=True)
+        self._config.save()
+        self._status_bar.set_status("Welcome wizard finished. Press F1 for the user manual.")
+
+    def _stats_source_type(self) -> str:
+        """Which kind of source is playing, for listening-statistics
+        grouping. Derived from the selected tab, matching how each panel
+        calls engine.play()."""
+        sel = self._listbook.GetSelection()
+        if sel == self._TAB_RADIO:
+            return "station"
+        if sel == self._TAB_PODCASTS:
+            return "podcast"
+        if sel == self._TAB_DOWNLOADS:
+            return "download"
+        return "media"
+
     def _health_skip_urls(self) -> set[str]:
         """URLs the health scan must never probe: the currently-playing
         stream and every station currently being recorded (manual or
@@ -2089,4 +2208,89 @@ class MainWindow(wx.Frame):
         current_pos = self._engine.position
         self._engine.seek(max(0, current_pos - 30))
         self._status_bar.set_status("Rewind")
+
+    def _jump_back_live(self) -> None:
+        """Jump Back 15s on live radio (time-shift). Every outcome is
+        spoken: the jump, the refusal, or the wait."""
+        if not self._engine._is_live or self._engine._is_video_active:
+            self._status_bar.set_status(
+                "Jump back works on live radio only.", False)
+            return
+        if self._engine.jump_back():
+            self._status_bar.set_status(
+                "Jumping back 15 seconds. One moment while the buffer fills.", False)
+        else:
+            self._status_bar.set_status(
+                "Could not start the time-shift buffer. FFmpeg may be missing.", False)
+
+    def _jump_forward_live(self) -> None:
+        """Jump Forward 15s toward the live edge; at the edge, return to
+        the live stream and say so."""
+        behind = self._engine.timeshift_behind_seconds()
+        if behind <= 0:
+            self._status_bar.set_status(
+                "You are at the live edge. Nothing to jump forward over.", False)
+            return
+        if self._engine.jump_forward():
+            remaining = self._engine.timeshift_behind_seconds()
+            if remaining <= 0:
+                self._status_bar.set_status("Caught up to live.", False)
+            else:
+                minutes, seconds = divmod(int(remaining), 60)
+                spoken = f"{minutes} minute{'s' if minutes != 1 else ''} {seconds} second{'s' if seconds != 1 else ''}"
+                self._status_bar.set_status(f"Behind live by {spoken}.", False)
+        else:
+            self._status_bar.set_status("Could not jump forward.", False)
+
+    def _show_continue_listening(self) -> None:
+        """File > Continue Listening...: one list of unfinished things
+        across podcasts, audiobooks, and local files."""
+        from radiomaster.services.continue_listening import ContinueListeningService
+        from radiomaster.ui.continue_listening_dialog import ContinueListeningDialog
+        service = ContinueListeningService(self._db)
+        dialog = ContinueListeningDialog(self, service,
+                                         on_resume=self._resume_continue_item)
+        dialog.ShowModal()
+        dialog.Destroy()
+
+    def _resume_continue_item(self, item) -> None:
+        """Resume one unfinished thing: play its file and seek to the
+        saved position (the same delayed-seek technique the podcast and
+        audiobook panels use for their own resume prompts)."""
+        import threading
+        from radiomaster.services.continue_listening import ContinueListeningService
+        if not item.file_path:
+            self._status_bar.set_status(
+                "That item has no local file to resume.", False)
+            return
+        self._engine.play(item.file_path, title=item.title)
+        if item.position > 0:
+            position = item.position
+            threading.Timer(1.0, lambda: self._engine.seek(position)).start()
+        self._status_bar.set_status(
+            f"Resuming {item.title} from "
+            f"{ContinueListeningService.describe_position(item.position, item.duration)}.",
+            False)
+
+    def _show_rate_step(self, delta: float) -> None:
+        """Per-show speed (Ctrl+Shift+Up/Down while a podcast episode
+        plays): changes the speed and remembers it for the show -- the
+        global rate slider is untouched. Outside a playing episode it
+        says so instead of silently doing nothing."""
+        podcast_id = getattr(self._podcast_panel, "_current_episode_id", None)
+        episode = None
+        if podcast_id is not None:
+            from radiomaster.database.repository import EpisodeRepository
+            episode = EpisodeRepository(self._db).get(podcast_id)
+        if episode is None or not episode.get("podcast_id"):
+            self._status_bar.set_status(
+                "Per-show speed works while a podcast episode is playing.", False)
+            return
+        from radiomaster.database.repository import PodcastRepository
+        repo = PodcastRepository(self._db)
+        new_rate = max(0.5, min(3.0, round(self._engine.rate + delta, 2)))
+        self._engine.set_rate(new_rate)
+        repo.set_playback_rate(episode["podcast_id"], new_rate)
+        spoken = f"{new_rate:g} times speed. Remembered for this show."
+        self._status_bar.set_status(spoken, False)
 

@@ -30,14 +30,26 @@ def test_startup_indicator_lifetime(monkeypatch, fails):
     monkeypatch.setattr("radiomaster.ui.splash.show_splash", show)
     monkeypatch.setattr("wx.Yield", lambda: events.append("paint"))
     window = MagicMock()
+    failures = []
     panel = SimpleNamespace(SetAppName=MagicMock(), SetVendorName=MagicMock(),
-                            _initialize=initialize, _main_window=None if fails else window)
+                            _initialize=initialize, _main_window=None if fails else window,
+                            _show_startup_failure=lambda exc, reason, log:
+                                failures.append((exc, reason, log)))
     if fails:
-        with pytest.raises(RuntimeError, match="startup failed"):
-            RadioMasterApp.OnInit(panel)
+        # A launcher that says why: the failure is caught, spoken through
+        # _show_startup_failure, and OnInit returns False instead of
+        # propagating a silent crash out of the event loop.
+        assert RadioMasterApp.OnInit(panel) is False
+        assert len(failures) == 1
+        exc, reason, log = failures[0]
+        assert isinstance(exc, RuntimeError)
+        assert "startup failed" in reason
+        # log may be None when the launch log was never started (tests);
+        # the dialog simply omits the log line in that case.
     else:
         assert RadioMasterApp.OnInit(panel) is True
         window.Raise.assert_called_once()
+        assert failures == []
     assert events == ["show", "paint", "initialize", "destroy"]
 
 

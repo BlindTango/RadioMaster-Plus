@@ -48,6 +48,9 @@ def app_and_window(tmp_path, monkeypatch):
     config.set("updates.check_on_startup", value=False)
     config.set("updates.ytdlp_auto_update", value=False)
     config.set("radio.station_update_frequency", value="off")
+    # First-run wizard must not pop up mid-test (its deferred CallAfter
+    # would fire after the window is torn down).
+    config.set("general.first_run_complete", value=True)
     config.save()
     # Network discovery is not part of a keyboard/focus check.
     monkeypatch.setattr("radiomaster.services.station_api._discover_servers", lambda: [])
@@ -1492,6 +1495,7 @@ class TestPodcastContextMenuKeys:
         assert len(menus) == 1
         if list_name == "_podcast_list":
             assert menus[0] == ["Unsubscribe", "Add RSS Feed...",
+                                "New Folder...",
                                 "Import gpodder.net Subscriptions", "Import OPML...",
                                 "Export OPML..."]
         else:

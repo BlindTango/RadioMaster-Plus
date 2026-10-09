@@ -54,10 +54,49 @@ class RadioMasterApp(wx.App):
         try:
             wx.Yield()
             return self._initialize()
+        except Exception as exc:
+            # A launcher that says why (borrowed from Quill Radio 3.0.4):
+            # previously an exception here left the splash gone, no window,
+            # and nothing at all on screen -- indistinguishable from "the
+            # app does nothing". Record it, then say it in words.
+            from radiomaster.utils.launch_log import (
+                BundleIncompleteError, classify_failure, path as launch_log_path,
+                record_exception,
+            )
+            record_exception(exc)
+            if isinstance(exc, BundleIncompleteError):
+                reason = (
+                    "This copy of RadioMaster+ is incomplete -- it looks like it was "
+                    "run from inside a zip without extracting it first.\n\n"
+                    "Close this window, right-click the zip file in File Explorer, "
+                    "choose \"Extract All...\", and then run the extracted "
+                    "RadioMaster+.exe."
+                )
+            else:
+                reason = classify_failure(exc)
+            self._show_startup_failure(exc, reason, launch_log_path())
+            return False
         finally:
             splash.Destroy()
             if self._main_window:
                 self._main_window.Raise()
+
+    def _show_startup_failure(self, exc: Exception, reason: str,
+                               log_path: str | None) -> None:
+        """One plain message a screen reader reads on its own."""
+        import wx
+        lines = [
+            "RadioMaster+ did not start.",
+            "",
+            reason,
+            "",
+        ]
+        if log_path:
+            lines.append(f"The launch log, for support, is at:\n{log_path}")
+            lines.append("")
+        lines.append("Please report this at:\nhttps://github.com/BlindTango/RadioMaster-Plus/issues")
+        wx.MessageBox("\n".join(lines), "RadioMaster+ did not start",
+                      wx.OK | wx.ICON_ERROR)
 
     def _initialize(self) -> bool:
         """Initialize the application."""
@@ -71,6 +110,14 @@ class RadioMasterApp(wx.App):
 
         self.SetAppName(__app_name__)
         self.SetVendorName(__app_name__)
+
+        # A packaged copy missing its _internal folder is the signature of
+        # "ran from inside a zip" -- check before anything else can fail so
+        # the failure dialog says the zip was never extracted, not a
+        # generic "incomplete copy" (see launch_log.check_bundle).
+        from radiomaster.utils.launch_log import check_bundle, record
+        check_bundle()
+        record("Bundle check passed")
 
         # Held for the process's entire lifetime (released/closed in
         # OnExit) -- its mere existence is the signal AppMutex checks for,

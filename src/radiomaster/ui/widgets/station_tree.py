@@ -94,6 +94,7 @@ SECTION_NETWORK = "network"
 SECTION_CUSTOM = "custom"
 SECTION_FAVORITES = "favorites"
 SECTION_SEARCH = "search"
+SECTION_SOURCES = "sources"
 
 SECTION_CHOICES = [
     ("Alphabetical", SECTION_ALPHABET, "Letter", "Letters:"),
@@ -101,6 +102,7 @@ SECTION_CHOICES = [
     ("By Country", SECTION_COUNTRY, "Country", "Countries:"),
     ("By Language", SECTION_LANGUAGE, "Language", "Languages:"),
     ("By Network", SECTION_NETWORK, "Network", "Networks:"),
+    ("Sources", SECTION_SOURCES, "Source", "Sources:"),
     ("Custom Stations", SECTION_CUSTOM, "Station", "Custom Stations:"),
     ("Favorites", SECTION_FAVORITES, "Station", "Favorites:"),
     ("Search Results", SECTION_SEARCH, "Station", "Search Results:"),
@@ -144,9 +146,21 @@ class _VirtualStationList(_TypeAheadMixin, wx.ListCtrl):
     def __init__(self, parent):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.LC_VIRTUAL)
         self.stations: list[Station] = []
+        # Multi-source rows (SourceNode list) or a single failure
+        # sentence (str) -- rendered instead of stations when the tree
+        # is in the Sources section. A virtual list can only serve
+        # OnGetItemText, so both modes flow through _rows below.
+        self.source_rows: list = []
         self._init_typeahead()
 
     def OnGetItemText(self, item, column):
+        if self.source_rows:
+            row = self.source_rows[item]
+            if isinstance(row, str):
+                return row if column == 0 else ""
+            if column == 0:
+                return row.label
+            return row.note or ""
         if not (0 <= item < len(self.stations)):
             return ""
         station = self.stations[item]
@@ -157,16 +171,30 @@ class _VirtualStationList(_TypeAheadMixin, wx.ListCtrl):
         return str(station.bitrate) if station.bitrate else ""
 
     def set_stations(self, stations: list[Station]) -> None:
+        self.source_rows = []
         self.stations = stations
         self.SetItemCount(len(stations))
         if stations:
             self.RefreshItems(0, len(stations) - 1)
 
+    def set_source_rows(self, rows: list) -> None:
+        """Render SourceNodes (or one failure sentence) in place of
+        stations. The list is virtual, so rows are served through
+        OnGetItemText rather than inserted as real items."""
+        self.stations = []
+        self.source_rows = rows
+        self.SetItemCount(len(rows))
+        if rows:
+            self.RefreshItems(0, len(rows) - 1)
+
     def _typeahead_item_text(self, index: int) -> str:
+        if self.source_rows:
+            row = self.source_rows[index]
+            return row if isinstance(row, str) else row.label
         return self.stations[index].name
 
     def _typeahead_count(self) -> int:
-        return len(self.stations)
+        return len(self.source_rows) if self.source_rows else len(self.stations)
 
 
 class StationTree(wx.Panel):
@@ -177,6 +205,23 @@ class StationTree(wx.Panel):
         self.db = db
         self.on_station_activated: Optional[Callable[[Station], None]] = None
         self.on_selection_changed: Optional[Callable[[], None]] = None
+        # Multi-source catalog (services/sources/): the Sources section's
+        # group list shows enabled sources; selecting one lazily browses
+        # it on a worker thread (radio_panel drives the thread part --
+        # this class only renders what it is handed, keeping wx calls on
+        # the UI thread).
+        self._source_nodes: dict[str, list] = {}
+        self._source_failed: set[str] = set()
+        self._source_selected: Optional[str] = None
+        self._source_ids: list[str] = []
+        self._source_labels: list[str] = []
+        self._current_source_rows: list = []
+        self.on_source_selected: Optional[Callable[[str], None]] = None
+        self.on_source_node_activated: Optional[Callable[[object], None]] = None
+        # Fired when the user switches to the Sources section before any
+        # source list has been handed over -- the panel responds by
+        # calling show_sources() with the enabled set.
+        self.on_sources_needed: Optional[Callable[[], None]] = None
 
         self._section_groups: dict[str, list[tuple[str, int]]] = {}
         self._current_section: str = SECTION_ALPHABET
@@ -310,7 +355,93 @@ class StationTree(wx.Panel):
         self._update_group_label(SECTION_SEARCH)
         self._show_flat_list(self._search_stations)
 
+    def append_search_results(self, stations: list[Station]) -> None:
+        """Append late-arriving search results (source fanout) to the
+        Search Results section without moving the cursor: the user's
+        current selection index is captured before the merge and
+        restored after, so a late group landing mid-arrow never jumps
+        the focus (Quill's 'your place is kept')."""
+        if self._current_section != SECTION_SEARCH:
+            # The user moved on; keep the results for when they return,
+            # but do not yank the tree out from under another section.
+            self._search_stations = sorted(
+                self._search_stations + stations, key=lambda s: s.name.lower())
+            return
+        selected = self.station_list.GetFirstSelected()
+        merged = sorted(self._search_stations + stations,
+                        key=lambda s: s.name.lower())
+        self._search_stations = merged
+        self._show_flat_list(merged)
+        if 0 <= selected < len(merged):
+            self.station_list.Select(selected)
+            self.station_list.Focus(selected)
+            self.station_list.EnsureVisible(selected)
+
+    # ------------------------------------------------------------------
+    # Multi-source catalog (services/sources/) -- the Sources section.
+    # The group list shows enabled sources; the station list shows the
+    # selected source's browse rows. radio_panel owns the worker thread
+    # and calls set_source_rows()/set_source_failed() back on the UI
+    # thread; this class only renders, so every method here is cheap.
+    # ------------------------------------------------------------------
+
+    def show_sources(self, source_labels: list[tuple[str, str]]) -> None:
+        """Switch to the Sources section. *source_labels* is (label, id)
+        per enabled source, in registry order."""
+        idx = [key for _, key, *_ in SECTION_CHOICES].index(SECTION_SOURCES)
+        self.section_choice.SetSelection(idx)
+        self._current_section = SECTION_SOURCES
+        self._update_group_label(SECTION_SOURCES)
+        self._source_labels = [label for label, _sid in source_labels]
+        self._source_ids = [sid for _label, sid in source_labels]
+        self._current_groups = [(label, 0) for label in self._source_labels]
+        self.group_list.set_groups(self._current_groups)
+        if self._current_groups:
+            self._select_group_index(0)
+
+    def set_source_rows(self, source_id: str, rows: list) -> None:
+        """Render a source's browse rows (SourceNode list) in the station
+        list. Rows are kept as-is: playable nodes activate through
+        on_source_node_activated, folder nodes re-browse through
+        on_source_selected with the node's path."""
+        self._source_nodes[source_id] = rows
+        self._source_failed.discard(source_id)
+        if self._source_selected == source_id:
+            self._render_source_rows(source_id)
+
+    def set_source_failed(self, source_id: str, sentence: str) -> None:
+        """Render a source's honest failure sentence as its single row --
+        never a silent empty list, which is indistinguishable from
+        'nothing here'."""
+        self._source_failed.add(source_id)
+        self._source_nodes[source_id] = [sentence]
+        if self._source_selected == source_id:
+            self._render_source_rows(source_id)
+
+    def _render_source_rows(self, source_id: str) -> None:
+        rows = self._source_nodes.get(source_id, [])
+        self._current_source_rows = rows
+        # The virtual list serves rows through OnGetItemText (see
+        # _VirtualStationList.set_source_rows) -- a failure sentence is
+        # just a one-string row list, so it renders identically.
+        self.station_list.set_source_rows(rows)
+        if rows:
+            self.station_list.SetItemState(0, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
+
+    def get_selected_source_row(self):
+        """The SourceNode under the cursor in the Sources section, or None."""
+        idx = self.station_list.GetFirstSelected()
+        rows = getattr(self, "_current_source_rows", [])
+        if 0 <= idx < len(rows):
+            return rows[idx]
+        return None
+
     def get_selected_station(self) -> Optional[Station]:
+        if self._current_section == SECTION_SOURCES:
+            # Source rows are SourceNodes, not Stations -- returning a
+            # stale Station from the previous section would make the
+            # Record/context-menu actions target the wrong thing.
+            return None
         idx = self.station_list.GetFirstSelected()
         if 0 <= idx < len(self._current_stations):
             return self._current_stations[idx]
@@ -341,6 +472,21 @@ class StationTree(wx.Panel):
     def _select_group_index(self, idx: int) -> None:
         if not (0 <= idx < len(self._current_groups)):
             self._populate_station_list([])
+            return
+        if self._current_section == SECTION_SOURCES and idx < len(self._source_ids):
+            # Sources mode: claim the selection BEFORE Select() fires
+            # _on_group_selected (which would otherwise re-browse the
+            # previously selected source), then render the cache or ask
+            # the panel to browse -- a re-expand of a cached source is
+            # instant with no second "Loading...".
+            self._source_selected = self._source_ids[idx]
+            self.group_list.Select(idx)
+            self.group_list.Focus(idx)
+            self.group_list.EnsureVisible(idx)
+            if self._source_selected in self._source_nodes:
+                self._render_source_rows(self._source_selected)
+            elif self.on_source_selected:
+                self.on_source_selected(self._source_selected)
             return
         self.group_list.Select(idx)
         self.group_list.Focus(idx)
@@ -401,6 +547,17 @@ class StationTree(wx.Panel):
         key = SECTION_CHOICES[idx][1]
         if key in (SECTION_ALPHABET, SECTION_GENRE, SECTION_COUNTRY, SECTION_LANGUAGE, SECTION_NETWORK):
             self._show_section(key)
+        elif key == SECTION_SOURCES:
+            # The Sources section's group list is populated by
+            # show_sources(); when the user arrives here before any
+            # source has been selected, ask the panel for the list.
+            if not getattr(self, "_source_ids", None):
+                if self.on_sources_needed:
+                    self.on_sources_needed()
+            else:
+                self._current_groups = [(label, 0) for label in self._source_labels]
+                self.group_list.set_groups(self._current_groups)
+                self._select_group_index(0)
         elif key == SECTION_CUSTOM:
             self._current_section = SECTION_CUSTOM
             self._update_group_label(SECTION_CUSTOM)
@@ -419,6 +576,23 @@ class StationTree(wx.Panel):
         if not (0 <= idx < len(self._current_groups)):
             return
         name, _count = self._current_groups[idx]
+        if self._current_section == SECTION_SOURCES:
+            # Selecting a source lazily browses it: the panel's worker
+            # thread calls set_source_rows()/set_source_failed() back.
+            # Until then the station list keeps whatever it had -- the
+            # "Loading..." row is the panel's to add, matching Quill's
+            # contract that a branch never looks permanently stuck.
+            # _select_group_index() already fired the browse for this
+            # selection (Select() re-enters here), so skip when the
+            # source is already the selected one -- a double browse
+            # would race two workers over one "Loading..." row.
+            if idx < len(self._source_ids):
+                source_id = self._source_ids[idx]
+                if source_id != self._source_selected:
+                    self._source_selected = source_id
+                    if self.on_source_selected:
+                        self.on_source_selected(source_id)
+            return
         self._load_stations_for_group(name)
 
     def _on_station_selected(self, event: wx.ListEvent) -> None:
@@ -427,5 +601,13 @@ class StationTree(wx.Panel):
 
     def _on_station_activated_event(self, event: wx.ListEvent) -> None:
         idx = event.GetIndex()
+        if self._current_section == SECTION_SOURCES:
+            # A source row: playable nodes hand their StationRef to the
+            # panel; folder nodes re-browse through on_source_selected
+            # with the node's own path (the panel knows the source).
+            row = self.get_selected_source_row()
+            if row is not None and self.on_source_node_activated:
+                self.on_source_node_activated(row)
+            return
         if 0 <= idx < len(self._current_stations) and self.on_station_activated:
             self.on_station_activated(self._current_stations[idx])

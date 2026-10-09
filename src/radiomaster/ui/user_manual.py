@@ -223,15 +223,30 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         """),
         _topic("Browsing and Searching Stations", """
             Choose a browsing section such as Alphabetical, By Genre, By Country,
-            By Language, By Network, Custom Stations, or Favorites. Choose a group
-            where applicable, then move to the station results. All Stations and the
+            By Language, By Network, Sources, Custom Stations, or Favorites. Choose a
+            group where applicable, then move to the station results. All Stations and the
             corresponding All groups broaden the selection.
+
+            The Sources section lists additional station sources beyond the main
+            catalogue: SomaFM (listener-supported independent radio), ACB Media
+            (the American Council of the Blind's ten live streams), and the Internet
+            Archive (searchable public audio collections). Selecting a source loads
+            its rows; a source that works offline keeps answering without a network
+            connection. Each row says what it is before you press Enter, including
+            licensing notes such as "Public domain or Creative Commons". If a source
+            cannot be reached, its row says so in words rather than showing nothing.
+            Tools > Choose Browse Sources... controls which sources appear; hidden
+            sources are removed from the list and everything else stays in place.
 
             In the Radio Search field, enter a station name, genre, country, or language
             and press Enter or Search. Results come from the local catalogue, including
             matches beyond the first part of the station list. The columns include the
             station name, country, and reported bitrate. These catalogue values can be
-            stale; the status bar checks the actual stream separately.
+            stale; the status bar checks the actual stream separately. Searchable extra
+            sources are queried at the same time; their results arrive as they finish,
+            each labelled with its source, and the status bar announces when all
+            sources have reported. Your position in the results does not move when a
+            late group arrives.
 
             In station and group lists, type the beginning of a name to jump to a
             matching entry. This type-ahead navigation moves selection; it is separate
@@ -274,6 +289,19 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             A failed stream can report a connection, format, or access problem. Try a
             different station to distinguish one unavailable stream from a network or
             output-device problem. A site may restrict access by region or reject clients.
+        """),
+        _topic("Live Time-Shift: Jump Back and Forward", """
+            While a live station is playing, the Jump Back 15s and Jump Forward 15s
+            buttons on the transport bar let you rewind and fast-forward within the
+            live buffer. Press Jump Back 15s ({shortcut:seek_back_15}) to go 15 seconds
+            behind the live edge; the status bar says how far behind you are ("Behind
+            live by 15 seconds."). Press Jump Forward 15s ({shortcut:seek_forward_15})
+            to move toward the live edge; when you reach it, the app says "Caught up
+            to live." and returns to the live stream.
+
+            The buttons are greyed out when no live station is playing. Jumping back
+            starts a background buffer of the live stream; switching stations or
+            pressing Stop cleans up the buffer automatically.
         """),
         _topic("Refreshing the Station Catalogue", """
             Open Tools > Settings > Radio. Station list update frequency controls
@@ -403,6 +431,27 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Selecting an episode shows its description and available details in Content
             Display. If it is hidden, use View > Toggle Lyrics Panel. In Podcasts this
             shared display contains show notes rather than a song-lyrics lookup.
+        """),
+        _topic("Podcast Folders and Unheard Badges", """
+            Organize subscriptions into folders from the Podcasts list context menu
+            (Shift+F10): New Folder creates a named folder, Move to Folder moves a show
+            into it, Rename Folder changes its name, and Delete Folder removes it (its
+            shows move back to the main list, confirmed with the real count). Each
+            action announces its result in the status bar.
+
+            Each show's row carries an unheard badge: "Title (3 unheard)" when episodes
+            remain unplayed. Playing an episode to the end or marking it played drops
+            the count immediately. Mark All as Played on a show's context menu marks
+            every unheard episode at once, announces the count, and stays on the menu
+            but dimmed when there is nothing left to mark.
+        """),
+        _topic("Per-Show Playback Speed", """
+            Press Ctrl+Shift+Up ({shortcut:show_rate_up}) to speed up or Ctrl+Shift+Down
+            ({shortcut:show_rate_down}) to slow down the current podcast episode. The
+            new speed is spoken ("1.75 times speed. Remembered for this show.") and
+            saved per show: the next time you play an episode of that show, it starts
+            at the remembered speed. The global Rate slider on the transport bar is
+            not affected and stays in charge for radio, audiobooks, and local media.
         """),
         _topic("Downloading Episodes and Complete Feeds", """
             Choose Download from the Episodes list context menu to queue one
@@ -901,6 +950,41 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             not yet defer stopping until a track or playlist boundary. Use Countdown
             when choosing the behavior you can currently rely on.
         """),
+        _topic("Song History", """
+            Open Tools > Song History ({shortcut:song_history}) to see what songs have
+            played on the current station, newest first. Each row shows the artist, title,
+            station name, and the time it played (spoken as "at 3:42 PM"). Check "All
+            stations" to see history across every station you have listened to.
+
+            The context menu on any row offers Copy (copies "Artist - Title" to the
+            clipboard) and Search Lyrics (looks up the song in the Lyrics tab). History
+            is capped at 500 songs per station so it cannot grow without bound.
+        """),
+        _topic("Station Catalog Status", """
+            Open Tools > Station Catalog Status ({shortcut:catalog_status}) to see how
+            many stations are stored in the offline catalog, when it was last updated
+            (spoken as a relative time like "3 days ago"), the configured refresh
+            schedule, and when the next update is due. Choose Update Now to refresh the
+            catalog immediately; progress is shown in the status bar.
+        """),
+        _topic("Listening Statistics", """
+            Open Tools > Listening Statistics ({shortcut:stats}) to see how long you
+            have listened. The summary is spoken on open ("You have listened for 4 hours
+            12 minutes this week."). Only actual playing time is counted: pausing or
+            stopping ends a session, so buffering and paused time are never included.
+        """),
+        _topic("Continue Listening", """
+            Open File > Continue Listening ({shortcut:continue_listening}) to see
+            everything you started but did not finish, across podcast episodes,
+            audiobooks, and local media files. Each row names the kind, title, parent
+            (show or author), and how far in you were (spoken as "12 of 45 minutes").
+
+            The opening summary says how many things are waiting and what types they
+            span. The context menu offers Resume (plays the file and seeks to your
+            saved position), Forget This One (zeros the position without touching the
+            file), and Open Containing Folder for downloaded files. A file that has
+            been moved or deleted is quietly absent from the list.
+        """),
     ]),
     ("Settings", [
         _topic("Settings", """
@@ -1213,6 +1297,18 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             that moving a file can make an old History entry unable to find it.
         """),
         _topic("Troubleshooting", """
+            If RadioMaster+ does not start, the app keeps a launch log of everything
+            that happens before its main log begins. When startup fails, one message
+            explains the reason in words, where the launch log is, and where to report
+            the problem. The launch log lives at data\\logs\\launch.log beside a
+            portable copy, and in the per-user data folder's logs subfolder for an
+            installed one. A message saying the copy is incomplete usually means the
+            release zip was never extracted: close the message, right-click the zip
+            in File Explorer, choose Extract All..., and run the extracted
+            RadioMaster+.exe. A "Failed to load Python DLL" message from the loader
+            means the same thing -- a single file copied out of the zip cannot run
+            alone. Reinstalling from the latest release repairs a damaged copy.
+
             If audio stops responding during podcast playback or an episode change,
             RadioMaster+ terminates the unresponsive audio process. Stream opening
             can take up to 45 seconds; Stop and other audio commands wait up to

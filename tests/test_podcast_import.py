@@ -188,9 +188,11 @@ def test_podcast_keyboard_menu_supports_empty_list_and_subscription_state(
     search, selected, rows, enabled,
 ):
     menu = MagicMock()
-    unsubscribe, add_feed = MagicMock(), MagicMock()
-    gpodder, import_opml, export_opml = MagicMock(), MagicMock(), MagicMock()
-    menu.Append.side_effect = [unsubscribe, add_feed, gpodder, import_opml, export_opml]
+    # The context menu now includes "New Folder..." and optionally
+    # "Mark All as Played" / "Move to Folder..." (borrowed from Quill
+    # Radio's podcast organization). Each Append returns a distinct mock
+    # so Enable/Bind assertions can target specific items.
+    menu.Append.side_effect = [MagicMock() for _ in range(12)]
     wx = SimpleNamespace(Menu=lambda: menu, ID_ANY=-1, NOT_FOUND=-1,
                          DefaultPosition=(-1, -1), EVT_MENU=object())
     event = MagicMock()
@@ -200,19 +202,52 @@ def test_podcast_keyboard_menu_supports_empty_list_and_subscription_state(
         _viewing_search_results=search, _update_subscription_buttons=MagicMock(),
         _on_unsubscribe=MagicMock(), _on_add_feed=MagicMock(),
         _on_sync_gpodder=MagicMock(), _on_import_opml=MagicMock(), _on_export_opml=MagicMock(),
+        _on_new_folder=MagicMock(), _on_move_to_folder=MagicMock(),
+        _on_rename_folder=MagicMock(), _on_delete_folder=MagicMock(),
+        _on_mark_all_played=MagicMock(),
+        # EpisodeRepository(self._db).unheard_count() calls fetchall and
+        # reads ["n"] -- give it a real answer so the Enable() check works.
+        _db=SimpleNamespace(
+            fetchall=lambda *a, **k: [{"n": 0}],
+            execute=MagicMock(), commit=MagicMock(),
+        ),
     )
     panel._podcast_list.GetFirstSelected.return_value = selected
+    # Capture each menu.Append return value by intercepting side_effect:
+    # MagicMock converts the list to an iterator, so we can't zip with
+    # the original list afterward. Instead, record returns as they happen.
+    appended_returns = []
+    original_side_effect = menu.Append.side_effect
+
+    def _tracking_append(*args, **kwargs):
+        ret = next(_tracking_append._iter)
+        appended_returns.append(ret)
+        return ret
+    _tracking_append._iter = iter(original_side_effect)
+    menu.Append.side_effect = _tracking_append
+
     panel_method("_on_podcast_context_menu", wx=wx,
                  context_menu_pos=lambda ctrl, event: (10, 10))(panel, event)
+    # Map labels to return values for the assertions below.
+    items_by_label = {}
+    for call, ret in zip(menu.Append.call_args_list, appended_returns):
+        label = call.args[1] if len(call.args) > 1 else ""
+        items_by_label[label] = ret
+    unsubscribe = items_by_label.get("&Unsubscribe", MagicMock())
+    add_feed = items_by_label.get("&Add RSS Feed...", MagicMock())
     unsubscribe.Enable.assert_called_once_with(enabled)
     add_feed.Enable.assert_not_called()
     menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_add_feed, add_feed)
     menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_unsubscribe, unsubscribe)
-    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_sync_gpodder, gpodder)
-    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_import_opml, import_opml)
-    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_export_opml, export_opml)
-    gpodder.Enable.assert_called_once_with(True)
-    import_opml.Enable.assert_called_once_with(True)
+    # The gpodder/import/export items are always present; find them by label.
+    gpodder_item = items_by_label.get("Import &gpodder.net Subscriptions", MagicMock())
+    import_item = items_by_label.get("&Import OPML...", MagicMock())
+    export_item = items_by_label.get("&Export OPML...", MagicMock())
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_sync_gpodder, gpodder_item)
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_import_opml, import_item)
+    menu.Bind.assert_any_call(wx.EVT_MENU, panel._on_export_opml, export_item)
+    gpodder_item.Enable.assert_called_once_with(True)
+    import_item.Enable.assert_called_once_with(True)
     panel._podcast_list.Select.assert_not_called()
     panel._podcast_list.PopupMenu.assert_called_once_with(menu, (10, 10))
     menu.Destroy.assert_called_once()

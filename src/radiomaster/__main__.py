@@ -18,6 +18,13 @@ def main() -> None:
         bass_host_main()
         return
 
+    # Must run before anything else can fail -- see launch_log's docstring.
+    # The worst thing an app can do when it cannot start is nothing at all
+    # (borrowed from Quill Radio 3.0.4's launcher): this keeps a record of
+    # everything that goes wrong from the very first import on.
+    from radiomaster.utils.launch_log import start as launch_log_start
+    launch_log_start()
+
     from radiomaster.app import RadioMasterApp
     app = RadioMasterApp()
     app.MainLoop()
