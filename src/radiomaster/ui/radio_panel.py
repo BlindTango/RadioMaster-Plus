@@ -327,19 +327,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         if stations:
             self.tree.append_search_results(stations)
 
-    def open_browse_sources_dialog(self) -> None:
-        """Tools > Choose Browse Sources...: checkbox per source; OK
-        persists and refreshes the Sources section in place."""
-        from radiomaster.ui.browse_sources_dialog import BrowseSourcesDialog
-        dialog = BrowseSourcesDialog(self, self._source_registry)
-        if dialog.ShowModal() == wx.ID_OK and dialog.changed():
-            self._source_registry.set_enabled_ids(dialog.selected_ids())
-            from radiomaster.utils.config import ConfigManager
-            ConfigManager.get_instance().save()
-            self.refresh_sources_after_config_change()
-            self.set_status("Status: Browse sources updated.", False)
-        dialog.Destroy()
-
     def open_song_history(self) -> None:
         """Tools > Song History...: what played on the current station
         (or all stations), newest first, with Copy / Identify / Lyrics
@@ -442,13 +429,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         # speak it rather than doing nothing at all.
         if row.note:
             self.set_status(f"Status: {row.note}")
-
-    def refresh_sources_after_config_change(self) -> None:
-        """Re-read the enabled set after Choose Browse Sources changes
-        it, so the Sources section reflects the new selection without a
-        restart."""
-        self._source_browse_path.clear()
-        self.tree.show_sources(self._source_labels())
 
     def _on_tree_sel_changed(self) -> None:
         try:

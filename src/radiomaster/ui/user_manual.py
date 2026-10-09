@@ -235,8 +235,6 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             connection. Each row says what it is before you press Enter, including
             licensing notes such as "Public domain or Creative Commons". If a source
             cannot be reached, its row says so in words rather than showing nothing.
-            Tools > Choose Browse Sources... controls which sources appear; hidden
-            sources are removed from the list and everything else stays in place.
 
             In the Radio Search field, enter a station name, genre, country, or language
             and press Enter or Search. Results come from the local catalogue, including

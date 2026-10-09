@@ -352,8 +352,6 @@ class MainWindow(wx.Frame):
         tools_menu.AppendSeparator()
         self._menu_ids["station_health"] = wx.NewIdRef()
         tools_menu.Append(self._menu_ids["station_health"], "Station &Health Check...")
-        self._menu_ids["browse_sources"] = wx.NewIdRef()
-        tools_menu.Append(self._menu_ids["browse_sources"], "Choose &Browse Sources...")
         self._menu_ids["catalog_status"] = wx.NewIdRef()
         tools_menu.Append(self._menu_ids["catalog_status"], "Station Catalog &Status...")
         self._menu_ids["stats"] = wx.NewIdRef()
@@ -932,8 +930,7 @@ class MainWindow(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._show_track_splitter(), id=self._menu_ids["track_splitter"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_shortcut_editor(), id=self._menu_ids["shortcut_editor"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_station_health(), id=self._menu_ids["station_health"])
-        self.Bind(wx.EVT_MENU, lambda e: self._radio_panel.open_browse_sources_dialog(),
-                  id=self._menu_ids["browse_sources"])
+        self.Bind(wx.EVT_MENU, lambda e: self._show_catalog_status(), id=self._menu_ids["catalog_status"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_catalog_status(), id=self._menu_ids["catalog_status"])
         self.Bind(wx.EVT_MENU, lambda e: self._show_stats(), id=self._menu_ids["stats"])
         self.Bind(wx.EVT_MENU, lambda e: self._radio_panel.open_song_history(),
