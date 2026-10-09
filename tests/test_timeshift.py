@@ -100,3 +100,33 @@ def test_return_to_live_replays_stream(engine):
         engine._return_to_live()
     play.assert_called_once_with("https://example.com/live", "Example FM", "",
                                  is_live=True)
+
+
+def test_jump_back_seeks_existing_buffer(engine):
+    _live_engine(engine)
+    engine._timeshift_path = "buffer.mp3"
+    engine._timeshift_generation = engine._playback_generation
+    bass = mock.Mock()
+    bass.timeshift_seek.return_value = (True, 10.0, 55.0)
+    with mock.patch.object(engine, "_ensure_bass_radio", return_value=bass), \
+            mock.patch.object(engine, "_start_timeshift_tee") as start:
+        assert engine.jump_back() is True
+    bass.timeshift_seek.assert_called_once_with(-15.0)
+    start.assert_not_called()
+    engine._timeshift_path = None
+
+
+def test_delayed_jump_cannot_switch_a_new_station(engine, tmp_path):
+    _live_engine(engine)
+    buffer = tmp_path / "buffer.mp3"
+    buffer.write_bytes(b"x" * 300000)
+    bass = mock.Mock()
+    workers = []
+    with mock.patch.object(engine, "_ensure_bass_radio", return_value=bass), \
+            mock.patch.object(engine, "_start_timeshift_tee", return_value=str(buffer)), \
+            mock.patch("radiomaster.engine.playback_engine.threading.Thread") as thread:
+        thread.side_effect = lambda **kwargs: workers.append(kwargs["target"]) or mock.Mock()
+        assert engine.jump_back()
+    engine._playback_generation += 1
+    workers[0]()
+    bass.timeshift_play.assert_not_called()

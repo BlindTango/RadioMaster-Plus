@@ -56,10 +56,11 @@ class ContinueListeningService:
 
     def _episodes(self) -> list[tuple[str, ContinueItem]]:
         rows = self._db.fetchall(
-            "SELECT e.id, e.title, e.play_position, e.file_path, e.created_at, "
+            "SELECT e.id, e.title, e.play_position, e.duration, e.file_path, e.created_at, "
             "p.title AS show_title "
             "FROM episodes e JOIN podcasts p ON p.id = e.podcast_id "
             "WHERE e.is_played = 0 AND e.play_position > ? "
+            "AND (COALESCE(e.duration, 0) <= 0 OR e.play_position < e.duration) "
             "ORDER BY e.created_at DESC",
             (MIN_POSITION_SECONDS,),
         )
@@ -74,7 +75,7 @@ class ContinueListeningService:
                 title=data.get("title") or "Untitled episode",
                 parent=data.get("show_title") or "",
                 position=float(data.get("play_position") or 0),
-                duration=0.0,
+                duration=float(data.get("duration") or 0),
                 source_type="episode",
                 source_id=int(data.get("id") or 0),
                 file_path=path,
@@ -85,7 +86,9 @@ class ContinueListeningService:
         rows = self._db.fetchall(
             "SELECT id, title, author, last_position, duration, file_path, "
             "folder_path, created_at FROM audiobooks "
-            "WHERE last_position > ? ORDER BY created_at DESC",
+            "WHERE last_position > ? "
+            "AND (COALESCE(duration, 0) <= 0 OR last_position < duration) "
+            "ORDER BY created_at DESC",
             (MIN_POSITION_SECONDS,),
         )
         out = []
@@ -113,7 +116,9 @@ class ContinueListeningService:
         rows = self._db.fetchall(
             "SELECT id, title, artist, album, last_position, duration, "
             "file_path, created_at FROM media_files "
-            "WHERE last_position > ? ORDER BY created_at DESC",
+            "WHERE last_position > ? "
+            "AND (COALESCE(duration, 0) <= 0 OR last_position < duration) "
+            "ORDER BY created_at DESC",
             (MIN_POSITION_SECONDS,),
         )
         out = []

@@ -133,3 +133,22 @@ def test_newest_first_ordering(service):
         _add_podcast(service._db, episode_title=f"Ep {i}")
     items = service.items()
     assert len(items) == 5
+
+
+@pytest.mark.parametrize("table,position", [
+    ("episodes", "play_position"),
+    ("audiobooks", "last_position"),
+    ("media_files", "last_position"),
+])
+def test_completed_items_are_excluded(service, table, position):
+    _add_podcast(service._db)
+    _add_audiobook(service._db)
+    _add_media_file(service._db)
+    service._db.execute(f"UPDATE {table} SET duration = {position}")
+    assert len(service.items()) == 2
+
+
+def test_episode_duration_is_preserved(service):
+    episode_id = _add_podcast(service._db)
+    service._db.execute("UPDATE episodes SET duration = 600 WHERE id = ?", (episode_id,))
+    assert service.items()[0].duration == 600

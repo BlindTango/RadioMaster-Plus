@@ -309,7 +309,7 @@ class PlaybackEngine:
         """Start (or reuse) the ffmpeg tee writing *url* to a temp file.
         Returns the buffer path, or None when ffmpeg is unavailable."""
         if self._timeshift_process is not None and self._timeshift_path:
-            if self._timeshift_live_url == url:
+            if self._timeshift_live_url == url and self._timeshift_process.poll() is None:
                 return self._timeshift_path
             self._stop_timeshift_tee()
         from radiomaster.utils.tools import get_ffmpeg
@@ -319,12 +319,12 @@ class PlaybackEngine:
         import tempfile
         handle, path = tempfile.mkstemp(prefix="rmplus_timeshift_", suffix=".mp3")
         os.close(handle)
-        # -movflags is MP4-only; a plain MP3 stream tee needs nothing
-        # special. copy keeps it cheap (no re-encode).
+        # Sources may use AAC or other codecs; encode audio for the MP3 buffer.
         try:
             self._timeshift_process = subprocess.Popen(
                 [ffmpeg, "-y", "-loglevel", "error",
-                 "-i", url, "-c", "copy", "-f", "mp3", path],
+                 "-i", url, "-vn", "-c:a", "libmp3lame", "-b:a", "128k",
+                 "-flush_packets", "1", "-f", "mp3", path],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -373,15 +373,19 @@ class PlaybackEngine:
         bass = self._ensure_bass_radio()
         if bass is None:
             return False
+        if self._timeshift_generation == self._playback_generation and self._timeshift_path:
+            ok, _position, _length = bass.timeshift_seek(-seconds)
+            return ok
         path = self._start_timeshift_tee(self._current_url)
         if path is None:
             return False
         # Wait for the tee to have *seconds* of audio behind the live
         # edge before switching -- switching instantly would land at the
         # buffer's start (nothing recorded yet) and sound like a stop.
+        generation = self._playback_generation
         def _switch():
-            generation = self._playback_generation
             deadline = time.monotonic() + seconds + 5.0
+            size = 0
             while time.monotonic() < deadline:
                 if generation != self._playback_generation:
                     return  # user moved on
@@ -395,14 +399,18 @@ class PlaybackEngine:
                 if size >= seconds * 16000:
                     break
                 time.sleep(0.25)
+            else:
+                return  # Never replace live playback with an insufficient buffer.
             if generation != self._playback_generation:
                 return
             with self._play_lock:
                 if generation != self._playback_generation:
                     return
-                self._timeshift_generation = generation
-                bass.timeshift_play(path, volume=self._volume,
-                                    start_seconds=max(0.0, size / 16000.0 - seconds))
+                if self._timeshift_path != path or self._timeshift_generation == generation:
+                    return
+                if bass.timeshift_play(path, volume=self._volume,
+                                       start_seconds=max(0.0, size / 16000.0 - seconds)):
+                    self._timeshift_generation = generation
         threading.Thread(target=_switch, daemon=True).start()
         return True
 

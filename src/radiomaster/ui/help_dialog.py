@@ -98,7 +98,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "or try another station. The application log records disconnects, stalls, "
         "retry attempts, and retry limits for troubleshooting."
     )),
-    ("What's New in Version 1.2", (
+    ("What's New in Version 1.2.1", (
+        "Version 1.2.1 fixes the podcast speed shortcuts and restores each show's "
+        "saved speed, including normal speed. The shortcuts apply only to the "
+        "current podcast episode while playing or paused.\n\n"
+        "Repeated Jump Back presses seek farther back once buffer playback starts. "
+        "The first press needs time to collect audio; live playback continues if "
+        "the buffer is too short. Switching stations cancels a pending jump.\n\n"
+        "Continue Listening excludes items at or beyond their known duration and "
+        "shows the feed's episode duration when available."
+    )),
+    ("Features Added in Version 1.2", (
         "Five feature areas from Quill Radio are now in RadioMaster+:\n\n"
         "1. Jump Back 15s and Jump Forward 15s on the transport bar let you "
         "rewind and catch up on a live station.\n"
@@ -165,6 +175,20 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.2.1", (
+        "Podcast speed: the speed-up shortcut now supplies its adjustment correctly. "
+        "Shows saved at 1.0 times return to normal speed after a faster show. "
+        "Per-show shortcuts refuse to change an old episode after playback "
+        "switches to another source or stops.\n\n"
+        "Live time-shift: repeated Jump Back presses seek within the active buffer. "
+        "Pending jumps cannot switch a newly selected station, and insufficient "
+        "buffers leave live playback running. The buffer converts incoming audio "
+        "to MP3 so AAC and other supported stream formats can be recorded.\n\n"
+        "Continue Listening: completed items with known durations are excluded, "
+        "and episode rows retain the duration provided by the feed.\n\n"
+        "Help: the User Manual and Quick Start Guide explain the initial buffer "
+        "delay, repeated jumps, per-show speed controls, and resume limitations."
+    )),
     ("Version 1.2.0", (
         "Five feature areas borrowed from Quill Radio, the screen-reader-first "
         "internet radio player, are now in RadioMaster+.\n\n"

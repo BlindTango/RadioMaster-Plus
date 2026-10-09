@@ -1221,8 +1221,7 @@ class PodcastPanel(wx.Panel):
         if podcast_id:
             from radiomaster.database.repository import PodcastRepository
             show_rate = PodcastRepository(self._db).get_playback_rate(podcast_id)
-            if show_rate and abs(show_rate - 1.0) > 0.001:
-                self._engine.set_rate(show_rate)
+            self._engine.set_rate(show_rate or 1.0)
 
         if resume_position > 0:
             import threading

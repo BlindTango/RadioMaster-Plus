@@ -81,6 +81,34 @@ def panel_method(name, **globals):
     return namespace[name]
 
 
+def test_normal_speed_show_resets_previous_show_rate(db):
+    show_id = PodcastRepository(db).add("https://speed/feed", title="Normal show")
+    panel = SimpleNamespace(
+        _db=db, _episode_data=[{"audio_url": "https://audio/episode", "podcast_id": show_id}],
+        on_content_changed=None, _save_position=MagicMock(), _engine=MagicMock(),
+    )
+    panel_method("_play_episode_at")(panel, 0, False)
+    panel._engine.set_rate.assert_called_once_with(1.0)
+
+
+@pytest.mark.parametrize("url,state", [("https://radio/live", "playing"),
+                                       ("https://audio/episode", "stopped")])
+def test_show_speed_refuses_stale_episode(db, url, state):
+    from radiomaster.ui.main_window import MainWindow
+    show_id = PodcastRepository(db).add("https://speed/feed", title="Show")
+    db.execute("INSERT INTO episodes (podcast_id, title) VALUES (?, ?)", (show_id, "Episode"))
+    episode_id = db.fetchone("SELECT MAX(id) AS id FROM episodes")["id"]
+    engine = SimpleNamespace(current_url=url, state=state, set_rate=MagicMock())
+    window = SimpleNamespace(
+        _db=db, _engine=engine, _status_bar=MagicMock(),
+        _podcast_panel=SimpleNamespace(_current_episode_id=episode_id,
+                                      _last_played_url="https://audio/episode"),
+    )
+    MainWindow._show_rate_step(window, 0.1)
+    engine.set_rate.assert_not_called()
+    assert PodcastRepository(db).get_playback_rate(show_id) == 1.0
+
+
 @pytest.mark.parametrize("query,category,switch", [
     ("news", "Subscriptions", True),
     ("news", "Custom Feeds", True),

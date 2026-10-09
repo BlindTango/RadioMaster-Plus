@@ -647,7 +647,7 @@ class MainWindow(wx.Frame):
             "rate_up": lambda: self._on_rate_step(0.1), "rate_down": lambda: self._on_rate_step(-0.1),
             "speed_up": lambda: self._on_rate_step(0.1),
             "speed_down": lambda: self._on_rate_step(-0.1),
-            "show_rate_up": self._show_rate_step, "show_rate_down": lambda: self._show_rate_step(-0.1),
+            "show_rate_up": lambda: self._show_rate_step(0.1), "show_rate_down": lambda: self._show_rate_step(-0.1),
             "pan_left": lambda: self._on_pan_step(-0.1), "pan_right": lambda: self._on_pan_step(0.1),
             "first_track": self._first_track, "previous_track": self._prev_track,
             "next_track": self._next_track, "last_track": self._last_track,
@@ -2279,7 +2279,9 @@ class MainWindow(wx.Frame):
         if podcast_id is not None:
             from radiomaster.database.repository import EpisodeRepository
             episode = EpisodeRepository(self._db).get(podcast_id)
-        if episode is None or not episode.get("podcast_id"):
+        if (episode is None or not episode.get("podcast_id")
+                or self._engine.state not in ("playing", "paused")
+                or self._engine.current_url != self._podcast_panel._last_played_url):
             self._status_bar.set_status(
                 "Per-show speed works while a podcast episode is playing.", False)
             return

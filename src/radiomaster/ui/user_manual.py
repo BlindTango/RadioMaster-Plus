@@ -298,8 +298,14 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             to live." and returns to the live stream.
 
             The buttons are greyed out when no live station is playing. Jumping back
-            starts a background buffer of the live stream; switching stations or
-            pressing Stop cleans up the buffer automatically.
+            starts a background buffer of the live stream. The first jump waits for
+            enough audio to accumulate, so allow about 15 to 20 seconds. It cannot
+            recover audio from before you pressed the button. Once buffer playback
+            starts, each further Jump Back seeks another 15 seconds backward.
+            If insufficient audio arrives, live playback continues. The buffer
+            converts incoming audio to MP3, including stations that use AAC.
+            Switching stations, returning to live, or pressing Stop cleans up
+            the buffer automatically.
         """),
         _topic("Refreshing the Station Catalogue", """
             Open Tools > Settings > Radio. Station list update frequency controls
@@ -448,8 +454,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             ({shortcut:show_rate_down}) to slow down the current podcast episode. The
             new speed is spoken ("1.75 times speed. Remembered for this show.") and
             saved per show: the next time you play an episode of that show, it starts
-            at the remembered speed. The global Rate slider on the transport bar is
-            not affected and stays in charge for radio, audiobooks, and local media.
+            at the remembered speed, including normal speed at 1.0 times. These
+            shortcuts work while that episode is playing or paused. After switching
+            to another source or stopping, they report that a podcast must be playing.
+            The shortcuts do not change the global Rate slider or its saved setting.
         """),
         _topic("Downloading Episodes and Complete Feeds", """
             Choose Download from the Episodes list context menu to queue one
@@ -982,6 +990,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             saved position), Forget This One (zeros the position without touching the
             file), and Open Containing Folder for downloaded files. A file that has
             been moved or deleted is quietly absent from the list.
+
+            Items at or beyond their known duration are excluded. Episode rows use
+            the duration supplied by the feed; when duration is unknown, only the
+            saved position is shown. Resume currently requires a local file.
         """),
     ]),
     ("Settings", [
