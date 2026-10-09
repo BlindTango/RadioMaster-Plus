@@ -242,6 +242,10 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.set_status("Status: Searching...")
         self._search_seq += 1
         seq = self._search_seq
+        self.tree.set_search_results([])
+        self._search_pending = {"radio_browser"}
+        self._search_errors = []
+        self._fanout_source_search(query, seq)
 
         def worker():
             results = self.station_db.search_local(query)
@@ -252,13 +256,11 @@ class RadioPanel(scrolled.ScrolledPanel):
                     pass
             if seq != self._search_seq:
                 return
-            wx.CallAfter(self.tree.set_search_results, results)
-            wx.CallAfter(self.set_status, f"Status: {len(results)} result(s) for '{query}'")
+            call_after_safe(self, self._finish_catalog_search, query, seq, results)
             # Search fanout (Quill's "five searches, five sources"):
             # stations answer first above; the extra sources report as
             # they finish, appended without moving the cursor, and one
             # final announcement says when everything has reported.
-            self._fanout_source_search(query, seq)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -273,39 +275,45 @@ class RadioPanel(scrolled.ScrolledPanel):
                       if s.capabilities.searchable]
         if not searchable:
             return
-        pending = {s.id for s in searchable}
-        collected: dict[str, list] = {}
-        lock = threading.Lock()
-
-        def announce_done():
-            spoken = ", ".join(sorted(
-                self._source_registry.get(sid).label
-                for sid in pending
-                if self._source_registry.get(sid) is not None
-            )) or "all sources"
-            self.set_status(f"Status: All sources have reported. "
-                            f"{spoken} finished searching for '{query}'.", False)
+        self._search_pending.update(s.id for s in searchable)
 
         def source_worker(source):
+            error = ""
             try:
                 rows = source.search(query)
-            except Exception:
+            except Exception as exc:
                 rows = []
-            with lock:
-                collected[source.id] = rows
-                pending.discard(source.id)
-                done = not pending
-            if seq != self._search_seq:
-                return
+                error = f"{source.label}: {exc}"
             # Late arrivals append; the cursor does not jump because the
             # tree only re-renders the list, not the selection.
-            wx.CallAfter(self._append_source_search_rows, source, rows)
-            if done and seq == self._search_seq:
-                wx.CallAfter(announce_done)
+            call_after_safe(self, self._finish_source_search, query, seq, source, rows, error)
 
         for source in searchable:
             threading.Thread(target=source_worker, args=(source,),
                              daemon=True).start()
+
+    def _finish_catalog_search(self, query, seq, results):
+        if seq != self._search_seq:
+            return
+        self.tree.append_search_results(results)
+        self._search_pending.discard("radio_browser")
+        self._announce_search_complete(query)
+
+    def _finish_source_search(self, query, seq, source, rows, error):
+        if seq != self._search_seq:
+            return
+        self._append_source_search_rows(source, rows)
+        if error:
+            self._search_errors.append(error)
+        self._search_pending.discard(source.id)
+        self._announce_search_complete(query)
+
+    def _announce_search_complete(self, query):
+        if self._search_pending:
+            return
+        count = len(self.tree._search_stations)
+        errors = " " + " ".join(self._search_errors) if self._search_errors else ""
+        self.set_status(f"Status: All sources have reported. {count} result(s) for '{query}'.{errors}")
 
     def _append_source_search_rows(self, source, rows) -> None:
         """Append one source's search results to the Search Results
@@ -316,6 +324,11 @@ class RadioPanel(scrolled.ScrolledPanel):
         stations = []
         for row in rows:
             if row.station is None:
+                if row.has_children:
+                    stations.append(Station(
+                        uuid=f"{source.id}:{row.path}", name=f"{row.label} ({source.label})",
+                        url="", source_id=source.id, source_path=row.path, is_live=False,
+                    ))
                 continue
             stations.append(Station(
                 uuid=f"{row.station.source_id}:{row.station.url}",
@@ -323,6 +336,8 @@ class RadioPanel(scrolled.ScrolledPanel):
                 url=row.station.url,
                 homepage=row.station.homepage,
                 tags=row.station.tags,
+                source_id=row.station.source_id,
+                is_live=row.station.is_live,
             ))
         if stations:
             self.tree.append_search_results(stations)
@@ -335,11 +350,12 @@ class RadioPanel(scrolled.ScrolledPanel):
             self.set_status("Status: Song history is not available.", False)
             return
         from radiomaster.ui.song_history_dialog import SongHistoryDialog
-        station = self._selected_station
+        station = getattr(self, "_playing_station", None) or self._selected_station
         dialog = SongHistoryDialog(
             self, self._song_history,
             station_uuid=station.uuid if station else None,
             station_name=station.name if station else None,
+            on_lyrics=getattr(wx.GetTopLevelParent(self), "search_lyrics_for", None),
         )
         dialog.ShowModal()
         dialog.Destroy()
@@ -363,6 +379,9 @@ class RadioPanel(scrolled.ScrolledPanel):
             return
         self._source_browse_seq += 1
         seq = self._source_browse_seq
+        if not hasattr(self, "_source_requests"):
+            self._source_requests = {}
+        self._source_requests[source_id] = seq
         path = self._source_browse_path.get(source_id, "")
         # The Loading row is the panel's to add (the tree only renders
         # what it is handed) -- and it must clear on every outcome, so a
@@ -377,27 +396,28 @@ class RadioPanel(scrolled.ScrolledPanel):
             except Exception as exc:  # SourceUnavailable and anything else
                 rows = []
                 sentence = str(exc) or f"{source.label} could not be reached."
-            if seq != self._source_browse_seq:
-                return
-            if sentence:
-                wx.CallAfter(self.tree.set_source_failed, source_id, sentence)
-                wx.CallAfter(self.set_status, f"Status: {sentence}", False)
-            else:
-                wx.CallAfter(self.tree.set_source_rows, source_id, rows)
-                if not rows:
-                    # The honest empty: never a bare silent nothing.
-                    wx.CallAfter(self.tree.set_source_failed, source_id,
-                                 f"Nothing in {source.label}. It may be empty, "
-                                 f"or the source could not be reached.")
-                wx.CallAfter(self.set_status,
-                             f"Status: {len(rows)} row(s) from {source.label}")
+            call_after_safe(self, self._finish_source_browse, source, seq, rows, sentence)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_source_browse(self, source, seq, rows, sentence):
+        if self._source_requests.get(source.id) != seq:
+            return
+        sentence = sentence or (f"No items found in {source.label}." if not rows else "")
+        if sentence:
+            self.tree.set_source_failed(source.id, sentence)
+        else:
+            self.tree.set_source_rows(source.id, rows)
+        if self.tree._source_selected == source.id:
+            self.set_status(f"Status: {sentence or str(len(rows)) + ' row(s) from ' + source.label}")
 
     def _on_source_node_activated(self, row) -> None:
         """Enter on a source row: play it, or open its folder."""
         source = self._source_registry.get(self.tree._source_selected or "")
         if source is None or row is None:
+            return
+        if isinstance(row, str):
+            self.set_status(f"Status: {row}")
             return
         if row.station is not None:
             # A playable node: convert to the Station shape the rest of
@@ -416,6 +436,8 @@ class RadioPanel(scrolled.ScrolledPanel):
                 homepage=row.station.homepage,
                 network="",
                 languagecodes="",
+                source_id=row.station.source_id,
+                is_live=row.station.is_live,
             )
             self._selected_station = station
             self._play_station(station)
@@ -462,6 +484,17 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._play_station(station)
 
     def _play_station(self, station: Station, add_to_history: bool = True) -> None:
+        if station.source_path:
+            self._source_browse_path[station.source_id] = station.source_path
+            self.tree.show_sources(self._source_labels())
+            self.tree._source_selected = station.source_id
+            source_idx = self.tree._source_ids.index(station.source_id)
+            self.tree.group_list.Select(source_idx)
+            self.tree.group_list.Focus(source_idx)
+            self._on_source_selected(station.source_id)
+            return
+        self._playing_station = station
+        live = station.is_live and not station.uuid.startswith("internet_archive:")
         if add_to_history:
             self._push_history(station)
         self.now_playing.set_station(station.name)
@@ -479,12 +512,13 @@ class RadioPanel(scrolled.ScrolledPanel):
         if fade_seconds:
             threading.Thread(target=self.engine.crossfade_to, args=(station.url,),
                               kwargs={"title": station.name, "fade_seconds": fade_seconds,
-                                      "is_live": True},
+                                      "is_live": live},
                               daemon=True).start()
         else:
             threading.Thread(target=self.engine.play, args=(station.url,),
-                              kwargs={"title": station.name, "is_live": True}, daemon=True).start()
-        threading.Thread(target=self.station_api.click, args=(station.uuid,), daemon=True).start()
+                              kwargs={"title": station.name, "is_live": live}, daemon=True).start()
+        if not station.source_id and not station.uuid.startswith(("somafm:", "acb_media:", "internet_archive:")):
+            threading.Thread(target=self.station_api.click, args=(station.uuid,), daemon=True).start()
 
         # Poll ICY/SHOUTcast metadata in the background so "Now Playing"
         # shows the current song instead of staying blank for the whole
@@ -635,7 +669,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         never block the wx thread on a database write (the ICY poll
         already runs off-thread, but _publish_radio_song lands on the UI
         thread via wx.CallAfter)."""
-        station = self._selected_station
+        station = getattr(self, "_playing_station", None)
         if station is None or self._song_history is None:
             return
         uuid, name = station.uuid, station.name

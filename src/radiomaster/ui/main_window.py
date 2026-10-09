@@ -592,11 +592,10 @@ class MainWindow(wx.Frame):
         # on_state_change is a single slot, so the stats recorder is
         # chained in front of the UI handler rather than overwriting it.
         def _state_chain(state: str) -> None:
+            source_type, source_id, title = self._stats_source_context()
             self._stats_service.on_state_change(
                 state,
-                source_type=self._stats_source_type(),
-                source_id=self._engine.current_url,
-                title=self._engine.current_title,
+                source_type=source_type, source_id=source_id, title=title,
             )
             wx.CallAfter(self._on_engine_state, state)
 
@@ -610,6 +609,7 @@ class MainWindow(wx.Frame):
         # behavior, unchanged), then PodcastPanel if Media declined.
         self._engine.on_track_finished(lambda: wx.CallAfter(self._on_track_finished))
         self._engine.on_effects_changed(self._on_effects_state_changed)
+        self._engine.on_timeshift_update(lambda message: wx.CallAfter(self._status_bar.set_status, message))
 
         self._now_playing.on_play(lambda: self._on_transport_play_pause())
         self._now_playing.on_stop(lambda: self._radio_panel._on_stop() if self._listbook.GetSelection() == 0 else self._engine.stop())
@@ -844,6 +844,9 @@ class MainWindow(wx.Frame):
             return
 
         self._radio_panel.shutdown_recordings()
+        self._podcast_panel._save_position()
+        self._audiobook_panel._save_position()
+        self._media_panel._save_position()
         self._engine.stop(wait=False)
         # Persist any still-open listening session before the process
         # exits, or the final stretch of playback is never recorded.
@@ -1220,6 +1223,8 @@ class MainWindow(wx.Frame):
         one's internal guard (does the engine's current URL match what it
         itself last played) is what actually decides whether it was theirs
         to advance, not tab selection."""
+        self._podcast_panel.finish_current_episode()
+        self._media_panel.finish_current_file()
         if not self._media_panel.try_auto_advance():
             self._podcast_panel.try_auto_advance()
 
@@ -1488,6 +1493,12 @@ class MainWindow(wx.Frame):
         # remaining; duration == 0 (an unbounded radio stream) shows just
         # elapsed -- how long the current connection has been playing.
         self._status_bar.set_time_info(position, duration)
+        checkpoint = (self._engine.current_url, int(position) // 5)
+        if checkpoint != getattr(self, "_progress_checkpoint", None):
+            self._progress_checkpoint = checkpoint
+            self._podcast_panel._save_position()
+            self._audiobook_panel._save_position()
+            self._media_panel._save_position()
         # A real crossfade must begin before the outgoing track reports
         # natural completion. The media panel guards ownership/current URL,
         # so position updates from podcasts, radio, and video are harmless.
@@ -1830,14 +1841,44 @@ class MainWindow(wx.Frame):
         """Which kind of source is playing, for listening-statistics
         grouping. Derived from the selected tab, matching how each panel
         calls engine.play()."""
-        sel = self._listbook.GetSelection()
-        if sel == self._TAB_RADIO:
-            return "station"
-        if sel == self._TAB_PODCASTS:
-            return "podcast"
-        if sel == self._TAB_DOWNLOADS:
-            return "download"
-        return "media"
+        return self._stats_source_context()[0]
+
+    def _stats_source_context(self) -> tuple[str, str, str]:
+        """Identify the playing item without touching wx from engine threads."""
+        url, title = self._engine.current_url, self._engine.current_title
+        if self._engine._is_live:
+            return "station", url, title
+        podcast = self._podcast_panel
+        if url and url == getattr(podcast, "_last_played_url", ""):
+            from radiomaster.database.repository import EpisodeRepository
+            episode = EpisodeRepository(self._db).get(podcast._current_episode_id)
+            if episode and episode.get("podcast_id"):
+                show_id = episode["podcast_id"]
+                row = self._db.fetchone("SELECT title FROM podcasts WHERE id = ?", (show_id,))
+                return "podcast", str(show_id), row["title"] if row else title
+        if url and url == getattr(self._audiobook_panel, "_playing_url", ""):
+            return "audiobook", url, title
+        return "media", url, title
+
+    def search_lyrics_for(self, artist: str, title: str) -> None:
+        """Look up a history song using the supplied artist and title."""
+        import threading
+        from radiomaster.services.lyrics_service import LyricsService
+        from radiomaster.utils.wx_safe import call_after_safe
+        self._show_context_content(f"Searching lyrics for {artist} - {title}...")
+        generation = self._lyrics_request_generation
+        def finish(result):
+            if generation != self._lyrics_request_generation:
+                return
+            self._lyrics_panel.set_content(result.get("lyrics") or "No lyrics found for this song.")
+            self._status_bar.set_status(f"Lyrics search finished for {title}.")
+        def worker():
+            try:
+                result = LyricsService.fetch_lyrics(artist, title) or {}
+            except Exception:
+                result = {"lyrics": "Could not look up lyrics. Check your connection and try again."}
+            call_after_safe(self, finish, result)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _health_skip_urls(self) -> set[str]:
         """URLs the health scan must never probe: the currently-playing
@@ -2109,6 +2150,8 @@ class MainWindow(wx.Frame):
     # playlist/history yet, so the transport bar falls back to seeking.
     _TAB_RADIO = 0
     _TAB_PODCASTS = 1
+    _TAB_AUDIOBOOKS = 2
+    _TAB_MEDIA = 3
     _TAB_DOWNLOADS = 5
 
     def _next_track(self) -> None:
@@ -2213,12 +2256,20 @@ class MainWindow(wx.Frame):
             self._status_bar.set_status(
                 "Jump back works on live radio only.", False)
             return
-        if self._engine.jump_back():
+        import threading
+        from radiomaster.utils.wx_safe import call_after_safe
+        generation = self._engine.playback_generation
+        self._status_bar.set_status("Preparing the time-shift buffer...")
+        def report(started):
+            if generation != self._engine.playback_generation:
+                return
             self._status_bar.set_status(
-                "Jumping back 15 seconds. One moment while the buffer fills.", False)
-        else:
-            self._status_bar.set_status(
-                "Could not start the time-shift buffer. FFmpeg may be missing.", False)
+                "Jumping back 15 seconds. One moment while the buffer fills." if started
+                else "Could not start the time-shift buffer. Check the stream and FFmpeg.")
+        def worker():
+            started = self._engine.jump_back()
+            call_after_safe(self, report, started)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _jump_forward_live(self) -> None:
         """Jump Forward 15s toward the live edge; at the edge, return to
@@ -2245,25 +2296,35 @@ class MainWindow(wx.Frame):
         from radiomaster.services.continue_listening import ContinueListeningService
         from radiomaster.ui.continue_listening_dialog import ContinueListeningDialog
         service = ContinueListeningService(self._db)
+        self._podcast_panel._save_position()
+        self._audiobook_panel._save_position()
+        self._media_panel._save_position()
         dialog = ContinueListeningDialog(self, service,
                                          on_resume=self._resume_continue_item)
         dialog.ShowModal()
+        item = dialog._resume_item
         dialog.Destroy()
+        if item:
+            self._resume_continue_item(item)
 
     def _resume_continue_item(self, item) -> None:
         """Resume one unfinished thing: play its file and seek to the
         saved position (the same delayed-seek technique the podcast and
         audiobook panels use for their own resume prompts)."""
-        import threading
         from radiomaster.services.continue_listening import ContinueListeningService
-        if not item.file_path:
+        if item.source_type == "episode":
+            self._listbook.SetSelection(self._TAB_PODCASTS)
+            self._podcast_panel.resume_episode(item.source_id, item.position)
+        elif item.source_type == "audiobook" and os.path.isfile(item.file_path):
+            self._listbook.SetSelection(self._TAB_AUDIOBOOKS)
+            self._audiobook_panel.resume_book(item)
+        elif item.source_type == "media" and os.path.isfile(item.file_path):
+            self._listbook.SetSelection(self._TAB_MEDIA)
+            self._media_panel.resume_file(item.file_path, item.position)
+        else:
             self._status_bar.set_status(
-                "That item has no local file to resume.", False)
+                "The saved playback file is unavailable. Open this item from its library.")
             return
-        self._engine.play(item.file_path, title=item.title)
-        if item.position > 0:
-            position = item.position
-            threading.Timer(1.0, lambda: self._engine.seek(position)).start()
         self._status_bar.set_status(
             f"Resuming {item.title} from "
             f"{ContinueListeningService.describe_position(item.position, item.duration)}.",

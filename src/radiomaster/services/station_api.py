@@ -82,6 +82,9 @@ class Station:
     homepage: str = ""
     network: str = ""
     languagecodes: str = ""
+    source_id: str = ""
+    source_path: str = ""
+    is_live: bool = True
 
     @property
     def genres(self) -> list[str]:
@@ -128,7 +131,7 @@ class Station:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Station":
-        return cls(**{k: data.get(k, "") for k in cls.__dataclass_fields__})
+        return cls(**{k: data[k] for k in cls.__dataclass_fields__ if k in data})
 
 
 class StationAPIError(RuntimeError):

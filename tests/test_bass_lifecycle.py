@@ -125,3 +125,21 @@ def test_metadata_worker_is_cancelled_before_stream_is_freed():
     host._cancel_pending_play()
     host._dll.BASS_StreamFree.assert_called_once_with(123)
     assert host._handle == 0
+
+
+def test_timeshift_reports_buffer_position_without_finishing_a_media_track():
+    backend = hung_backend()
+    backend.stop(wait=False)
+    backend._generation = 1
+    finished = []
+    positions = []
+    backend.on_track_finished(lambda: finished.append(True))
+    backend.on_position_update(lambda position, duration: positions.append(position))
+    responses = iter([{"ok": True}, {"ok": True}, {"state": 1},
+                      {"position_seconds": 12, "length_seconds": 30}, {"state": 0}])
+    with patch.object(backend, "_request", side_effect=lambda *args, **kwargs: next(responses)), \
+            patch("radiomaster.engine.bass_radio_engine.time.sleep"):
+        assert backend.timeshift_play("buffer.mp3", start_seconds=10)
+        backend._play_and_monitor("live", "Live", "", 1)
+    assert positions == [12]
+    assert not finished

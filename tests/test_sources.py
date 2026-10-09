@@ -144,7 +144,8 @@ def test_somafm_prefers_mp3_playlist(tmp_path):
         root = source.browse("")
         ambient = next(n for n in root if n.label == "Ambient")
         channels = source.browse(ambient.path)
-    assert channels[0].station.url.endswith("groovesalad.pls")
+    channel = next(node for node in channels if node.station)
+    assert channel.station.url.endswith("groovesalad.pls")
 
 
 def test_somafm_search_matches_title_and_genre(tmp_path):
@@ -197,8 +198,8 @@ def test_internet_archive_search_builds_nodes():
         nodes = source.search("grateful dead")
     assert len(nodes) == 2
     first = nodes[0]
-    assert first.station.url == "https://archive.org/download/gd1977-05-08/gd1977-05-08_vbr.mp3"
-    assert "Public domain or Creative Commons" in first.note
+    assert first.station is None
+    assert first.has_children and first.path == "item:gd1977-05-08"
     # A doc with no creator must not show a dangling dash.
     assert "—" not in nodes[1].label
 
@@ -207,9 +208,46 @@ def test_internet_archive_empty_query_returns_empty():
     assert InternetArchiveSource().search("  ") == []
 
 
-def test_internet_archive_browse_refuses():
-    with pytest.raises(SourceUnavailable):
-        InternetArchiveSource().browse("")
+def test_internet_archive_browse_populates_collections():
+    nodes = InternetArchiveSource().browse("")
+    assert len(nodes) == 4
+    assert all(node.has_children for node in nodes)
+
+
+def test_archive_tracks_use_metadata_filenames_and_real_license():
+    source = InternetArchiveSource()
+    payload = {
+        "metadata": {"title": ["A concert"], "creator": ["One", "Two"]},
+        "files": [
+            {"name": "track 01.mp3", "original": "track01.flac", "title": "First song"},
+            {"name": "track01.flac"}, {"name": "cover.jpg"},
+            {"name": "private.mp3", "private": "true"},
+        ],
+    }
+    with mock.patch.object(source, "_get", return_value=payload):
+        rows = source.browse("item:concert")
+    tracks = [row.station for row in rows if row.station]
+    assert len(tracks) == 1
+    assert tracks[0].url == "https://archive.org/download/concert/track%2001.mp3"
+    assert tracks[0].is_live is False
+    assert tracks[0].tags == "One, Two"
+    assert "usage terms" in tracks[0].note
+
+
+def test_archive_search_handles_array_fields():
+    source = InternetArchiveSource()
+    payload = {"response": {"docs": [{"identifier": "id", "title": ["Title"], "creator": ["A", "B"]}]}}
+    with mock.patch.object(source, "_get", return_value=payload):
+        assert source.search("music")[0].label == "Title — A, B"
+
+
+def test_somafm_recovers_after_first_failure(tmp_path):
+    source = SomaFMSource(str(tmp_path))
+    with mock.patch.object(source, "_fetch_channels", side_effect=[
+            SourceUnavailable("SomaFM", "offline"), _SOMAFM_PAYLOAD["channels"]]):
+        with pytest.raises(SourceUnavailable):
+            source.browse()
+        assert source.browse()
 
 
 # ---------------------------------------------------------------- registry

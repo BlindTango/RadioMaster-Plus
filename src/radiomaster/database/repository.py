@@ -181,7 +181,7 @@ class EpisodeRepository:
 
     def update_position(self, episode_id: int, position: float) -> None:
         self._db.execute(
-            "UPDATE episodes SET play_position = ? WHERE id = ?",
+            "UPDATE episodes SET play_position = ?, last_listened_at = datetime('now') WHERE id = ?",
             (position, episode_id),
         )
         self._db.commit()

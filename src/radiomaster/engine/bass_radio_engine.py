@@ -67,6 +67,7 @@ class BassRadioEngine:
         self._position = 0.0
         self._duration = 0.0
         self._seekable = False
+        self._timeshift_active = False
         self._effects: dict = {}
         self._generation = 0
         self._lock = threading.RLock()
@@ -168,6 +169,7 @@ class BassRadioEngine:
             self._state = self.STATE_BUFFERING
             self._position = 0.0
             self._duration = max(0.0, duration)
+            self._timeshift_active = False
             self._seekable = (seekable if seekable is not None else
                               (self._duration > 0.0 or not url.startswith(("http://", "https://"))))
         self._notify_state()
@@ -203,7 +205,7 @@ class BassRadioEngine:
                     completed = True
                     break
                 last = now
-                if self._seekable:
+                if self._seekable or self._timeshift_active:
                     media = self._request({"cmd": "media_status"}, generation=generation)
                     if generation != self._generation:
                         return
@@ -281,6 +283,9 @@ class BassRadioEngine:
         result = self._request({"cmd": "timeshift_play", "path": path,
                                 "volume": max(0.0, min(2.0, volume)),
                                 "start_seconds": max(0.0, start_seconds)})
+        if result.get("ok"):
+            self._timeshift_active = True
+            self._position = max(0.0, start_seconds)
         return bool(result.get("ok"))
 
     def timeshift_seek(self, delta_seconds: float) -> tuple[bool, float, float]:

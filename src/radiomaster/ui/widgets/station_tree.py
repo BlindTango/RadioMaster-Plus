@@ -368,14 +368,19 @@ class StationTree(wx.Panel):
                 self._search_stations + stations, key=lambda s: s.name.lower())
             return
         selected = self.station_list.GetFirstSelected()
+        selected_uuid = (self._search_stations[selected].uuid
+                         if 0 <= selected < len(self._search_stations) else None)
         merged = sorted(self._search_stations + stations,
                         key=lambda s: s.name.lower())
         self._search_stations = merged
         self._show_flat_list(merged)
-        if 0 <= selected < len(merged):
-            self.station_list.Select(selected)
-            self.station_list.Focus(selected)
-            self.station_list.EnsureVisible(selected)
+        if selected_uuid is not None:
+            for index, station in enumerate(merged):
+                if station.uuid == selected_uuid:
+                    self.station_list.Select(index)
+                    self.station_list.Focus(index)
+                    self.station_list.EnsureVisible(index)
+                    break
 
     # ------------------------------------------------------------------
     # Multi-source catalog (services/sources/) -- the Sources section.
@@ -412,7 +417,7 @@ class StationTree(wx.Panel):
         on_source_selected with the node's path."""
         self._source_nodes[source_id] = rows
         self._source_failed.discard(source_id)
-        if self._source_selected == source_id:
+        if self._current_section == SECTION_SOURCES and self._source_selected == source_id:
             self._render_source_rows(source_id)
 
     def set_source_failed(self, source_id: str, sentence: str) -> None:
@@ -421,7 +426,7 @@ class StationTree(wx.Panel):
         'nothing here'."""
         self._source_failed.add(source_id)
         self._source_nodes[source_id] = [sentence]
-        if self._source_selected == source_id:
+        if self._current_section == SECTION_SOURCES and self._source_selected == source_id:
             self._render_source_rows(source_id)
 
     def _render_source_rows(self, source_id: str) -> None:
@@ -489,7 +494,8 @@ class StationTree(wx.Panel):
             self.group_list.Select(idx)
             self.group_list.Focus(idx)
             self.group_list.EnsureVisible(idx)
-            if self._source_selected in self._source_nodes:
+            cached = self._source_nodes.get(self._source_selected)
+            if cached and cached != ["Loading..."] and self._source_selected not in self._source_failed:
                 self._render_source_rows(self._source_selected)
             elif self.on_source_selected:
                 self.on_source_selected(self._source_selected)
@@ -596,9 +602,7 @@ class StationTree(wx.Panel):
             if idx < len(self._source_ids):
                 source_id = self._source_ids[idx]
                 if source_id != self._source_selected:
-                    self._source_selected = source_id
-                    if self.on_source_selected:
-                        self.on_source_selected(source_id)
+                    self._select_group_index(idx)
             return
         self._load_stations_for_group(name)
 

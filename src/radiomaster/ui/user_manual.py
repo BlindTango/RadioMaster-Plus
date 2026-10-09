@@ -232,9 +232,12 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             (the American Council of the Blind's ten live streams), and the Internet
             Archive (searchable public audio collections). Selecting a source loads
             its rows; a source that works offline keeps answering without a network
-            connection. Each row says what it is before you press Enter, including
-            licensing notes such as "Public domain or Creative Commons". If a source
+            connection. In Internet Archive, press Enter on a collection, then an item,
+            then an audio file to play it. Next and Previous rows move between pages;
+            Back rows return to the collection list. Search results open the item's
+            actual files. Check its item page for usage terms. If a source
             cannot be reached, its row says so in words rather than showing nothing.
+            Select the source again to retry after restoring your connection.
 
             In the Radio Search field, enter a station name, genre, country, or language
             and press Enter or Search. Results come from the local catalogue, including
@@ -442,6 +445,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             into it, Rename Folder changes its name, and Delete Folder removes it (its
             shows move back to the main list, confirmed with the real count). Each
             action announces its result in the status bar.
+
+            Press Enter on a folder to open its shows. Activate Back to Subscriptions
+            to return to folders and unfiled shows.
 
             Each show's row carries an unheard badge: "Title (3 unheard)" when episodes
             remain unplayed. Playing an episode to the end or marking it played drops
@@ -993,7 +999,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
 
             Items at or beyond their known duration are excluded. Episode rows use
             the duration supplied by the feed; when duration is unknown, only the
-            saved position is shown. Resume currently requires a local file.
+            saved position is shown. Podcast Resume uses its downloaded file or streams
+            the episode when no download is available. Audiobooks resume the last
+            chapter you played; local media resumes in its own playlist. The list is
+            ordered by your latest listening activity, and progress is saved while
+            you listen. Resume closes the menu and dialog before starting playback.
         """),
     ]),
     ("Settings", [

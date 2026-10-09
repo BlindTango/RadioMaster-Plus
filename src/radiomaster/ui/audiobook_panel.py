@@ -49,11 +49,15 @@ class AudiobookPanel(wx.Panel):
         self._save_position()
 
     def _save_position(self) -> None:
-        if self._current_book_id is not None and self._engine.state in ("playing", "paused"):
-            from radiomaster.database.repository import AudiobookRepository
-            AudiobookRepository(self._db).update_position(
-                self._current_book_id, self._engine.position
+        book_id = getattr(self, "_playing_book_id", None)
+        if (book_id is not None and self._engine.state in ("playing", "paused")
+                and self._engine.current_url == getattr(self, "_playing_url", None)):
+            self._db.execute(
+                "UPDATE audiobooks SET last_position = ?, last_played_path = ?, "
+                "last_listened_at = datetime('now') WHERE id = ?",
+                (self._engine.position, self._playing_url, book_id),
             )
+            self._db.commit()
 
     def _setup_ui(self) -> None:
         """Create the audiobook panel layout."""
@@ -228,6 +232,7 @@ class AudiobookPanel(wx.Panel):
         from radiomaster.database.repository import AudiobookRepository
         repo = AudiobookRepository(self._db)
         existing = next((b for b in repo.get_all() if b.get("folder_path") == path), None)
+        self._resume_position = 0.0
         if existing:
             self._current_book_id = existing["id"]
             last_position = existing.get("last_position") or 0.0
@@ -267,11 +272,15 @@ class AudiobookPanel(wx.Panel):
                 title = self._current_book.get('title', 'Audiobook')
                 chapter_title = chapters[chapter_idx]['title'] if chapter_idx < len(chapters) else f'Chapter {chapter_idx + 1}'
 
+                self._playing_url = audio_path
+                self._playing_book_id = self._current_book_id
                 self._engine.play(audio_path, title=f"{title} - {chapter_title}")
                 self._apply_resume_seek()
         else:
             if os.path.isfile(self._current_path):
                 audio_path = self._current_path
+                self._playing_url = audio_path
+                self._playing_book_id = self._current_book_id
                 self._engine.play(audio_path, title=os.path.basename(audio_path))
                 self._apply_resume_seek()
             else:
@@ -282,6 +291,8 @@ class AudiobookPanel(wx.Panel):
                 )
                 if chapter_idx < len(audio_files):
                     audio_path = os.path.join(self._current_path, audio_files[chapter_idx])
+                    self._playing_url = audio_path
+                    self._playing_book_id = self._current_book_id
                     self._engine.play(audio_path, title=os.path.basename(audio_path))
                     self._apply_resume_seek()
 
@@ -290,8 +301,15 @@ class AudiobookPanel(wx.Panel):
         if self._resume_position > 0:
             position = self._resume_position
             self._resume_position = 0.0
-            import threading
-            threading.Timer(1.0, lambda: self._engine.seek(position)).start()
+            self._engine.seek_when_ready(position)
+
+    def resume_book(self, item) -> None:
+        self._save_position()
+        self._current_book_id = item.source_id
+        self._playing_book_id = item.source_id
+        self._playing_url = item.file_path
+        self._engine.play(item.file_path, title=item.title)
+        self._engine.seek_when_ready(item.position)
 
     def _on_tts(self, event: wx.CommandEvent) -> None:
         """Start SAPI TTS reading."""

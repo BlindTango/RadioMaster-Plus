@@ -359,33 +359,47 @@ def test_refresh_worker_fetches_once_and_queues_completion(db, monkeypatch):
     (0, True, set(), False),
     (0, False, {3}, False),
 ])
-def test_empty_episode_menu_can_refresh_selected_subscription(selected, search, refreshing, enabled):
+@pytest.mark.parametrize("has_episode", [False, True])
+def test_episode_menu_refresh_runs_after_dismissal(selected, search, refreshing, enabled, has_episode):
     menu = MagicMock()
     items = {}
     def append(item_id, label):
         items[label] = MagicMock()
+        items[label].GetId.return_value = len(items)
         return items[label]
     menu.Append.side_effect = append
     wx = SimpleNamespace(Menu=lambda: menu, ID_ANY=-1, EVT_MENU=object())
     podcast = {"id": 3, "feed_url": "https://feed"}
     panel = SimpleNamespace(
-        _episode_list=MagicMock(), _episode_data=[], _podcast_list=MagicMock(),
+        _episode_list=MagicMock(),
+        _episode_data=[{"id": 42, "audio_url": "https://audio/42"}] if has_episode else [],
+        _podcast_list=MagicMock(),
         _podcast_data=[podcast], _viewing_search_results=search,
         _refreshing_podcasts=refreshing, _engine=MagicMock(), Bind=MagicMock(),
-        _refresh_subscription=MagicMock(),
+        _refresh_subscription=MagicMock(), _on_download_all=MagicMock(),
     )
-    panel._episode_list.GetFirstSelected.return_value = -1
+    panel._episode_list.GetFirstSelected.return_value = 0 if has_episode else -1
     panel._podcast_list.GetFirstSelected.return_value = selected
+    def choose(menu, pos):
+        panel._refresh_subscription.assert_not_called()
+        panel._episode_list.SetFocus.assert_not_called()
+        menu.Destroy.assert_not_called()
+        return items["Re&fresh Episodes"].GetId() if enabled else -1
+    panel._episode_list.GetPopupMenuSelectionFromUser.side_effect = choose
+    def refresh(podcast):
+        menu.Destroy.assert_called_once()
+        panel._episode_list.SetFocus.assert_called_once()
+    panel._refresh_subscription.side_effect = refresh
     panel_method("_on_episode_context_menu", wx=wx,
                  context_menu_pos=lambda ctrl, event: (10, 10))(panel, MagicMock())
     items["Re&fresh Episodes"].Enable.assert_called_once_with(enabled)
-    items["&Download"].Enable.assert_called_once_with(False)
-    items["Download &All"].Enable.assert_called_once_with(False)
-    panel._episode_list.PopupMenu.assert_called_once_with(menu, (10, 10))
+    items["&Download"].Enable.assert_called_once_with(has_episode)
+    items["Download &All"].Enable.assert_called_once_with(has_episode)
+    panel._episode_list.GetPopupMenuSelectionFromUser.assert_called_once_with(menu, (10, 10))
+    panel.Bind.assert_not_called()
+    panel._episode_list.SetFocus.assert_called_once()
     if enabled:
-        # Refresh uses self.Bind (panel.Bind), not menu.Bind, so the
-        # handler runs after the menu dismisses (fixes "refresh does
-        # not close the menu").
-        panel.Bind.call_args.args[1](None)
         panel._refresh_subscription.assert_called_once_with(podcast)
+    else:
+        panel._refresh_subscription.assert_not_called()
     menu.Destroy.assert_called_once()

@@ -35,6 +35,7 @@ class ContinueItem:
     source_type: str   # repository discriminator: episode|audiobook|media
     source_id: int     # the owning table's row id
     file_path: str     # "" when the item is a stream, not a file
+    audio_url: str = ""
 
 
 class ContinueListeningService:
@@ -56,7 +57,8 @@ class ContinueListeningService:
 
     def _episodes(self) -> list[tuple[str, ContinueItem]]:
         rows = self._db.fetchall(
-            "SELECT e.id, e.title, e.play_position, e.duration, e.file_path, e.created_at, "
+            "SELECT e.id, e.title, e.play_position, e.duration, e.file_path, e.audio_url, "
+            "COALESCE(NULLIF(e.last_listened_at, ''), e.created_at) AS created_at, "
             "p.title AS show_title "
             "FROM episodes e JOIN podcasts p ON p.id = e.podcast_id "
             "WHERE e.is_played = 0 AND e.play_position > ? "
@@ -79,13 +81,14 @@ class ContinueListeningService:
                 source_type="episode",
                 source_id=int(data.get("id") or 0),
                 file_path=path,
+                audio_url=data.get("audio_url") or "",
             )))
         return out
 
     def _audiobooks(self) -> list[tuple[str, ContinueItem]]:
         rows = self._db.fetchall(
-            "SELECT id, title, author, last_position, duration, file_path, "
-            "folder_path, created_at FROM audiobooks "
+            "SELECT id, title, author, last_position, duration, file_path, last_played_path, "
+            "folder_path, COALESCE(NULLIF(last_listened_at, ''), created_at) AS created_at FROM audiobooks "
             "WHERE last_position > ? "
             "AND (COALESCE(duration, 0) <= 0 OR last_position < duration) "
             "ORDER BY created_at DESC",
@@ -94,8 +97,10 @@ class ContinueListeningService:
         out = []
         for row in rows:
             data = dict(row)
-            path = data.get("file_path") or ""
+            path = data.get("last_played_path") or data.get("file_path") or ""
             folder = data.get("folder_path") or ""
+            if not path and os.path.isfile(folder):
+                path = folder
             if path and not os.path.exists(path):
                 continue
             if not path and folder and not os.path.isdir(folder):
@@ -115,7 +120,7 @@ class ContinueListeningService:
     def _media_files(self) -> list[tuple[str, ContinueItem]]:
         rows = self._db.fetchall(
             "SELECT id, title, artist, album, last_position, duration, "
-            "file_path, created_at FROM media_files "
+            "file_path, COALESCE(NULLIF(last_listened_at, ''), created_at) AS created_at FROM media_files "
             "WHERE last_position > ? "
             "AND (COALESCE(duration, 0) <= 0 OR last_position < duration) "
             "ORDER BY created_at DESC",

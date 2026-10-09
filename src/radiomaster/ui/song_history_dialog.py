@@ -17,13 +17,14 @@ class SongHistoryDialog(wx.Dialog):
     """Recent songs for one station (or all stations), newest first."""
 
     def __init__(self, parent, song_history, station_uuid=None,
-                 station_name=None):
+                 station_name=None, on_lyrics=None):
         title = (f"Song History - {station_name}" if station_name
                  else "Song History - All Stations")
         super().__init__(parent, title=title,
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self._history = song_history
         self._station_uuid = station_uuid
+        self._on_lyrics = on_lyrics
 
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -92,12 +93,15 @@ class SongHistoryDialog(wx.Dialog):
         def on_lyrics(_event):
             # Delegate to MainWindow's lyrics flow via the parent chain;
             # it owns the lyrics service and the Lyrics tab.
-            frame = wx.GetTopLevelParent(self)
-            handler = getattr(frame, "search_lyrics_for", None)
+            handler = self._on_lyrics
             if handler:
-                handler(row.get("artist", ""), row.get("title", ""))
+                self.EndModal(wx.ID_CLOSE)
+                wx.CallAfter(handler, row.get("artist", ""), row.get("title", ""))
 
-        menu.Bind(wx.EVT_MENU, on_copy, copy_item)
-        menu.Bind(wx.EVT_MENU, on_lyrics, lyrics_item)
-        self.PopupMenu(menu)
-        menu.Destroy()
+        try:
+            selected = self._list.GetPopupMenuSelectionFromUser(menu)
+            action = {copy_item.GetId(): on_copy, lyrics_item.GetId(): on_lyrics}.get(selected)
+        finally:
+            menu.Destroy()
+        if action:
+            action(None)

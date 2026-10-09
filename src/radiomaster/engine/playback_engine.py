@@ -126,6 +126,7 @@ class PlaybackEngine:
         self._timeshift_process: subprocess.Popen | None = None
         self._timeshift_live_url: str = ""
         self._timeshift_generation: int = 0
+        self._on_timeshift_update = None
 
     def _ensure_bass_radio(self):
         if self._bass_radio is not None:
@@ -316,6 +317,26 @@ class PlaybackEngine:
         ffmpeg = get_ffmpeg()
         if not ffmpeg:
             return None
+        from urllib.parse import urlsplit, urljoin
+        input_url = url
+        if urlsplit(url).path.lower().endswith((".pls", ".m3u")):
+            import requests
+            from radiomaster.utils.network import get_proxies, get_user_agent
+            try:
+                response = requests.get(url, timeout=8, proxies=get_proxies(),
+                                        headers={"User-Agent": get_user_agent("RadioMaster+")})
+                response.raise_for_status()
+                for line in response.text.splitlines():
+                    line = line.strip()
+                    if line.lower().startswith("file1="):
+                        input_url = urljoin(url, line.split("=", 1)[1])
+                        break
+                    if line and not line.startswith(("#", "[")) and "=" not in line:
+                        input_url = urljoin(url, line)
+                        break
+            except requests.RequestException:
+                log.warning("Could not resolve timeshift playlist", exc_info=True)
+                return None
         import tempfile
         handle, path = tempfile.mkstemp(prefix="rmplus_timeshift_", suffix=".mp3")
         os.close(handle)
@@ -323,11 +344,12 @@ class PlaybackEngine:
         try:
             self._timeshift_process = subprocess.Popen(
                 [ffmpeg, "-y", "-loglevel", "error",
-                 "-i", url, "-vn", "-c:a", "libmp3lame", "-b:a", "128k",
-                 "-flush_packets", "1", "-f", "mp3", path],
+                 "-i", input_url, "-vn", "-c:a", "libmp3lame", "-b:a", "128k",
+                 "-write_xing", "0", "-flush_packets", "1", "-f", "mp3", path],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except OSError:
             log.warning("Could not start timeshift tee", exc_info=True)
@@ -376,13 +398,16 @@ class PlaybackEngine:
         if self._timeshift_generation == self._playback_generation and self._timeshift_path:
             ok, _position, _length = bass.timeshift_seek(-seconds)
             return ok
+        generation = self._playback_generation
         path = self._start_timeshift_tee(self._current_url)
+        if generation != self._playback_generation:
+            self._stop_timeshift_tee()
+            return False
         if path is None:
             return False
         # Wait for the tee to have *seconds* of audio behind the live
         # edge before switching -- switching instantly would land at the
         # buffer's start (nothing recorded yet) and sound like a stop.
-        generation = self._playback_generation
         def _switch():
             deadline = time.monotonic() + seconds + 5.0
             size = 0
@@ -400,6 +425,7 @@ class PlaybackEngine:
                     break
                 time.sleep(0.25)
             else:
+                self._notify_timeshift("Not enough audio arrived to jump back. Still playing live.")
                 return  # Never replace live playback with an insufficient buffer.
             if generation != self._playback_generation:
                 return
@@ -411,6 +437,9 @@ class PlaybackEngine:
                 if bass.timeshift_play(path, volume=self._volume,
                                        start_seconds=max(0.0, size / 16000.0 - seconds)):
                     self._timeshift_generation = generation
+                    self._notify_timeshift(f"Behind live by {int(seconds)} seconds.")
+                else:
+                    self._notify_timeshift("Could not play the time-shift buffer. Try again.")
         threading.Thread(target=_switch, daemon=True).start()
         return True
 
@@ -423,7 +452,15 @@ class PlaybackEngine:
         if (bass is None or not self._using_bass_radio
                 or self._timeshift_path is None):
             return False
-        ok, position, length = bass.timeshift_seek(seconds)
+        position, native_length = bass.timeshift_status()
+        length = self._timeshift_buffer_length(native_length)
+        target = position + seconds
+        if length - target <= 5.0:
+            self._return_to_live()
+            return True
+        if target > native_length - 5.0:
+            return bass.timeshift_play(self._timeshift_path, volume=self._volume, start_seconds=target)
+        ok, position, _length = bass.timeshift_seek(seconds)
         if not ok:
             return False
         # The host clamps forward seeks short of the file's tail (its
@@ -447,7 +484,24 @@ class PlaybackEngine:
         if bass is None or self._timeshift_path is None:
             return 0.0
         position, length = bass.timeshift_status()
+        if self._timeshift_generation == self._playback_generation:
+            length = self._timeshift_buffer_length(length)
         return max(0.0, length - position)
+
+    def _timeshift_buffer_length(self, fallback: float) -> float:
+        # BASS reads growing files, but its reported length remains the
+        # original size until EOF. Our MP3 buffer is always 128 kbit/s.
+        try:
+            return max(fallback, os.path.getsize(self._timeshift_path) / 16000.0)
+        except (OSError, TypeError):
+            return fallback
+
+    def on_timeshift_update(self, callback) -> None:
+        self._on_timeshift_update = callback
+
+    def _notify_timeshift(self, message: str) -> None:
+        if self._on_timeshift_update:
+            self._on_timeshift_update(message)
 
 
     def set_replaygain_mode(self, mode: str) -> None:
@@ -569,6 +623,21 @@ class PlaybackEngine:
             return
         # FFplay: 's' + seconds + '\n' seeks to absolute position
         self._send_ffplay_key(f"s{position_seconds}\n")
+
+    def seek_when_ready(self, position: float) -> None:
+        """Wait for this playback request to start; abandon a stale resume."""
+        generation = self._playback_generation
+        def worker():
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline:
+                with self._play_lock:
+                    if generation != self._playback_generation:
+                        return
+                    if self.state in (self.STATE_PLAYING, self.STATE_PAUSED):
+                        self.seek(position)
+                        return
+                time.sleep(0.1)
+        threading.Thread(target=worker, daemon=True).start()
 
     # Volume changes are applied live (README promises no-restart dynamic
     # control). Rapid slider dragging fires this many times a second, so a

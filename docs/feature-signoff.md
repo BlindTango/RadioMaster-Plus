@@ -21,7 +21,9 @@ Have a screen reader running and speaking (JAWS or NVDA).
 - Pass: the file exists and contains "Launch started" with a timestamp.
 
 **L-02. A startup failure says why**
-- Do: temporarily rename the app's `_internal` folder (packaged build), launch.
+- Do: use a test copy with a missing application resource after the Python runtime
+  has loaded, then launch. Missing runtime DLLs are reported by the Windows loader
+  before the application can write its launch log.
 - Pass: one message reads "RadioMaster+ did not start", says the copy looks
   like it was run from inside a zip without extracting, and walks through
   Extract All. Restore the folder afterward.
@@ -53,7 +55,7 @@ Have a screen reader running and speaking (JAWS or NVDA).
 - Pass: its ten streams list instantly.
 
 **R-05. The honest empty**
-- Do: still offline, select **Internet Archive** (or force a source failure).
+- Do: still offline, select an **Internet Archive** collection (or force a source failure).
 - Pass: a spoken sentence like "X could not be reached" — never a silent
   empty list, never a stuck "Loading...".
 
@@ -68,15 +70,17 @@ Have a screen reader running and speaking (JAWS or NVDA).
   their source; the status bar announces when all sources have reported; the
   cursor does not jump when a late group lands.
 
-**R-08. Choose Browse Sources**
-- Do: Tools > Choose Browse Sources..., uncheck one source, OK.
-- Pass: that source is gone from the Sources list; everything else stays
-  put; the status bar says "Browse sources updated."
+**R-08. Internet Archive browsing and playback**
+- Do: select Internet Archive, open a collection, open an item, and activate
+  an audio file. Use Back and Next rows to navigate. Search for a known item.
+- Pass: collections and actual files populate; audio plays; search opens the
+  same file list. Usage terms refer to the actual item.
 
 **R-09. Jump back on live radio**
 - Do: play a live station, press the Jump Back 15s button (or its shortcut).
-- Pass: audio jumps back 15 seconds; the status bar says "Behind live by 15
-  seconds." (or the equivalent); no reconnect, no gap.
+- Pass: after the first press collects about 15 to 20 seconds of audio,
+  audio jumps back 15 seconds; the status bar says "Behind live by 15
+  seconds." (or the equivalent). Later presses rewind the active buffer.
 
 **R-10. Caught up to live**
 - Do: press Jump Forward 15s repeatedly.
@@ -86,7 +90,7 @@ Have a screen reader running and speaking (JAWS or NVDA).
 **R-11. Song History**
 - Do: with a station playing that publishes ICY titles, Tools > Song History...
 - Pass: the dialog lists what played, newest with artist/title/time; Copy,
-  Identify, and Search Lyrics each work from the context menu.
+  and Search Lyrics each work from the context menu.
 
 ---
 
@@ -99,7 +103,8 @@ Have a screen reader running and speaking (JAWS or NVDA).
 
 **P-02. Folders**
 - Do: context menu on the podcast list > New Folder..., create `Tech`; Move
-  to Folder... on a show; Rename Folder...; Delete Folder...
+  to Folder... on a show; press Enter on Tech and confirm the show is inside;
+  activate Back to Subscriptions; Rename Folder...; Delete Folder...
 - Pass: each announces its result ("Moved X to Tech."); delete confirms with
   the real count and moves children to the main list.
 
@@ -123,6 +128,12 @@ Have a screen reader running and speaking (JAWS or NVDA).
   file untouched; a moved file's row is quietly absent.
 
 ---
+
+**P-06. Refresh closes its menu**
+- Do: open the Episodes context menu using the Applications key or Shift+F10;
+  activate Refresh Episodes.
+- Pass: the menu closes immediately, focus returns to Episodes, and refreshed
+  rows appear without requiring Escape.
 
 ## Block T — Tools and stats
 

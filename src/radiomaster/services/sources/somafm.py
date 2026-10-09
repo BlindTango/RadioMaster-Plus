@@ -63,9 +63,9 @@ class SomaFMSource(StationSource):
         """
         if self._loaded:
             return
-        self._loaded = True
         self._channels = self._read_cache()
         if self._channels and not self._cache_expired():
+            self._loaded = True
             return
         try:
             fetched = self._fetch_channels()
@@ -73,8 +73,10 @@ class SomaFMSource(StationSource):
             # A stale cache still answers; only a total absence fails.
             if not self._channels:
                 raise
+            self._loaded = True
             return
         self._channels = fetched
+        self._loaded = True
         self._write_cache(fetched)
 
     def _read_cache(self) -> list[dict]:
@@ -142,7 +144,7 @@ class SomaFMSource(StationSource):
             return nodes
         if path.startswith("genre:"):
             genre = path[len("genre:"):].lower()
-            return [
+            return [SourceNode("Back to genres", "", has_children=True)] + [
                 self._node_for_channel(ch)
                 for ch in self._channels
                 if (ch.get("genre") or "other").strip().lower() == genre

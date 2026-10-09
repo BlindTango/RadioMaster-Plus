@@ -1484,8 +1484,9 @@ class TestPodcastContextMenuKeys:
         def popup(menu, pos):
             menus.append([item.GetItemLabelText() for item in menu.GetMenuItems()
                           if not item.IsSeparator()])
-            return True
-        with patch.object(ctrl, "PopupMenu", side_effect=popup):
+            return wx.ID_NONE
+        popup_method = "GetPopupMenuSelectionFromUser" if list_name == "_episode_list" else "PopupMenu"
+        with patch.object(ctrl, popup_method, side_effect=popup):
             for event_type in (wx.EVT_KEY_DOWN, wx.EVT_KEY_UP):
                 event = wx.KeyEvent(event_type.typeId)
                 event.SetKeyCode(key)

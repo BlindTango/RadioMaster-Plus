@@ -68,7 +68,8 @@ class FirstRunDialog(wx.Dialog):
         sizer.Add(self._page_text, 1, wx.EXPAND | wx.ALL, 10)
 
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._skip_btn = wx.Button(self, label="&Skip")
+        self._skip_btn = wx.Button(self, wx.ID_CANCEL, label="&Skip")
+        self.SetEscapeId(wx.ID_CANCEL)
         set_accessible_name(self._skip_btn, "Skip the welcome wizard")
         # wx has no ID_SKIP; ID_CANCEL carries the "leave without
         # continuing" meaning and both Skip and Finish set the flag in

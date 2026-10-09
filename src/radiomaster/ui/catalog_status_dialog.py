@@ -18,7 +18,7 @@ import wx
 
 from radiomaster.services.station_update_scheduler import (
     FREQUENCY_LABELS,
-    UPDATE_OFF_HOUR,
+    _cron_kwargs,
 )
 from radiomaster.utils.accessibility import set_accessible_name
 from radiomaster.utils.wx_safe import call_after_safe
@@ -65,34 +65,9 @@ def _next_run(frequency: str, last_updated: Optional[datetime],
     if frequency not in FREQUENCY_LABELS or frequency == "off":
         return None
     now = now or datetime.now()
-    candidates: list[datetime] = []
-    if frequency == "daily":
-        # Today's off-peak hour AND tomorrow's -- after 3 AM has already
-        # passed, "today" is filtered out below and tomorrow answers.
-        today = now.replace(hour=UPDATE_OFF_HOUR, minute=0, second=0, microsecond=0)
-        candidates = [today, today + timedelta(days=1)]
-    elif frequency == "weekly":
-        start = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(
-            hour=UPDATE_OFF_HOUR, minute=0, second=0, microsecond=0)
-        candidates = [start, start + timedelta(days=7)]
-    elif frequency == "monthly":
-        first = now.replace(day=1, hour=UPDATE_OFF_HOUR, minute=0, second=0, microsecond=0)
-        next_month = (first + timedelta(days=32)).replace(day=1)
-        candidates = [first, next_month]
-    elif frequency == "quarterly":
-        first = now.replace(month=((now.month - 1) // 3) * 3 + 1, day=1,
-                            hour=UPDATE_OFF_HOUR, minute=0, second=0, microsecond=0)
-        candidates = [first, first + timedelta(days=95)]
-    elif frequency == "six_monthly":
-        first = now.replace(month=1 if now.month <= 6 else 7, day=1,
-                            hour=UPDATE_OFF_HOUR, minute=0, second=0, microsecond=0)
-        candidates = [first, first + timedelta(days=185)]
-    elif frequency == "yearly":
-        first = now.replace(month=1, day=1, hour=UPDATE_OFF_HOUR, minute=0,
-                            second=0, microsecond=0)
-        candidates = [first, first + timedelta(days=366)]
-    upcoming = [c for c in candidates if c > now]
-    return min(upcoming) if upcoming else None
+    from apscheduler.triggers.cron import CronTrigger
+    trigger = CronTrigger(**_cron_kwargs(frequency))
+    return trigger.get_next_fire_time(None, now + timedelta(microseconds=1)).replace(tzinfo=None)
 
 
 class CatalogStatusDialog(wx.Dialog):
@@ -146,7 +121,7 @@ class CatalogStatusDialog(wx.Dialog):
         )
         next_run = _next_run(self._frequency, last_updated)
         next_sentence = (
-            f"Next scheduled update {relative_time(next_run)} "
+            f"Next scheduled update "
             f"({next_run.strftime('%A, %B %d at %I:%M %p') if next_run else ''})."
             if next_run else "No update is currently scheduled."
         )
@@ -206,6 +181,7 @@ class CatalogStatusDialog(wx.Dialog):
         self._updating = False
         self._update_btn.Enable()
         self._last_updated = self._station_db.last_updated()
+        self._count = self._station_db.station_count()
         self._summary.SetValue(
             f"Update finished: {result.changed} stations changed, "
             f"{result.unchanged} unchanged.\n\n"

@@ -82,6 +82,7 @@ class StationRef:
     name: str
     url: str
     source_id: str
+    is_live: bool = True
     homepage: str = ""
     tags: str = ""
     #: Human sentence describing licensing/permission for this item, e.g.

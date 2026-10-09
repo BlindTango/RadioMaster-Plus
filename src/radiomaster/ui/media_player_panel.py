@@ -75,10 +75,43 @@ class MediaPlayerPanel(wx.Panel):
         """Play the selected playlist item."""
         idx = self._playlist.GetFirstSelected()
         if idx >= 0 and idx < len(self._paths):
+            self._save_position()
             self._current_index = idx
             title = self._playlist.GetItemText(idx)
             artist = self._playlist.GetItemText(idx, 1)
             self._engine.play(self._paths[idx], title=title, artist=artist)
+
+    def _save_position(self) -> None:
+        idx = self._current_index
+        if not (0 <= idx < len(self._paths)) or self._engine.current_url != self._paths[idx]:
+            return
+        if self._engine.state not in ("playing", "paused"):
+            return
+        self._db.execute(
+            "INSERT INTO media_files (file_path, title, artist, last_position, duration, last_listened_at) "
+            "VALUES (?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(file_path) DO UPDATE SET "
+            "last_position = excluded.last_position, duration = excluded.duration, "
+            "last_listened_at = excluded.last_listened_at",
+            (self._paths[idx], self._playlist.GetItemText(idx), self._playlist.GetItemText(idx, 1),
+             self._engine.position, self._engine.duration),
+        )
+        self._db.commit()
+
+    def finish_current_file(self) -> None:
+        idx = self._current_index
+        if 0 <= idx < len(self._paths) and self._engine.current_url == self._paths[idx]:
+            self._db.execute("UPDATE media_files SET last_position = 0 WHERE file_path = ?",
+                             (self._paths[idx],))
+            self._db.commit()
+
+    def resume_file(self, path: str, position: float) -> None:
+        if path not in self._paths:
+            self._add_path(path)
+        index = self._paths.index(path)
+        self._playlist.Select(index)
+        self._playlist.Focus(index)
+        self._on_play(wx.CommandEvent())
+        self._engine.seek_when_ready(position)
 
     def try_auto_advance(self) -> bool:
         """Called when the engine reports a track finished naturally. If

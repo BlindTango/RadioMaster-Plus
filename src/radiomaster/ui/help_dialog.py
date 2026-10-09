@@ -98,6 +98,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "or try another station. The application log records disconnects, stalls, "
         "retry attempts, and retry limits for troubleshooting."
     )),
+    ("What's New in Version 1.2.2", (
+        "Internet Archive: open Sources, choose Internet Archive, then press Enter "
+        "on a collection, an item, and an audio file. Search results open items. "
+        "Use Back and paging rows to browse. Check each item for usage terms.\n\n"
+        "Podcast folders open with Enter; Back to Subscriptions returns to the root. "
+        "Refresh Episodes closes its menu and restores focus to the list.\n\n"
+        "Continue Listening resumes streamed podcasts, the last audiobook chapter, "
+        "and local media from saved progress. Statistics include current listening. "
+        "Search Lyrics in Song History opens the lyrics result."
+    )),
     ("What's New in Version 1.2.1", (
         "Version 1.2.1 fixes the podcast speed shortcuts and restores each show's "
         "saved speed, including normal speed. The shortcuts apply only to the "
@@ -175,6 +185,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.2.2", (
+        "Internet Archive now browses collections, items, and their actual audio files, "
+        "including AAC. Search results open the item's file list. Failed sources can "
+        "be retried, and late results preserve your selected row.\n\n"
+        "Podcast folders open with Enter. Refresh Episodes closes its context menu "
+        "and returns focus to the episode list. Unheard badges change on completion.\n\n"
+        "Continue Listening saves progress for podcasts, audiobook chapters, and local "
+        "media, ordered by latest listening. Undownloaded podcasts can resume online. "
+        "Song History's Search Lyrics works, current listening is included in statistics, "
+        "and catalog schedules use their actual calendar dates."
+    )),
     ("Version 1.2.1", (
         "Podcast speed: the speed-up shortcut now supplies its adjustment correctly. "
         "Shows saved at 1.0 times return to normal speed after a faster show. "

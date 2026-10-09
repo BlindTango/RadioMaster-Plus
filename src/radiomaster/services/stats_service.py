@@ -136,7 +136,14 @@ class StatsService:
                 "FROM listening_sessions WHERE started_at >= ?",
                 (_iso(since),),
             ).fetchone()
-        return SessionTotals(seconds=int(row[0]), sessions=int(row[1]))
+        seconds, sessions = int(row[0]), int(row[1])
+        with self._lock:
+            if self._session_start is not None:
+                start = max(self._session_start, since) if since else self._session_start
+                elapsed = max(0, int((_now() - start).total_seconds()))
+                seconds += elapsed
+                sessions += int(elapsed > 0)
+        return SessionTotals(seconds=seconds, sessions=sessions)
 
     def start_of_today(self) -> datetime:
         return _now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -162,4 +169,12 @@ class StatsService:
             f"ORDER BY secs DESC LIMIT ?",
             tuple(params),
         ).fetchall()
-        return [(row[0], int(row[1])) for row in rows]
+        totals = {row[0]: int(row[1]) for row in rows}
+        with self._lock:
+            if self._session_start is not None and self._session_source_type == source_type:
+                start = max(self._session_start, since) if since else self._session_start
+                seconds = max(0, int((_now() - start).total_seconds()))
+                if seconds:
+                    label = self._session_title or self._session_source_id
+                    totals[label] = totals.get(label, 0) + seconds
+        return sorted(totals.items(), key=lambda item: item[1], reverse=True)[:limit]

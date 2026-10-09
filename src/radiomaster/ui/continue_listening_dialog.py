@@ -33,6 +33,7 @@ class ContinueListeningDialog(wx.Dialog):
         sizer = wx.BoxSizer(wx.VERTICAL)
         self._items = service.items()
         summary = service.summary_sentence(self._items)
+        self._resume_item = None
 
         self._summary = wx.StaticText(self, label=summary)
         set_accessible_name(self._summary, "Continue listening summary")
@@ -81,7 +82,7 @@ class ContinueListeningDialog(wx.Dialog):
 
     def _resume(self, item: ContinueItem) -> None:
         if self._on_resume:
-            self._on_resume(item)
+            self._resume_item = item
             self.EndModal(wx.ID_OK)
 
     def _on_context_menu(self, event: wx.ContextMenuEvent) -> None:
@@ -96,7 +97,6 @@ class ContinueListeningDialog(wx.Dialog):
         folder_item.Enable(bool(item.file_path)
                            and os.path.exists(item.file_path))
 
-        menu.Bind(wx.EVT_MENU, lambda e: self._resume(item), resume_item)
 
         def on_forget(_event):
             self._service.forget(item)
@@ -112,7 +112,12 @@ class ContinueListeningDialog(wx.Dialog):
             except OSError:
                 pass
 
-        menu.Bind(wx.EVT_MENU, on_forget, forget_item)
-        menu.Bind(wx.EVT_MENU, on_folder, folder_item)
-        self.PopupMenu(menu)
-        menu.Destroy()
+        try:
+            selected = self._list.GetPopupMenuSelectionFromUser(menu)
+            action = {resume_item.GetId(): lambda e: self._resume(item),
+                      forget_item.GetId(): on_forget, folder_item.GetId(): on_folder}.get(selected)
+        finally:
+            menu.Destroy()
+        self._list.SetFocus()
+        if action:
+            action(None)

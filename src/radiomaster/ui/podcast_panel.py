@@ -252,12 +252,20 @@ class PodcastPanel(wx.Panel):
             # organization), then unfiled shows -- each show row carries
             # its "(N unheard)" badge so the count is spoken in the row.
             folders = repo.get_folders()
+            opened = getattr(self, "_open_folder_id", None)
+            if opened is not None and not any(f["id"] == opened for f in folders):
+                opened = self._open_folder_id = None
+            if opened is not None:
+                self._append_row(self._podcast_list, "Back to all subscriptions", "")
+                self._podcast_data.append({"_folder_back": True})
             for folder in folders:
+                if opened is not None:
+                    continue
                 self._append_row(self._podcast_list,
                                  f"{folder['name']} (folder)", "")
                 self._podcast_data.append({"_folder": folder})
             for p in repo.get_all():
-                if p.get("folder_id"):
+                if p.get("folder_id") != opened:
                     continue
                 unheard = episode_repo.unheard_count(p["id"])
                 label = (f"{p.get('title', 'Unknown')} ({unheard} unheard)"
@@ -567,6 +575,20 @@ class PodcastPanel(wx.Panel):
         for already-subscribed podcasts, which single-click already loads."""
         if self._viewing_search_results:
             self._on_subscribe(event)
+            return
+        idx = self._podcast_list.GetFirstSelected()
+        rows = getattr(self, "_podcast_data", [])
+        if 0 <= idx < len(rows):
+            row = rows[idx]
+            if "_folder" in row or "_folder_back" in row:
+                self._open_folder_id = row["_folder"]["id"] if "_folder" in row else None
+                self._refresh_subscriptions()
+                if self._podcast_data:
+                    self._podcast_list.Select(0)
+                    self._podcast_list.Focus(0)
+                self._podcast_list.SetFocus()
+                self._set_status("Status: " + (f"Opened {row['_folder']['name']}." if "_folder" in row
+                                              else "All subscriptions."))
 
     def _on_subscribe(self, event: wx.Event) -> None:
         """Subscribes to the selected directory search result: adds it to
@@ -901,44 +923,50 @@ class PodcastPanel(wx.Panel):
         same_episode = bool(url) and self._engine.current_url == url
         if same_episode and self._engine.state == "paused":
             play_item = menu.Append(wx.ID_ANY, "&Resume")
-            self.Bind(wx.EVT_MENU, lambda e: self._engine.resume(), play_item)
+            play_action = self._engine.resume
         elif same_episode and self._engine.state in ("playing", "buffering"):
             play_item = menu.Append(wx.ID_ANY, "&Pause")
-            self.Bind(wx.EVT_MENU, lambda e: self._engine.pause(), play_item)
+            play_action = self._engine.pause
         else:
             play_item = menu.Append(wx.ID_ANY, "&Play")
             play_item.Enable(bool(url))
-            self.Bind(wx.EVT_MENU, lambda e, i=idx: self._play_episode_at(i, offer_resume=True), play_item)
+            play_action = lambda: self._play_episode_at(idx, offer_resume=True)
 
         stop_item = menu.Append(wx.ID_ANY, "&Stop")
         stop_item.Enable(same_episode and self._engine.state != "stopped")
-        self.Bind(wx.EVT_MENU, lambda e: self._engine.stop(), stop_item)
 
         menu.AppendSeparator()
 
         download_item = menu.Append(wx.ID_ANY, "&Download")
         download_item.Enable(bool(url))
-        self.Bind(wx.EVT_MENU, lambda e, i=idx: self._download_episode_at(i, show_confirmation=True), download_item)
 
         download_all_item = menu.Append(wx.ID_ANY, "Download &All")
         download_all_item.Enable(any(episode.get("audio_url") for episode in episodes))
-        self.Bind(wx.EVT_MENU, lambda e: self._on_download_all(), download_all_item)
 
         menu.AppendSeparator()
         refresh_item = menu.Append(wx.ID_ANY, "Re&fresh Episodes")
         refresh_item.Enable(bool(podcast.get("id") and podcast.get("feed_url"))
                             and podcast["id"] not in self._refreshing_podcasts)
-        # Use self.Bind (not menu.Bind) so the handler runs after the
-        # menu dismisses, matching how every other item in this menu
-        # works -- menu.Bind can leave the menu visually open while the
-        # handler runs, which is what "refresh does not close the menu"
-        # reported.
-        self.Bind(wx.EVT_MENU, lambda e: self._refresh_subscription(podcast), refresh_item)
-
+        # Dispatch only after the native popup loop has returned. Starting
+        # refresh from EVT_MENU can update the list while the popup is still
+        # active, leaving keyboard focus in the menu until Escape is pressed.
+        actions = {
+            play_item.GetId(): play_action,
+            stop_item.GetId(): self._engine.stop,
+            download_item.GetId(): lambda: self._download_episode_at(idx, show_confirmation=True),
+            download_all_item.GetId(): self._on_download_all,
+            refresh_item.GetId(): lambda: self._refresh_subscription(podcast),
+        }
         try:
-            self._episode_list.PopupMenu(menu, context_menu_pos(self._episode_list, event))
+            selected = self._episode_list.GetPopupMenuSelectionFromUser(
+                menu, context_menu_pos(self._episode_list, event),
+            )
+            action = actions.get(selected)
         finally:
             menu.Destroy()
+        self._episode_list.SetFocus()
+        if action is not None:
+            action()
 
     @staticmethod
     def _write_show_notes(feed_dir: str, filename_base: str, podcast_title: str,
@@ -993,6 +1021,9 @@ class PodcastPanel(wx.Panel):
 
         idx = self._podcast_list.GetFirstSelected()
         if idx < 0 or not hasattr(self, '_podcast_data') or idx >= len(self._podcast_data):
+            return
+        if "_folder" in self._podcast_data[idx] or "_folder_back" in self._podcast_data[idx]:
+            self._set_status("Status: Press Enter to open this folder or return to subscriptions.")
             return
 
         if self._viewing_search_results:
@@ -1224,12 +1255,42 @@ class PodcastPanel(wx.Panel):
             self._engine.set_rate(show_rate or 1.0)
 
         if resume_position > 0:
-            import threading
-            threading.Timer(1.0, lambda: self._engine.seek(resume_position)).start()
+            self._engine.seek_when_ready(resume_position)
 
-        if self._current_episode_id is not None:
-            from radiomaster.database.repository import EpisodeRepository
-            EpisodeRepository(self._db).mark_played(self._current_episode_id, True)
+    def resume_episode(self, episode_id: int, position: float) -> None:
+        from radiomaster.database.repository import EpisodeRepository
+        episode = EpisodeRepository(self._db).get(episode_id)
+        if not episode:
+            return
+        self._save_position()
+        self._current_episode_id = episode_id
+        self._current_playing_index = None
+        self._last_played_url = episode.get("file_path") or episode.get("audio_url") or ""
+        from radiomaster.database.repository import PodcastRepository
+        self._engine.set_rate(PodcastRepository(self._db).get_playback_rate(episode["podcast_id"]))
+        self._engine.play(self._last_played_url, title=episode.get("title", ""),
+                          duration=float(episode.get("duration") or 0))
+        self._engine.seek_when_ready(position)
+
+    def finish_current_episode(self) -> None:
+        """Mark completion only when the episode actually ends."""
+        if self._current_episode_id is None or self._engine.current_url != self._last_played_url:
+            return
+        from radiomaster.database.repository import EpisodeRepository
+        EpisodeRepository(self._db).mark_played(self._current_episode_id, True)
+        self._update_unheard_badges()
+
+    def _update_unheard_badges(self) -> None:
+        from radiomaster.database.repository import EpisodeRepository
+        if self._viewing_search_results:
+            return
+        repo = EpisodeRepository(self._db)
+        for index, podcast in enumerate(getattr(self, "_podcast_data", [])):
+            if not podcast.get("id"):
+                continue
+            count = repo.unheard_count(podcast["id"])
+            title = podcast.get("title", "Unknown")
+            self._podcast_list.SetItem(index, 0, f"{title} ({count} unheard)" if count else title)
 
     def try_auto_advance(self) -> bool:
         """Called when the engine reports a track finished naturally (see

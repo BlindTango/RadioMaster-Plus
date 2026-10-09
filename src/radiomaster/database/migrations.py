@@ -342,6 +342,12 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE podcasts ADD COLUMN folder_id INTEGER REFERENCES podcast_folders(id);
         ALTER TABLE podcasts ADD COLUMN playback_rate REAL DEFAULT 1.0;
     """),
+    (28, """
+        ALTER TABLE episodes ADD COLUMN last_listened_at TEXT DEFAULT '';
+        ALTER TABLE audiobooks ADD COLUMN last_listened_at TEXT DEFAULT '';
+        ALTER TABLE audiobooks ADD COLUMN last_played_path TEXT DEFAULT '';
+        ALTER TABLE media_files ADD COLUMN last_listened_at TEXT DEFAULT '';
+    """),
 ]
 
 
