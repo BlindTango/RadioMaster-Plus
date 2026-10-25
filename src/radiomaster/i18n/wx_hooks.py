@@ -18,6 +18,7 @@ import wx
 log = logging.getLogger("radiomaster")
 
 _installed = False
+_originals: list[tuple[object, str, object, bool]] = []
 
 
 def _translate(text):
@@ -29,6 +30,7 @@ def _wrap_init(cls, label_index: int | None, kwargs=("label",)) -> None:
     """Wrap cls.__init__: translate the named keyword(s) and, when given, the
     positional argument at ``label_index`` (counting after self)."""
     original = cls.__init__
+    _originals.append((cls, "__init__", vars(cls).get("__init__", original), "__init__" in vars(cls)))
 
     @functools.wraps(original)
     def wrapper(self, *args, **kw):
@@ -45,6 +47,7 @@ def _wrap_init(cls, label_index: int | None, kwargs=("label",)) -> None:
 
 def _wrap_method(cls, name: str, positions: tuple[int, ...], kwargs: tuple[str, ...] = ()) -> None:
     original = getattr(cls, name)
+    _originals.append((cls, name, vars(cls).get(name, original), name in vars(cls)))
 
     @functools.wraps(original)
     def wrapper(self, *args, **kw):
@@ -90,6 +93,7 @@ def install() -> None:
 
         # wx.MessageBox(message, caption, ...)
         original_box = wx.MessageBox
+        _originals.append((wx, "MessageBox", original_box, True))
 
         @functools.wraps(original_box)
         def message_box(message, caption="Message", *args, **kw):
@@ -104,10 +108,20 @@ def install() -> None:
         # Tabs: AddPage(page, text, ...)
         for cls in (wx.Listbook, wx.Notebook):
             _wrap_method(cls, "AddPage", (1,), ("text",))
-        # Window title / label changes made after construction.
-        _wrap_method(wx.Frame, "SetTitle", (0,))
-        _wrap_method(wx.Dialog, "SetTitle", (0,))
-        _wrap_method(wx.StaticText, "SetLabel", (0,))
-        _wrap_method(wx.Button, "SetLabel", (0,))
     except Exception as exc:  # a wx build without one of these: stay English
         log.warning("UI translation hooks only partly installed: %s", exc)
+
+
+def uninstall() -> None:
+    """Put the original wx constructors and methods back (used by tests)."""
+    global _installed
+    for owner, name, original, had_own in reversed(_originals):
+        if had_own:
+            setattr(owner, name, original)
+        else:
+            try:
+                delattr(owner, name)    # fall back to the inherited one again
+            except AttributeError:
+                pass
+    _originals.clear()
+    _installed = False

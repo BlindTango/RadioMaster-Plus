@@ -65,6 +65,7 @@ def test_wx_hooks_translate_real_widgets_and_menus():
         assert book.GetPageText(0) == "Radio FM"
         frame.Destroy()
     finally:
+        wx_hooks.uninstall()
         m._current_language, m._catalogues = saved
         app.ProcessPendingEvents()
 

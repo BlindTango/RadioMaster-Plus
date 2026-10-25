@@ -62,6 +62,8 @@ def spanish_window(tmp_path, monkeypatch):
     finally:
         from radiomaster.i18n import I18nManager
         I18nManager().set_language("en")
+        from radiomaster.i18n import wx_hooks
+        wx_hooks.uninstall()
         win._lyrics_timer.Stop()
         win._station_update_scheduler.shutdown()
         win._health_service.stop()
@@ -135,6 +137,8 @@ def test_other_languages_start_and_translate_the_menu_bar(tmp_path, monkeypatch,
         assert bar.GetMenuCount() >= 5
     finally:
         I18nManager().set_language("en")
+        from radiomaster.i18n import wx_hooks
+        wx_hooks.uninstall()
         win._lyrics_timer.Stop()
         win._station_update_scheduler.shutdown()
         win._health_service.stop()

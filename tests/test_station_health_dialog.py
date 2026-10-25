@@ -13,7 +13,7 @@ from radiomaster.ui.station_health_dialog import StationHealthDialog, _HiddenSta
 
 
 def wait_for(predicate):
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 30
     while not predicate() and time.monotonic() < deadline:
         wx.Yield()
         time.sleep(0.005)

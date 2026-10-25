@@ -1231,6 +1231,21 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             differently from the main interface. Read the specific feature's topic for
             limitations rather than assuming every visible placeholder is fully functional.
         """),
+        _topic("Interface Languages", """
+            Open Settings ({shortcut:settings}) > General and choose a Language, then
+            select OK and restart RadioMaster+. English, Spanish, French, German, Italian,
+            Portuguese, Russian, Japanese and Chinese (Simplified) are included.
+
+            A translation changes menu names, tab names, button and field labels, and most
+            dialog messages. Status-bar text built while the program runs, this manual
+            and the Quick Start Guide stay in English. The translations are drafts that
+            native speakers have not reviewed, so some wording may be awkward; keyboard
+            shortcut letters shown in menus follow the translated names.
+
+            A language is listed only when its catalogue file exists in the program's
+            i18n folder (radiomaster.po inside a folder named with the language code).
+            Choosing a language that is no longer available falls back to English.
+        """),
         _topic("Keyboard Shortcuts", """
             Open Tools > Keyboard Shortcuts ({shortcut:keyboard_shortcuts}). Filter
             features by typing in Filter features. Select a feature to inspect its

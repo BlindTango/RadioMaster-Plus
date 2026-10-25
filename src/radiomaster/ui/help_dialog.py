@@ -98,6 +98,19 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "or try another station. The application log records disconnects, stalls, "
         "retry attempts, and retry limits for troubleshooting."
     )),
+    ("What's New in Version 1.3.0", (
+        "Crossfade now overlaps local playlist tracks: set Crossfade Duration in "
+        "Settings > Playback and the next track fades in as the current one fades out.\n\n"
+        "Audiobooks: DAISY books play each chapter from its own audio and start point and "
+        "show the chapter text. Go to Page, Previous Page and Next Page move by printed page "
+        "number. Bookmarks lists your saved places with Go To. Read with TTS highlights the "
+        "sentence being spoken, and a second voice engine (Windows OneCore voices) is available.\n\n"
+        "The interface is now available in Spanish, French, German, Italian, Portuguese, "
+        "Russian, Japanese and Chinese: choose a language in Settings > General and restart.\n\n"
+        "Also new: working End of Track and End of Playlist sleep timer modes, playlists saved "
+        "and opened as M3U/M3U8/PLS, playing media from inside ZIP archives, uploading "
+        "subscriptions to gpodder.net, and optional Genius and Musixmatch lyrics keys."
+    )),
     ("What's New in Version 1.2.3", (
         "The seek slider now works for media files and active live time-shift buffers. "
         "Tab to Playback Position below the time display. Left/Right move one second; "
@@ -157,6 +170,19 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         f"Local media: press {_key('open_file')} for a file "
         "or use File > Open Folder, then select a playlist item and press Enter."
     )),
+    ("Use Pages and Bookmarks in an Audiobook", (
+        f"Press {_key('panel_audiobooks')}, choose Browse Folder and pick a DAISY book. Select a "
+        "chapter and press Enter to play it from its own start point; Chapter Text shows its words. "
+        "Go to Page asks for a page number or label such as 12 or iv, and Previous Page and Next "
+        "Page step through the book's pages. Add Bookmark saves the current spot; Bookmarks lists "
+        "them, and Go To resumes there. Read with TTS highlights each sentence as it is spoken."
+    )),
+    ("Change the Interface Language", (
+        f"Press {_key('settings')}, choose General, pick a Language, then OK and restart "
+        "RadioMaster+. Menus, tabs, buttons and most dialogs appear in that language; status "
+        "messages built while the program runs and this help stay in English. The translations "
+        "are drafts, and other languages can be added as catalogue files."
+    )),
     ("Seek Through Media and Time-Shift", (
         "Tab to Playback Position below the time display. Left/Right move one second; "
         "Page Up/Page Down move ten seconds; Home/End jump to the start/end. "
@@ -201,6 +227,28 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.3.0", (
+        "Playback: crossfade between local playlist tracks now overlaps them for the chosen "
+        "duration. Normalize audio measures local files in the background and adjusts their "
+        "volume. Dynamic Range converts its dB threshold correctly, and the equalizer uses one "
+        "filter per band. Echo In Gain and Gargle Depth remain unavailable on the BASS engine.\n\n"
+        "Audiobooks: DAISY 2.02 and DAISY 3 books are now read through their navigation and SMIL "
+        "files, so each chapter and page has its own audio, start point, text and duration. New: "
+        "Go to Page, Previous/Next Page (assignable shortcuts), a Bookmarks list, chapter text with "
+        "sentence highlighting, automatic advance to the next chapter, and the Windows OneCore "
+        "voice engine.\n\n"
+        "Interface: translations for Spanish, French, German, Italian, Portuguese, Russian, "
+        "Japanese and Chinese (unreviewed drafts). Only languages that ship a translation are "
+        "listed in Settings.\n\n"
+        "Other: End of Track and End of Playlist sleep timer modes now work; Save Playlist and "
+        "M3U/M3U8/PLS import; playback from ZIP archives; First/Previous/Next/Last on Media "
+        "Player, Audiobooks and YouTube; global search for podcasts, YouTube, media and "
+        "audiobooks; gpodder.net upload; Genius and Musixmatch lyrics keys; equalizer window "
+        "presets persist; cancelling a preset edit restores the sound; the Download History "
+        "limit skips zero.\n\n"
+        "Fixed: the minimize-to-tray default, the BASS 'already initialized' error code, and "
+        "intermittent test-setup failures."
+    )),
     ("Version 1.2.3", (
         "Seek slider: media files now expose their actual audio duration, enabling "
         "the position slider. It supports one-second arrow steps, ten-second page "
