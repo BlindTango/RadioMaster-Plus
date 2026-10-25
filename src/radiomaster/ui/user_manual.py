@@ -122,9 +122,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             search field's clear button clears its text.
 
             The scope list contains All, Radio, Podcasts, YouTube, Media, and Audiobooks.
-            In this version, the global handler searches stored radio and media records;
-            the other listed scopes are not connected to directory searches. All does
-            not provide a combined search of all seven panels.
+            Radio searches the stored station catalogue, Media searches files you have
+            played before and loads the matches into the playlist, and Audiobooks
+            searches your saved books. All searches those three and opens the first tab
+            with matches; the status bar says how many it found. Podcasts and YouTube
+            open that panel and run its own live search with your text.
 
             Use the Radio panel's own Search for the station catalogue, the Podcasts
             Search for podcast directories, and YouTube Search with Videos, Channels,
@@ -176,11 +178,15 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             to the ends of that history; Previous and Next move one history entry.
             Podcasts: move through the loaded podcast's episodes in the chosen order.
             Downloads: move through playable items in Download History.
+            Media Player: move through the playlist and play that item.
+            Audiobooks: move through the loaded book's chapters and play that chapter.
 
-            On the other panels, these shared commands currently fall back to seeking:
-            First seeks to the start, Last near the end, and Previous/Next move backward
-            or forward. They are not audiobook chapter or YouTube playlist navigation.
-            Select and activate the required chapter or result directly. Local media
+            YouTube: move through the listed video results and play that video (when
+            the list shows channels or playlists, open one first).
+
+            On the Scheduler, these shared commands fall back to seeking: First seeks
+            to the start, Last near the end, and Previous/Next move backward or
+            forward. Local media
             playlists can advance automatically when a track finishes.
         """),
         _topic("Now Playing and the Status Bar", """
@@ -423,8 +429,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             To import public gPodder subscriptions, enter the gPodder Username in
             Settings > Podcasts, save it, then choose Import gpodder.net Subscriptions
             from the Podcasts list context menu.
-            This imports publicly available subscriptions. It is not authenticated
-            two-way synchronization of private feeds or listening progress.
+            Upload Subscriptions to gpodder.net replaces the subscription list of your
+            device named default with the feeds you are subscribed to here. It asks for
+            your gpodder.net password each time and never stores it. Listening progress
+            and private feeds are not synchronized.
         """),
         _topic("Episode Playback, Resume, and Show Notes", """
             Select a show, select an episode, and press Enter. A downloaded local copy
@@ -513,14 +521,21 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             navigation files and media. The parser supports DAISY 2 and DAISY 3 structures.
             A loaded-book message reports the format and discovered chapters/audio files.
 
-            Select a chapter and activate it. Books without a usable chapter list can
+            Select a chapter and activate it; when it ends, the next chapter starts
+            automatically. Books without a usable chapter list can
             be listed by their audio files instead. Keep the book's folder structure
             intact so relative media references continue to work.
 
-            Chapter navigation currently selects associated audio files. The application
-            does not provide a complete DAISY player with page-number navigation or
-            guaranteed synchronized sentence highlighting. Use chapter selection and
-            the media position controls for the navigation available here.
+            Each chapter plays the audio file and starting point the book assigns to
+            it, and Chapter Text shows its text. When the book has page numbers, Go to
+            Page asks for a page number or label (for example 12 or iv) and plays from
+            the start of that page; Previous Page and Next Page step through them. These
+            commands also have assignable shortcuts ({shortcut:go_to_page},
+            {shortcut:previous_page}, {shortcut:next_page}) that work from any tab. The
+            status bar announces the page reached. Books without page markers report
+            that they have none. Recorded audio is not synchronized with the text, but
+            Read with TTS highlights the sentence being spoken in Chapter Text,
+            using the highlight colour from Settings > Accessibility.
         """),
         _topic("Audiobook Resume and Bookmarks", """
             The application stores a listening position for a loaded audiobook. Reopening
@@ -528,9 +543,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             when playback starts, or decline to start normally.
 
             Select a chapter and choose Add Bookmark to save its title, book location,
-            and the current audio position. A message confirms the save. This version
-            does not expose a bookmark list, jump-to-bookmark command, or bookmark editor.
-            Saved bookmarks should therefore not be treated as a complete navigation tool.
+            and the current audio position. A message confirms the save. Choose
+            Bookmarks to list the bookmarks saved for the loaded book. Go To (or Enter)
+            selects that chapter and starts playing at the saved position; Delete
+            removes a bookmark.
 
             Resume is stored for the book rather than a full chapter-by-chapter reading
             history. When reopening a folder book, select the intended chapter before
@@ -542,7 +558,7 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             has no text, it reports No Text; audio-only files cannot be read as text.
 
             Choose the engine, installed voice, speech rate, and speech volume in
-            Settings > Audiobooks. Windows SAPI 5 is currently supported. Preview Voice
+            Settings > Audiobooks. Two engines are offered: Windows SAPI 5 and Windows OneCore voices. Preview Voice
             lets you listen before saving; Apply or OK saves your choices for the next
             Read with TTS. Stop TTS stops book speech.
 
@@ -572,13 +588,14 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             file and use Add to Playlist. Open File lets you choose a file directly
             and adds it to the playlist; activate its row to play.
 
-            Open Archive displays the contents of a ZIP archive in the tree. Archive
-            browsing currently does not extract member files for playback. Extract the
-            archive with your archive tool, then browse the extracted folder to play it.
+            Open Archive displays the contents of a ZIP archive in the tree. Select a
+            media file inside the archive and choose Add to Playlist; it is extracted to
+            a temporary folder and played from there.
 
-            The file chooser also lists M3U and PLS playlist extensions. There is no
-            playlist import/export editor in this panel; individual entries and folder
-            loading are the supported ways to build its visible playlist.
+            The file chooser also lists M3U and PLS playlist files. Opening one adds every
+            entry it lists (relative paths are resolved against the playlist's folder,
+            and stream addresses are accepted). Save Playlist writes the current playlist
+            to an M3U8 file. There is no playlist editor in this panel.
         """),
         _topic("Automatic Advance, Crossfade, and Gapless", """
             When an item started from the local playlist finishes, the next item can
@@ -875,8 +892,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             distortion, flanger, and gargle parameter updates live without toggling the
             effect off and on. Some controls are approximated or limited by the native
             effect: for example, Echo's In Gain and Gargle's Depth have no effect there.
-            Equalizer settings map into broader bands. Dynamic Range currently shares
-            the Compressor effect rather than applying its own complete parameter set.
+            Each equalizer slider has its own filter, except that DirectX cannot go below 80 Hz, so the 32 and 64 Hz sliders share one filter. Dynamic Range uses the
+            same native compressor with its threshold, ratio, attack and release
+            converted; its Knee setting has no native equivalent and is not applied.
             Video uses a separate path and can restart for changes.
         """),
         _topic("Creating and Managing Effect Presets", """
@@ -890,8 +908,8 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Use a distinct name to avoid replacing an existing custom preset.
 
             Parameter sliders send live preview changes on supported playback paths.
-            Canceling an edit does not guarantee that audible preview changes are undone.
-            Reapply the previous preset or turn the effect off to return to known settings.
+            Canceling New or Edit puts back the settings that were active before the
+            live preview moved the sliders.
             Creating or saving a preset is separate from choosing Apply in the manager.
         """),
         _topic("Equalizer Window", """
@@ -903,11 +921,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             The equalizer window has Preset, Save as Preset, Delete Preset, an Enable
             Equalizer checkbox, and live band adjustments. Save as Preset creates a
             named choice in that open dialog; Delete Preset removes a custom choice.
-            Those dialog-local custom choices are not stored persistently. Use the
-            Effects > Equalizer manager for custom presets saved between sessions. Confirm
-            the settings you want to keep. With the BASS backend, the ten UI bands are
-            grouped into bass, vocal, and treble ranges rather than ten independent
-            narrow filters, so adjacent sliders can have related results.
+            Presets saved here are kept between sessions and also appear in the
+            Effects > Equalizer manager. Confirm
+            the settings you want to keep. With the BASS backend, each band
+            is one octave wide, so adjacent sliders overlap slightly, and the 32 and
+            64 Hz sliders share a single 80 Hz filter.
         """),
     ]),
     ("Additional Tools", [
@@ -963,10 +981,12 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             When the timer expires, it stops listening playback rather than shutting
             down Windows. Independent radio recordings are not controlled by this timer.
 
-            Mode lists Countdown, End of Track, and End of Playlist. In this version,
-            all three are wired to stop at the elapsed countdown. The latter two do
-            not yet defer stopping until a track or playlist boundary. Use Countdown
-            when choosing the behavior you can currently rely on.
+            Mode lists Countdown, End of Track, and End of Playlist. Countdown stops
+            playback when the time runs out. End of Track lets the current track play
+            to its end and then stops instead of advancing. End of Playlist lets the
+            playlist continue and stops when it has nothing more to play. The status
+            bar announces when the stop is armed and when it happens. Live radio has no
+            track end, so for live streams all three modes stop when the time runs out.
         """),
         _topic("Song History", """
             Open Tools > Song History ({shortcut:song_history}) to see what songs have
@@ -1020,7 +1040,7 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
 
             Apply saves the visited categories and keeps Settings open. OK saves and
             closes. Cancel closes without saving changes made since the last Apply;
-            it does not reverse settings already applied. Language changes require a
+            it does not reverse settings already applied. Only languages that ship a translation are listed (currently English). Language changes require a
             restart, and reduced-motion startup changes apply on the next launch.
 
             Some choices disable dependent controls: for example, proxy details when
@@ -1049,12 +1069,14 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Automatic Advance, Crossfade, and Gapless for backend limitations.
 
             ReplayGain offers None, Album, and Track and uses available gain tags.
-            Normalize audio (EBU R128) requests loudness normalization; support depends
-            on the playback path, and the current BASS effects mapping does not supply
-            a full EBU R128 normalization stage. Remember playback position enables
+            Normalize audio (EBU R128) evens out loudness for local files: the first time
+            a file plays, FFmpeg measures it in the background and its volume is then
+            adjusted toward the target (-16 LUFS by default). Streams are not measured,
+            and ReplayGain, when selected, takes the place of this measurement. Remember playback position enables
             general media progress restoration where supported.
 
-            AcoustID API Key is used by Track Identifier. Use the nearby key link to
+            Genius API token and Musixmatch API key are optional extra lyrics sources;
+            leave them empty to use only LRCLib and Lyrics.ovh. AcoustID API Key is used by Track Identifier. Use the nearby key link to
             configure that feature; it is unrelated to podcast-directory credentials.
         """),
         _topic("Radio Settings", """
@@ -1095,10 +1117,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Preview Voice to hear a sample. Select Apply or OK to save your choices.
 
             TTS Engine selects the speech engine used by Read with TTS. Windows SAPI 5
-            is currently supported. Voice lists the compatible voices installed for
-            this application, plus System default voice. Windows OneCore-only voices
-            and voices installed solely for a different application architecture may
-            not appear in this list. Some installed voices use online services and
+            uses the classic Windows speech voices. Windows OneCore voices uses the
+            voices Windows exposes to modern apps (the speech languages added in
+            Settings > Time & language). Voice lists the voices installed for the
+            chosen engine; voices installed solely for a different application
+            architecture may not appear. Some installed voices use online services and
             require a working connection to their provider.
 
             Speech Rate ranges from -10 to 10, with 0 as normal. Speech Volume ranges
@@ -1126,7 +1149,7 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             supported output formats. These options do not edit all pre-existing files.
 
             Download History entries to show accepts -1 for unlimited or a positive
-            count; zero is currently treated as one. The display limit is not automatic deletion. See History
+            count; the arrow keys skip zero, which has no meaning. The display limit is not automatic deletion. See History
             Length and Playback Navigation before clearing older history entries.
         """),
         _topic("Recording Settings", """

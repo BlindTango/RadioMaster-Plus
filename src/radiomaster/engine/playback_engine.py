@@ -64,6 +64,8 @@ class PlaybackEngine:
         self._pan: float = 0.0
         self._replaygain_mode: str = "none"  # "none", "track", or "album"
         self._replaygain_db: float = 0.0
+        self._loudness_cache: dict[str, float] = {}
+        self._loudness_pending: set[str] = set()
         self._auto_reconnect: bool = False
         self._reconnect_attempts: int = 0
         self._MAX_RECONNECT_ATTEMPTS = 5
@@ -517,12 +519,60 @@ class PlaybackEngine:
                 self._bass_radio.set_volume(effective)
 
     def _compute_replaygain(self, url: str) -> float:
-        """ReplayGain only makes sense for local files with tags -- radio
-        streams and remote URLs have no metadata to read."""
-        if self._replaygain_mode == "none" or not os.path.isfile(url):
+        """Gain (dB) applied on top of the user's volume: ReplayGain tags plus,
+        when Normalize audio is on, a measured EBU R128 loudness correction.
+        Both only make sense for local files -- radio streams and remote URLs
+        have no tags to read and no finite length to measure."""
+        if not os.path.isfile(url):
             return 0.0
-        from radiomaster.utils.replaygain import read_replaygain_db
-        return read_replaygain_db(url, self._replaygain_mode)
+        gain = 0.0
+        if self._replaygain_mode != "none":
+            from radiomaster.utils.replaygain import read_replaygain_db
+            gain += read_replaygain_db(url, self._replaygain_mode)
+        elif self._effects["normalization"]["enabled"]:
+            gain += self._loudness_gain(url)
+        return gain
+
+    def _refresh_loudness_gain(self) -> None:
+        """Re-apply gain to what is playing after Normalize audio changes."""
+        if not self._current_url:
+            return
+        self._replaygain_db = self._compute_replaygain(self._current_url)
+        if self._using_bass_radio and self._bass_radio:
+            effective = min(2.0, self._volume * (10.0 ** (self._replaygain_db / 20.0)))
+            self._bass_radio.set_volume(effective)
+
+    def _loudness_gain(self, url: str) -> float:
+        """EBU R128 correction toward the normalization target. The first
+        measurement of a file runs in the background (ffmpeg has to decode
+        it), so playback starts at once and the gain is applied when ready."""
+        target = float(self._effects["normalization"]["params"].get("target", -16))
+        cached = self._loudness_cache.get(url)
+        if cached is not None:
+            return max(-15.0, min(12.0, target - cached))
+        if url in self._loudness_pending:
+            return 0.0
+        self._loudness_pending.add(url)
+
+        def worker() -> None:
+            try:
+                from radiomaster.services.volume_normalizer import VolumeNormalizer
+                info = VolumeNormalizer.analyze_loudness(url)
+                if info:
+                    self._loudness_cache[url] = float(info["input_i"])
+            except Exception:
+                pass
+            finally:
+                self._loudness_pending.discard(url)
+            if (self._loudness_cache.get(url) is not None and self._current_url == url
+                    and self._effects["normalization"]["enabled"]):
+                self._replaygain_db = self._compute_replaygain(url)
+                if self._using_bass_radio and self._bass_radio:
+                    effective = min(2.0, self._volume * (10.0 ** (self._replaygain_db / 20.0)))
+                    self._bass_radio.set_volume(effective)
+
+        threading.Thread(target=worker, daemon=True, name="loudness-analysis").start()
+        return 0.0
 
     def stop(self, wait: bool = True) -> None:
         """Stop playback. Stops whichever backend might be active -- each
@@ -787,6 +837,8 @@ class PlaybackEngine:
         """Enable or disable an effect."""
         if effect_id in self._effects:
             self._effects[effect_id]["enabled"] = enabled
+            if effect_id == "normalization":
+                self._refresh_loudness_gain()
             if self._bass_radio:
                 self._bass_radio.apply_effects(self._effects)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):
@@ -801,6 +853,8 @@ class PlaybackEngine:
             self._effects[effect_id]["preset"] = preset_name
             self._effects[effect_id]["params"] = params
             self._effects[effect_id]["enabled"] = True
+            if effect_id == "normalization":
+                self._refresh_loudness_gain()
             if self._bass_radio:
                 self._bass_radio.apply_effects(self._effects)
             if self._is_video_active and self._state in (self.STATE_PLAYING, self.STATE_PAUSED):

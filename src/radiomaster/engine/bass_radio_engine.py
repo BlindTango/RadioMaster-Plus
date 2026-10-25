@@ -323,24 +323,39 @@ class BassRadioEngine:
                   "flanger", "gargle"}
         active = {name for name in direct
                   if effects.get(name, {}).get("enabled")}
-        if effects.get("dynamic_range", {}).get("enabled"):
+        fx_params = {name: dict(effects.get(name, {}).get("params", {}))
+                     for name in active}
+        dynamic = effects.get("dynamic_range", {})
+        if dynamic.get("enabled") and "compressor" not in active:
+            # Dynamic Range drives the same DX8 compressor, but its controls
+            # are in dB (threshold -60..0) where the Compressor's are linear
+            # (0.01..1), so convert instead of passing them through unchanged.
+            dyn = dynamic.get("params", {})
+            threshold_db = max(-60.0, min(0.0, float(dyn.get("threshold", -20))))
             active.add("compressor")
+            fx_params["compressor"] = {
+                "threshold": 10.0 ** (threshold_db / 20.0),
+                "ratio": float(dyn.get("ratio", 4)),
+                "attack": float(dyn.get("attack", 5)),
+                "release": float(dyn.get("release", 50)),
+                "makeup": 1.0,
+            }
         eq = effects.get("equalizer", {})
         if eq.get("enabled"):
             params = eq.get("params", {})
-            groups = {
-                "eq_bass": ("32", "64", "125"),
-                "eq_vocal": ("250", "500", "1k", "2k"),
-                "eq_treble": ("4k", "8k", "16k"),
+            # One filter per slider (32 and 64 Hz share the 80 Hz filter,
+            # the lowest centre DirectX allows).
+            bands = {
+                "eqb_80": ("32", "64"), "eqb_125": ("125",), "eqb_250": ("250",),
+                "eqb_500": ("500",), "eqb_1k": ("1k",), "eqb_2k": ("2k",),
+                "eqb_4k": ("4k",), "eqb_8k": ("8k",), "eqb_16k": ("16k",),
             }
-            for band, keys in groups.items():
+            for band, keys in bands.items():
                 gain = sum(float(params.get(key, 0.0)) for key in keys) / len(keys)
                 active.add(band)
                 self._request({"cmd": "set_eq_gain", "band": band,
                                "gain_db": gain})
-        self._request({"cmd": "set_fx", "fx": sorted(active),
-                       "params": {name: dict(effects.get(name, {}).get("params", {}))
-                                  for name in active}})
+        self._request({"cmd": "set_fx", "fx": sorted(active), "params": {name: fx_params.get(name, {}) for name in active}})
 
     def set_output_device(self, device_name: str) -> bool:
         devices = self._request({"cmd": "list_devices"}).get("devices", [])

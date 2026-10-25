@@ -56,6 +56,11 @@ def app_and_window(tmp_path, monkeypatch):
     monkeypatch.setattr("radiomaster.services.station_api._discover_servers", lambda: [])
     monkeypatch.setattr("radiomaster.services.station_api.StationAPI.bulk_stations",
                         lambda *args, **kwargs: [])
+    # Earlier test modules leave wx.App objects behind for the garbage collector.
+    # If one is collected while this app is starting, wx's global app pointer is
+    # cleared mid-OnInit ("No wx.App created yet"), so collect them first.
+    import gc
+    gc.collect()
     app = RadioMasterApp()
     # wx.LogGui opens modal error windows when queued native warnings flush at
     # shutdown. Keep diagnostics in pytest's stderr instead of blocking teardown.
@@ -1497,7 +1502,8 @@ class TestPodcastContextMenuKeys:
         if list_name == "_podcast_list":
             assert menus[0] == ["Unsubscribe", "Add RSS Feed...",
                                 "New Folder...",
-                                "Import gpodder.net Subscriptions", "Import OPML...",
+                                "Import gpodder.net Subscriptions",
+                                "Upload Subscriptions to gpodder.net...", "Import OPML...",
                                 "Export OPML..."]
         else:
             assert "Refresh Episodes" in menus[0]

@@ -1,3 +1,5 @@
+> **Historical snapshot (August 2026, v5.33.20 era).** Most items listed as pending here have since shipped. For current behaviour see the in-app User Manual and README.
+
 # RadioMaster+ Session Summary
 **Date:** 2026-08-04  
 **Version:** 5.33.20  

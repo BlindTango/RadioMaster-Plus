@@ -65,10 +65,10 @@ class FileTreePanel(wx.Panel):
         """Open a file dialog for media files."""
         wildcard = (
             "All supported files|*.mp3;*.flac;*.ogg;*.wav;*.aac;*.m4a;*.wma;*.opus;"
-            "*.mp4;*.mkv;*.avi;*.webm;*.mov;*.m4b;*.pls;*.m3u"
+            "*.mp4;*.mkv;*.avi;*.webm;*.mov;*.m4b;*.pls;*.m3u;*.m3u8"
             "|Audio files|*.mp3;*.flac;*.ogg;*.wav;*.aac;*.m4a;*.wma;*.opus"
             "|Video files|*.mp4;*.mkv;*.avi;*.webm;*.mov"
-            "|Playlists|*.pls;*.m3u"
+            "|Playlists|*.pls;*.m3u;*.m3u8"
             "|All files|*.*"
         )
         dlg = wx.FileDialog(self, "Open media file", wildcard=wildcard,
@@ -159,7 +159,7 @@ class FileTreePanel(wx.Panel):
                         child = self._tree.AppendItem(item, f"📁 {name.strip('/')}")
                         dirs[name] = child
                     else:
-                        self._tree.AppendItem(item, name)
+                        self._add_zip_member(item, name, name, zip_path)
                 else:
                     # Create nested structure
                     current = item
@@ -172,10 +172,39 @@ class FileTreePanel(wx.Panel):
                                 )
                             current = dirs[path_so_far]
                         else:
-                            self._tree.AppendItem(current, part)
+                            self._add_zip_member(current, part, name, zip_path)
             self._tree.Expand(item)
         except zipfile.BadZipFile:
             wx.MessageBox("Invalid ZIP file", "Error", wx.OK | wx.ICON_ERROR)
+
+    def _add_zip_member(self, parent, label: str, member: str, zip_path: str) -> None:
+        child = self._tree.AppendItem(parent, label)
+        if self._is_media_file(member):
+            self._tree.SetItemData(
+                child, {"type": "zipmember", "zip": zip_path, "member": member})
+
+    def _extract_zip_member(self, zip_path: str, member: str) -> str | None:
+        """Extract one archive member to a per-archive cache folder so it can
+        be played; returns its path, or None if it cannot be extracted."""
+        import hashlib
+        import tempfile
+        zf = self._zip_handles.get(zip_path)
+        if zf is None:
+            return None
+        key = hashlib.sha1(
+            f"{os.path.abspath(zip_path)}|{os.path.getmtime(zip_path)}".encode("utf-8")
+        ).hexdigest()[:12]
+        out_dir = os.path.join(tempfile.gettempdir(), "RadioMasterPlus-zip", key)
+        out_path = os.path.join(out_dir, os.path.basename(member))
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            if not os.path.isfile(out_path):
+                with zf.open(member) as src, open(out_path, "wb") as dst:
+                    while chunk := src.read(1 << 20):
+                        dst.write(chunk)
+            return out_path
+        except (OSError, KeyError, zipfile.BadZipFile):
+            return None
 
     def _is_media_file(self, filename: str) -> bool:
         """Check if a file is a supported media format."""
@@ -183,7 +212,7 @@ class FileTreePanel(wx.Panel):
         return ext in {
             ".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a", ".wma", ".opus",
             ".mp4", ".mkv", ".avi", ".webm", ".mov", ".m4b",
-            ".pls", ".m3u",
+            ".pls", ".m3u", ".m3u8",
         }
 
     def get_selected_path(self) -> str | None:
@@ -192,6 +221,8 @@ class FileTreePanel(wx.Panel):
         if item and item.IsOk():
             data = self._tree.GetItemData(item)
             if data and isinstance(data, dict):
+                if data.get("type") == "zipmember":
+                    return self._extract_zip_member(data["zip"], data["member"])
                 return data.get("path")
         return None
 
@@ -201,7 +232,7 @@ class FileTreePanel(wx.Panel):
         if item and item.IsOk():
             data = self._tree.GetItemData(item)
             if data and isinstance(data, dict):
-                return data.get("type")
+                return "file" if data.get("type") == "zipmember" else data.get("type")
         return None
 
     def on_file_selected(self, cb: Any) -> None:

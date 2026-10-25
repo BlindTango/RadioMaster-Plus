@@ -229,7 +229,7 @@ def test_podcast_keyboard_menu_supports_empty_list_and_subscription_state(
         _podcast_list=MagicMock(), _podcast_data=rows,
         _viewing_search_results=search, _update_subscription_buttons=MagicMock(),
         _on_unsubscribe=MagicMock(), _on_add_feed=MagicMock(),
-        _on_sync_gpodder=MagicMock(), _on_import_opml=MagicMock(), _on_export_opml=MagicMock(),
+        _on_sync_gpodder=MagicMock(), _on_upload_gpodder=MagicMock(), _on_import_opml=MagicMock(), _on_export_opml=MagicMock(),
         _on_new_folder=MagicMock(), _on_move_to_folder=MagicMock(),
         _on_rename_folder=MagicMock(), _on_delete_folder=MagicMock(),
         _on_mark_all_played=MagicMock(),

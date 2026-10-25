@@ -449,6 +449,7 @@ class MainWindow(wx.Frame):
         self._radio_panel.on_mute_toggle = self._on_mute_toggle
         self._podcast_panel = PodcastPanel(self._listbook, self._db, self._engine)
         self._audiobook_panel = AudiobookPanel(self._listbook, self._db, self._engine)
+        self._audiobook_panel.on_status = lambda m: self._status_bar.set_status(m)
         self._media_panel = MediaPlayerPanel(self._listbook, self._db, self._engine)
         self._youtube_panel = YouTubePanel(self._listbook, self._db, self._engine)
         self._podcast_panel.on_content_changed = self._show_context_content
@@ -666,6 +667,9 @@ class MainWindow(wx.Frame):
             "song_history": lambda: self._radio_panel.open_song_history(),
             "seek_back_15": self._jump_back_live, "seek_forward_15": self._jump_forward_live,
             "continue_listening": self._show_continue_listening,
+            "go_to_page": lambda: self._audiobook_panel._on_go_to_page(None),
+            "previous_page": lambda: self._audiobook_panel._on_prev_page(None),
+            "next_page": lambda: self._audiobook_panel._on_next_page(None),
             "settings": self._show_settings, "user_manual": self._show_user_manual,
             "quick_start": self._show_quick_start, "release_notes": self._show_release_notes,
             "update_ytdlp": self._update_ytdlp, "check_updates": self._check_updates, "about": self._show_about,
@@ -863,7 +867,7 @@ class MainWindow(wx.Frame):
 
     def _on_iconize(self, event: wx.IconizeEvent) -> None:
         """Settings > General > "Minimize to system tray"."""
-        if event.IsIconized() and self._config.get("general.minimize_to_tray", default=True):
+        if event.IsIconized() and self._config.get("general.minimize_to_tray", default=False):
             # wx.CallAfter: hiding a frame from inside its own iconize
             # handler while the OS is mid-animation of the minimize can be
             # ignored on some window managers if done synchronously.
@@ -1226,8 +1230,33 @@ class MainWindow(wx.Frame):
         to advance, not tab selection."""
         self._podcast_panel.finish_current_episode()
         self._media_panel.finish_current_file()
-        if not self._media_panel.try_auto_advance():
-            self._podcast_panel.try_auto_advance()
+        pending = self._sleep_timer.pending_mode
+        if pending == "end_of_track":
+            self._finish_sleep_timer("Sleep timer: stopped at the end of the track")
+            return
+        advanced = (self._media_panel.try_auto_advance()
+                    or self._audiobook_panel.try_auto_advance()
+                    or self._podcast_panel.try_auto_advance())
+        if pending == "end_of_playlist" and not advanced:
+            self._finish_sleep_timer("Sleep timer: stopped at the end of the playlist")
+
+    def _finish_sleep_timer(self, message: str) -> None:
+        """Honour a deferred (end-of-track/playlist) sleep timer."""
+        self._sleep_timer.complete_pending()
+        self._engine.stop()
+        self._status_bar.set_status(message)
+
+    def _on_sleep_timer_armed(self) -> None:
+        """Countdown ended in a deferred mode. Live streams and idle players
+        have no boundary to wait for, so stop immediately."""
+        def arm() -> None:
+            if getattr(self._engine, "_is_live", False) or self._engine.state != "playing":
+                self._finish_sleep_timer("Sleep timer: playback stopped")
+            else:
+                self._status_bar.set_status(
+                    "Sleep timer: playback will stop at the end of the "
+                    + ("track" if self._sleep_timer.pending_mode == "end_of_track" else "playlist"))
+        wx.CallAfter(arm)
 
     def _on_effect_toggle(self, effect_id: str, enabled: bool) -> None:
         """Handle an effect's On/Off menu item."""
@@ -1513,21 +1542,56 @@ class MainWindow(wx.Frame):
         wx.MessageBox(message, "Playback Error", wx.OK | wx.ICON_ERROR)
 
     def _on_global_search(self, query: str, scope: str) -> None:
-        """Handle global search across all content types."""
-        from radiomaster.database.repository import StationRepository
-        if scope == "all" or scope == "radio":
-            repo = StationRepository(self._db)
-            results = repo.search(query)
-            if results:
-                self._listbook.SetSelection(0)  # Switch to Radio tab
-                self._radio_panel.display_search_results(results)
-                self._status_bar.set_status(f"Found {len(results)} stations")
-        if scope == "all" or scope == "media":
-            from radiomaster.database.repository import MediaRepository
-            repo = MediaRepository(self._db)
-            results = repo.search(query)
-            if results:
-                self._listbook.SetSelection(3)  # Switch to Media tab
+        """Handle the search bar. "All" searches the stored catalogues (radio
+        stations, library media, audiobooks) and opens the first tab with
+        hits; Podcasts and YouTube hand the query to that panel's own live
+        search, which are the only ways to search those services."""
+        import os
+        from radiomaster.database.repository import (
+            AudiobookRepository, MediaRepository, StationRepository)
+        query = query.strip()
+        if not query:
+            return
+        if scope == "podcasts":
+            self._listbook.SetSelection(1)
+            self._podcast_panel.search_ctrl.SetValue(query)
+            self._podcast_panel._on_directory_search(None)
+            return
+        if scope == "youtube":
+            self._listbook.SetSelection(4)
+            self._youtube_panel._search_ctrl.SetValue(query)
+            self._youtube_panel._on_search(None)
+            return
+
+        needle = query.lower()
+        summary: list[str] = []
+        first_tab: int | None = None
+        if scope in ("all", "radio"):
+            stations = StationRepository(self._db).search(query)
+            if stations:
+                summary.append(f"{len(stations)} station(s)")
+                first_tab = 0 if first_tab is None else first_tab
+                self._radio_panel.display_search_results(stations)
+        if scope in ("all", "media"):
+            media = [m for m in MediaRepository(self._db).search(query)
+                     if m.get("file_path") and os.path.isfile(m["file_path"])]
+            if media:
+                summary.append(f"{len(media)} library file(s)")
+                if scope == "media":
+                    self._media_panel.show_search_results([m["file_path"] for m in media])
+                first_tab = 3 if first_tab is None else first_tab
+        if scope in ("all", "audiobooks"):
+            books = [b for b in AudiobookRepository(self._db).get_all()
+                     if needle in (b.get("title") or "").lower()
+                     or needle in (b.get("author") or "").lower()]
+            if books:
+                summary.append(f"{len(books)} audiobook(s)")
+                first_tab = 2 if first_tab is None else first_tab
+        if first_tab is None:
+            self._status_bar.set_status(f"No results for '{query}' in {scope}")
+            return
+        self._listbook.SetSelection(first_tab)
+        self._status_bar.set_status(f"Found {', '.join(summary)} for '{query}'")
 
     def _show_equalizer(self) -> None:
         """Show the equalizer dialog."""
@@ -1907,8 +1971,8 @@ class MainWindow(wx.Frame):
 
         def on_start(minutes: float, mode: str) -> None:
             self._sleep_timer.start(minutes, mode)
-            self._sleep_timer.on_timeout(lambda: self._engine.stop())
-            self._sleep_timer.on_mode_action(lambda: self._engine.stop())
+            self._sleep_timer.on_timeout(lambda: wx.CallAfter(self._engine.stop))
+            self._sleep_timer.on_mode_action(self._on_sleep_timer_armed)
             self._status_bar.set_status(f"Sleep timer: {int(minutes)} min ({mode})")
 
         def on_stop() -> None:
@@ -2155,7 +2219,24 @@ class MainWindow(wx.Frame):
     _TAB_PODCASTS = 1
     _TAB_AUDIOBOOKS = 2
     _TAB_MEDIA = 3
+    _TAB_YOUTUBE = 4
     _TAB_DOWNLOADS = 5
+
+    def _navigate_playlist_panel(self, kind: str) -> bool:
+        """Previous/Next/First/Last on the Media Player (its playlist) and
+        Audiobooks (its chapters). False means the tab has no such list
+        and the caller falls back to seeking."""
+        sel = self._listbook.GetSelection()
+        panel = (self._media_panel if sel == self._TAB_MEDIA
+                 else self._audiobook_panel if sel == self._TAB_AUDIOBOOKS
+                 else self._youtube_panel if sel == self._TAB_YOUTUBE else None)
+        if panel is None:
+            return False
+        message = panel.navigate(kind)
+        if message is None:
+            return False
+        self._status_bar.set_status(message)
+        return True
 
     def _next_track(self) -> None:
         """Radio: move forward in station history. Podcasts: next
@@ -2173,6 +2254,8 @@ class MainWindow(wx.Frame):
         if sel == self._TAB_DOWNLOADS:
             self._status_bar.set_status("Next download")
             self._downloads_panel.history_next()
+            return
+        if self._navigate_playlist_panel("next"):
             return
         self._status_bar.set_status("Next track")
         current_pos = self._engine.position
@@ -2195,6 +2278,8 @@ class MainWindow(wx.Frame):
             self._status_bar.set_status("Previous download")
             self._downloads_panel.history_previous()
             return
+        if self._navigate_playlist_panel("prev"):
+            return
         self._status_bar.set_status("Previous track")
         current_pos = self._engine.position
         self._engine.seek(max(0, current_pos - 10))
@@ -2216,6 +2301,8 @@ class MainWindow(wx.Frame):
             self._status_bar.set_status("First download")
             self._downloads_panel.history_first()
             return
+        if self._navigate_playlist_panel("first"):
+            return
         self._status_bar.set_status("First track")
         self._engine.seek(0)
 
@@ -2235,6 +2322,8 @@ class MainWindow(wx.Frame):
         if sel == self._TAB_DOWNLOADS:
             self._status_bar.set_status("Last download")
             self._downloads_panel.history_last()
+            return
+        if self._navigate_playlist_panel("last"):
             return
         self._status_bar.set_status("Last track")
         if self._engine.duration > 0:

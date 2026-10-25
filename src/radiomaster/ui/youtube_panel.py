@@ -415,6 +415,25 @@ class YouTubePanel(wx.Panel):
         wx.CallAfter(self._publish_video_info, info, seq)
         return info
 
+    def navigate(self, kind: str) -> str | None:
+        """Move through the video results and play that video. Returns the
+        message to announce, or None when the list holds no videos (empty,
+        or channels/playlists, which are opened rather than played)."""
+        count = self._results_list.GetItemCount()
+        if count == 0 or self._result_type in ("channel", "playlist"):
+            return None
+        cur = self._results_list.GetFirstSelected()
+        target = {"first": 0, "last": count - 1,
+                  "next": cur + 1 if cur >= 0 else 0,
+                  "prev": cur - 1 if cur >= 0 else count - 1}[kind]
+        if not 0 <= target < count:
+            return "Last result" if kind == "next" else "First result"
+        for i in range(count):
+            self._results_list.Select(i, i == target)
+        self._results_list.Focus(target)
+        self._on_play(None)
+        return f"Result {target + 1} of {count}: {self._results_list.GetItemText(target)}"
+
     def _on_result_activated(self, event: wx.CommandEvent) -> None:
         """Enter/double-click on a results-list row: plays a video result
         directly (unchanged), but drills into a channel's videos or a

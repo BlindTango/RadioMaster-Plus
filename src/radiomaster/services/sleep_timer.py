@@ -27,6 +27,7 @@ class SleepTimer:
         # will set this to a function that stops playback or moves to the next
         # track/playlist item.
         self._on_mode_action: Callable[[], None] | None = None
+        self._pending = False
 
     def start(self, minutes: float, mode: str = MODE_COUNTDOWN) -> None:
         """Start the sleep timer."""
@@ -38,12 +39,18 @@ class SleepTimer:
         self._thread.start()
         logger.info(f"Sleep timer started: {minutes} min, mode: {mode}")
 
-        # Reset any previously‑set mode‑action callback – the UI should set it
-        # after calling ``start`` if the chosen mode is not simple countdown.
-        self._on_mode_action = None
+    @property
+    def pending_mode(self) -> str | None:
+        """The deferred mode awaiting a track/playlist boundary, if any."""
+        return self._mode if self._pending else None
+
+    def complete_pending(self) -> None:
+        """Clear the deferred stop once the boundary has been honoured."""
+        self._pending = False
 
     def stop(self) -> None:
         """Stop the sleep timer."""
+        self._pending = False
         self._running = False
         self._remaining = 0.0
 
@@ -53,17 +60,22 @@ class SleepTimer:
             time.sleep(1)
             self._remaining -= 1
 
-        if self._running and self._on_timeout:
+        if not self._running:
+            return
+        if self._mode in (self.MODE_END_OF_TRACK, self.MODE_END_OF_PLAYLIST):
+            # Deferred stop: the countdown only arms it. The playback layer
+            # finishes the current track/playlist and then calls
+            # ``complete_pending()`` (see MainWindow._on_track_finished).
+            self._pending = True
+            if self._on_mode_action:
+                try:
+                    self._on_mode_action()
+                except Exception as e:
+                    logger.error(f"SleepTimer mode-action failed: {e}")
+            self._running = False
+            return
+        if self._on_timeout:
             self._on_timeout()
-        # If the timer expires in a mode that requires a playback action, invoke
-        # the provided callback after the timeout handler (which may be used for
-        # UI notifications).
-        if self._running and self._on_mode_action:
-            try:
-                self._on_mode_action()
-            except Exception as e:
-                logger.error(f"SleepTimer mode‑action failed: {e}")
-
         self._running = False
 
     @property
@@ -85,10 +97,8 @@ class SleepTimer:
         self._on_timeout = cb
 
     def on_mode_action(self, cb: Callable[[], None]) -> None:
-        """Set callback for end‑of‑track / end‑of‑playlist actions.
-
-        The callback will be executed *after* the ``on_timeout`` callback when
-        the timer reaches zero and the selected mode is ``MODE_END_OF_TRACK``
-        or ``MODE_END_OF_PLAYLIST``.
+        """Set callback fired when the countdown ends in a deferred mode
+        (``MODE_END_OF_TRACK`` / ``MODE_END_OF_PLAYLIST``), i.e. when the stop
+        has been armed but playback has not yet reached its boundary.
         """
         self._on_mode_action = cb

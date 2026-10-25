@@ -353,6 +353,9 @@ class PodcastPanel(wx.Panel):
         gpodder = menu.Append(wx.ID_ANY, "Import &gpodder.net Subscriptions")
         gpodder.Enable(not getattr(self, "_importing_gpodder", False))
         menu.Bind(wx.EVT_MENU, self._on_sync_gpodder, gpodder)
+        upload_gpodder = menu.Append(wx.ID_ANY, "&Upload Subscriptions to gpodder.net...")
+        upload_gpodder.Enable(not getattr(self, "_importing_gpodder", False))
+        menu.Bind(wx.EVT_MENU, self._on_upload_gpodder, upload_gpodder)
         import_opml = menu.Append(wx.ID_ANY, "&Import OPML...")
         import_opml.Enable(not getattr(self, "_importing_opml", False))
         menu.Bind(wx.EVT_MENU, self._on_import_opml, import_opml)
@@ -755,6 +758,57 @@ class PodcastPanel(wx.Panel):
             finally:
                 call_after_safe(self, self._finish_gpodder_import)
         threading.Thread(target=_do_sync, daemon=True).start()
+
+    def _on_upload_gpodder(self, event: wx.CommandEvent) -> None:
+        """Replace this device's gpodder.net subscription list with ours.
+        The password is asked for each time and never stored."""
+        if getattr(self, "_importing_gpodder", False):
+            return
+        from radiomaster.utils.config import ConfigManager
+        username = ConfigManager.get_instance().get("podcasts.gpodder_username", default="")
+        if not username:
+            wx.MessageBox("Please configure your gPodder username in Settings first.",
+                          "gPodder Upload", wx.OK | wx.ICON_WARNING)
+            return
+        from radiomaster.database.repository import PodcastRepository
+        urls = [p.get("feed_url", "") for p in PodcastRepository(self._db).get_all()
+                if p.get("feed_url")]
+        if not urls:
+            wx.MessageBox("You have no subscriptions to upload.", "gPodder Upload",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        if wx.MessageBox(
+            f"Upload {len(urls)} subscription(s) to gpodder.net as '{username}'? "
+            "This replaces the subscription list of the device named 'default'.",
+            "gPodder Upload", wx.YES_NO | wx.ICON_QUESTION,
+        ) != wx.YES:
+            return
+        dlg = wx.PasswordEntryDialog(self, f"gpodder.net password for {username}:",
+                                     "gPodder Upload")
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            password = dlg.GetValue()
+        finally:
+            dlg.Destroy()
+        import threading
+        from radiomaster.services.gpodder_sync import GpodderSync
+        self._importing_gpodder = True
+        self._set_status("Status: Uploading subscriptions to gpodder.net...")
+
+        def _do_upload():
+            ok = GpodderSync(username, password).upload_subscriptions(urls)
+            call_after_safe(self, self._finish_gpodder_upload, ok, len(urls))
+        threading.Thread(target=_do_upload, daemon=True).start()
+
+    def _finish_gpodder_upload(self, ok: bool, count: int) -> None:
+        self._importing_gpodder = False
+        if ok:
+            self._set_status(f"Status: Uploaded {count} subscriptions to gpodder.net.")
+        else:
+            self._set_status("Status: gpodder.net upload failed. Check your username and password.")
+            wx.MessageBox("The upload failed. Check your username and password and your connection.",
+                          "gPodder Upload", wx.OK | wx.ICON_ERROR)
 
     def _finish_gpodder_import(self) -> None:
         self._importing_gpodder = False

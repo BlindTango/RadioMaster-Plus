@@ -10,8 +10,10 @@ from radiomaster import __app_name__
 
 logger = logging.getLogger("radiomaster")
 
-# Available languages with their display names
-LANGUAGES: dict[str, str] = {
+# Languages RadioMaster+ knows names for. Only those with a catalogue folder
+# next to this file (<code>/LC_MESSAGES/radiomaster.po or .mo) are offered, so
+# the Settings language list never promises a translation that is not there.
+_KNOWN_LANGUAGES: dict[str, str] = {
     "en": "English",
     "es": "Spanish",
     "fr": "French",
@@ -22,6 +24,15 @@ LANGUAGES: dict[str, str] = {
     "ja": "Japanese",
     "zh": "Chinese",
 }
+
+
+def _has_catalogue(code: str) -> bool:
+    folder = os.path.join(os.path.dirname(__file__), code, "LC_MESSAGES")
+    return code == "en" or any(
+        os.path.isfile(os.path.join(folder, f"radiomaster.{ext}")) for ext in ("po", "mo"))
+
+
+LANGUAGES: dict[str, str] = {c: n for c, n in _KNOWN_LANGUAGES.items() if _has_catalogue(c)}
 
 
 class I18nManager:

@@ -126,7 +126,7 @@ class GeneralPanel(SettingsPanel):
         sizer.Add(self.start_on_boot_chk, 0, wx.ALL, 5)
 
         self.minimize_to_tray_chk = wx.CheckBox(self, label="Minimize to system tray")
-        self.minimize_to_tray_chk.SetValue(self.config.get("general.minimize_to_tray", default=True))
+        self.minimize_to_tray_chk.SetValue(self.config.get("general.minimize_to_tray", default=False))
         sizer.Add(self.minimize_to_tray_chk, 0, wx.ALL, 5)
 
         self.close_to_tray_chk = wx.CheckBox(self, label="Close to system tray")
@@ -214,6 +214,20 @@ class PlaybackPanel(SettingsPanel):
         set_accessible_name(key_link, "Get a free AcoustID API key (opens acoustid.org)")
         sizer.Add(key_link, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
+        sizer.Add(wx.StaticText(
+            self, label="Genius API client access token (optional lyrics source):"), 0, wx.ALL, 5)
+        self.genius_token_txt = wx.TextCtrl(
+            self, value=self.config.get("lyrics.genius_token", default=""))
+        set_accessible_name(self.genius_token_txt, "Genius API token")
+        sizer.Add(self.genius_token_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        sizer.Add(wx.StaticText(
+            self, label="Musixmatch API key (optional lyrics source):"), 0, wx.ALL, 5)
+        self.musixmatch_key_txt = wx.TextCtrl(
+            self, value=self.config.get("lyrics.musixmatch_key", default=""))
+        set_accessible_name(self.musixmatch_key_txt, "Musixmatch API key")
+        sizer.Add(self.musixmatch_key_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
     def onSave(self) -> None:
         selected = self.output_device_combo.GetStringSelection()
         device_name = "" if selected == "System Default" else selected
@@ -224,6 +238,8 @@ class PlaybackPanel(SettingsPanel):
         self.config.set("playback.normalize_audio", value=self.normalize_chk.IsChecked())
         self.config.set("playback.remember_position", value=self.remember_pos_chk.IsChecked())
         self.config.set("playback.acoustid_api_key", value=self.acoustid_key_txt.GetValue().strip())
+        self.config.set("lyrics.genius_token", value=self.genius_token_txt.GetValue().strip())
+        self.config.set("lyrics.musixmatch_key", value=self.musixmatch_key_txt.GetValue().strip())
 
 
 class RadioPanel(SettingsPanel):
@@ -732,6 +748,17 @@ class DownloadsPanel(SettingsPanel):
             self, value=str(self.config.get("downloads.history_limit", default=50)),
             min=-1, max=10000,
         )
+        self._history_last = self.history_limit_spin.GetValue()
+
+        def _skip_zero(event):
+            # 0 has no meaning here (-1 is unlimited), so arrows step over it.
+            value = self.history_limit_spin.GetValue()
+            if value == 0:
+                value = 1 if self._history_last < 0 else -1
+                self.history_limit_spin.SetValue(value)
+            self._history_last = value
+            event.Skip()
+        self.history_limit_spin.Bind(wx.EVT_SPINCTRL, _skip_zero)
         set_accessible_name(
             self.history_limit_spin, "Download History entries to show, minus 1 for unlimited"
         )

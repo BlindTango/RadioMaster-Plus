@@ -57,7 +57,11 @@ class MediaPlayerPanel(wx.Panel):
 
         self._btn_clear = wx.Button(right_panel, label="Clear")
         set_accessible_name(self._btn_clear, "Clear Playlist")
-        ctrl_sizer.Add(self._btn_clear, 0)
+        ctrl_sizer.Add(self._btn_clear, 0, wx.RIGHT, 4)
+
+        self._btn_save = wx.Button(right_panel, label="Save Playlist...")
+        set_accessible_name(self._btn_save, "Save Playlist")
+        ctrl_sizer.Add(self._btn_save, 0)
 
         right_sizer.Add(ctrl_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 4)
 
@@ -68,6 +72,7 @@ class MediaPlayerPanel(wx.Panel):
 
         self._btn_add.Bind(wx.EVT_BUTTON, self._on_add)
         self._btn_clear.Bind(wx.EVT_BUTTON, self._on_clear)
+        self._btn_save.Bind(wx.EVT_BUTTON, self._on_save_playlist)
         self._playlist.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
         self._file_tree.on_file_selected(self._add_path)
 
@@ -80,6 +85,48 @@ class MediaPlayerPanel(wx.Panel):
             title = self._playlist.GetItemText(idx)
             artist = self._playlist.GetItemText(idx, 1)
             self._engine.play(self._paths[idx], title=title, artist=artist)
+
+    def _on_save_playlist(self, event: wx.CommandEvent) -> None:
+        """Write the visible playlist to an M3U8 file."""
+        if not self._paths:
+            wx.MessageBox("The playlist is empty.", "Save Playlist", wx.OK | wx.ICON_INFORMATION)
+            return
+        dlg = wx.FileDialog(self, "Save playlist", wildcard="M3U8 playlist (*.m3u8)|*.m3u8",
+                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            target = dlg.GetPath()
+        finally:
+            dlg.Destroy()
+        from radiomaster.utils.playlists import write_m3u
+        try:
+            write_m3u(target, self._paths,
+                      [self._playlist.GetItemText(i) for i in range(len(self._paths))])
+        except OSError as exc:
+            wx.MessageBox(f"The playlist could not be saved: {exc}", "Save Playlist",
+                          wx.OK | wx.ICON_ERROR)
+            return
+        wx.MessageBox(f"Saved {len(self._paths)} entries to {target}.", "Save Playlist",
+                      wx.OK | wx.ICON_INFORMATION)
+
+    def navigate(self, kind: str) -> str | None:
+        """Move within the playlist and play that item. Returns the message
+        to announce, or None when the playlist is empty."""
+        count = len(self._paths)
+        if count == 0:
+            return None
+        cur = self._current_index if 0 <= self._current_index < count else -1
+        target = {"first": 0, "last": count - 1,
+                  "next": cur + 1 if cur >= 0 else 0,
+                  "prev": cur - 1 if cur >= 0 else count - 1}[kind]
+        if not 0 <= target < count:
+            return "End of playlist" if kind == "next" else "Start of playlist"
+        for i in range(count):
+            self._playlist.Select(i, i == target)
+        self._playlist.Focus(target)
+        self._on_play(None)
+        return f"Track {target + 1} of {count}: {self._playlist.GetItemText(target)}"
 
     def _save_position(self) -> None:
         idx = self._current_index
@@ -194,13 +241,33 @@ class MediaPlayerPanel(wx.Panel):
             self._add_path(path)
 
     def _add_path(self, path: str) -> None:
-        """Append one media file to the visible playlist and playback path list."""
-        name = os.path.basename(path)
-        title, artist = self._read_tags(path)
+        """Append one media file to the visible playlist and playback path list.
+        An M3U/PLS file adds every entry it lists."""
+        from radiomaster.utils.playlists import is_playlist, read_playlist
+        if is_playlist(path):
+            entries = [e for e in read_playlist(path)
+                       if "://" in e or os.path.isfile(e)]
+            if not entries:
+                wx.MessageBox("That playlist has no playable entries.", "Playlist",
+                              wx.OK | wx.ICON_INFORMATION)
+                return
+            for entry in entries:
+                self._add_path(entry)
+            return
+        name = os.path.basename(path) or path
+        title, artist = ("", "") if "://" in path else self._read_tags(path)
         idx = self._playlist.InsertItem(self._playlist.GetItemCount(), title or name)
         self._playlist.SetItem(idx, 1, artist)
         self._playlist.SetItem(idx, 2, "")
         self._paths.append(path)
+
+    def show_search_results(self, paths: list[str]) -> None:
+        """Replace the playlist with files found by the global search."""
+        self._on_clear(wx.CommandEvent())
+        for path in paths:
+            self._add_path(path)
+        if paths:
+            self._playlist.Select(0)
 
     def load_folder(self, path: str) -> int:
         """Replace the playlist with supported media files from a folder tree."""

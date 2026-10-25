@@ -32,6 +32,11 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "pywin32>=306",
     "comtypes>=1.4",
+    "winrt-runtime>=2.0",
+    "winrt-Windows.Media.SpeechSynthesis>=2.0",
+    "winrt-Windows.Storage.Streams>=2.0",
+    "winrt-Windows.Foundation>=2.0",
+    "winrt-Windows.Foundation.Collections>=2.0",
 ]
 
 [project.optional-dependencies]

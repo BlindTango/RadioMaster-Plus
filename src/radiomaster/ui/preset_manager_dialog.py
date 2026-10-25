@@ -177,12 +177,19 @@ class PresetManagerDialog(wx.Dialog):
         self._result = (name, dict(self._params_for(name)))
         self.EndModal(wx.ID_OK)
 
+    def _restore_preview(self) -> None:
+        """Cancelling New/Edit: put back the settings that were active before
+        the sliders' live preview changed what is heard."""
+        if self._apply_live is not None:
+            self._apply_live(dict(self._current_params))
+
     def _on_new(self, event: wx.CommandEvent) -> None:
         seed = self._params_for(self._selected_name()) if self._selected_name() else self._current_params
         param_dlg = EffectParamsDialog(self, self._effect_id, seed, title="New Preset",
                                         on_live_change=self._apply_live)
         if param_dlg.ShowModal() != wx.ID_OK:
             param_dlg.Destroy()
+            self._restore_preview()
             return
         params = param_dlg.get_params()
         param_dlg.Destroy()
@@ -211,6 +218,8 @@ class PresetManagerDialog(wx.Dialog):
             presets[name] = param_dlg.get_params()
             self._save_custom_presets(presets)
             self._refresh_list(select=name)
+        else:
+            self._restore_preview()
         param_dlg.Destroy()
 
     def _on_rename(self, event: wx.CommandEvent) -> None:

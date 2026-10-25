@@ -7,6 +7,7 @@ from typing import Any
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    "lyrics": {"genius_token": "", "musixmatch_key": ""},
     "general": {
         "language": "en",
         "theme": "default",

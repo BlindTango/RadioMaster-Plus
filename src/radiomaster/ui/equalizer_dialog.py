@@ -26,7 +26,12 @@ class EqualizerDialog(wx.Dialog):
         self._band_sliders: dict[str, wx.Slider] = {}
         self._band_labels: dict[str, wx.StaticText] = {}
         self._current_preset = "Flat"
-        self._custom_presets: dict[str, dict[str, int]] = {}
+        # Same store as Effects > Equalizer > Manager, so presets saved here
+        # persist between sessions and appear there too.
+        from radiomaster.utils.config import ConfigManager
+        self._config = ConfigManager.get_instance()
+        self._custom_presets: dict[str, dict[str, int]] = dict(
+            self._config.get("effects.custom_presets.equalizer", default={}) or {})
 
         self._on_preset_cb: Callable[[str, dict[str, int]], None] | None = None
         self._on_bands_changed_cb: Callable[[dict[str, int]], None] | None = None
@@ -45,6 +50,9 @@ class EqualizerDialog(wx.Dialog):
         self._preset_choice = wx.Choice(self, choices=list(EQ_PRESETS.keys()))
         set_accessible_name(self._preset_choice, "Equalizer Preset")
         self._preset_choice.SetSelection(0)
+        for saved in self._custom_presets:
+            if saved not in EQ_PRESETS:
+                self._preset_choice.Append(saved)
         preset_sizer.Add(self._preset_choice, 0, wx.LEFT, 8)
 
         self._btn_save_preset = wx.Button(self, label="Save as Preset...")
@@ -137,10 +145,15 @@ class EqualizerDialog(wx.Dialog):
         dlg = wx.TextEntryDialog(self, "Enter preset name:", "Save Preset")
         if dlg.ShowModal() == wx.ID_OK:
             name = dlg.GetValue().strip()
-            if name:
+            if name in EQ_PRESETS:
+                wx.MessageBox(f'"{name}" is a built-in preset name and cannot be reused.',
+                              "Name Unavailable", wx.OK | wx.ICON_WARNING, self)
+            elif name:
+                if name not in self._custom_presets:
+                    self._preset_choice.Append(name)
                 self._custom_presets[name] = self.get_band_values()
-                self._preset_choice.Append(name)
                 self._preset_choice.SetStringSelection(name)
+                self._persist_presets()
         dlg.Destroy()
 
     def _on_delete_preset(self, event: wx.CommandEvent) -> None:
@@ -151,12 +164,17 @@ class EqualizerDialog(wx.Dialog):
                                    wx.YES_NO | wx.ICON_QUESTION)
             if dlg.ShowModal() == wx.ID_YES:
                 self._custom_presets.pop(name, None)
+                self._persist_presets()
                 idx = self._preset_choice.FindString(name)
                 if idx != wx.NOT_FOUND:
                     self._preset_choice.Delete(idx)
                 self._preset_choice.SetSelection(0)
                 self._apply_preset("Flat")
             dlg.Destroy()
+
+    def _persist_presets(self) -> None:
+        self._config.set("effects.custom_presets.equalizer", value=dict(self._custom_presets))
+        self._config.save()
 
     def get_band_values(self) -> dict[str, int]:
         """Get current band values."""

@@ -195,18 +195,42 @@ class LyricsService:
                     if song_path:
                         page = requests.get(f"https://genius.com{song_path}", **LyricsService._request_kwargs(10))
                         if page.status_code == 200:
-                            import re
-                            match = re.search(
-                                r'<div class="lyrics".*?>(.*?)</div>', page.text, re.DOTALL
-                            )
-                            if match:
-                                from html import unescape
-                                lyrics = unescape(match.group(1))
-                                lyrics = re.sub(r"<[^>]+>", "", lyrics)
-                                return {"lyrics": lyrics.strip(), "source": "genius"}
+                            lyrics = LyricsService._extract_genius_lyrics(page.text)
+                            if lyrics:
+                                return {"lyrics": lyrics, "source": "genius"}
         except Exception as e:
             logger.error(f"Genius lookup failed: {e}")
         return None
+
+    @staticmethod
+    def _extract_genius_lyrics(page_html: str) -> str:
+        """Pull lyrics out of a Genius song page.
+
+        Current pages hold lyrics in one or more ``data-lyrics-container``
+        divs with ``<br/>`` line breaks; the old ``<div class="lyrics">``
+        layout is kept as a fallback.
+        """
+        from html import unescape
+        starts = [m.start() for m in re.finditer(r'<div[^>]*data-lyrics-container="true"[^>]*>', page_html)]
+        chunks: list[str] = []
+        for i, start in enumerate(starts):
+            end = starts[i + 1] if i + 1 < len(starts) else len(page_html)
+            seg = page_html[start:end]
+            seg = seg[seg.index(">") + 1:]
+            # Stop at the container's end marker if the page has trailing markup.
+            cut = seg.find('<div class="Lyrics__Footer')
+            if cut != -1:
+                seg = seg[:cut]
+            chunks.append(seg)
+        if not chunks:
+            m = re.search(r'<div class="lyrics".*?>(.*?)</div>', page_html, re.DOTALL)
+            if not m:
+                return ""
+            chunks = [m.group(1)]
+        text = "\n".join(chunks)
+        text = re.sub(r"<br\s*/?>", "\n", text)
+        text = re.sub(r"<[^>]+>", "", text)
+        return unescape(text).strip()
 
     @staticmethod
     def _fetch_musixmatch(artist: str, title: str) -> dict[str, Any] | None:

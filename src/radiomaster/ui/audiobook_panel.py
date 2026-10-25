@@ -1,6 +1,8 @@
 """Audiobook tab panel with DAISY support, chapter navigation, and SAPI TTS."""
 
+import json
 import os
+import re
 from typing import Any
 
 import wx
@@ -27,6 +29,8 @@ class AudiobookPanel(wx.Panel):
         self._current_book_id: int | None = None
         self._resume_position: float = 0.0
         self._tts = None
+        self.on_status = None  # set by MainWindow: announces in the status bar
+        self._sentences: list[tuple[int, int, str]] = []
         self._setup_ui()
 
         # Periodically persist playback position for the loaded book so
@@ -107,6 +111,14 @@ class AudiobookPanel(wx.Panel):
         self._chapter_list.AppendColumn("Duration", width=80)
         right_sizer.Add(self._chapter_list, 1, wx.EXPAND | wx.ALL, 4)
 
+        # Chapter text (read-only); the sentence being spoken by Read with TTS
+        # is highlighted here in the Accessibility highlight colour.
+        right_sizer.Add(wx.StaticText(right_panel, label="Chapter Text"), 0, wx.LEFT | wx.RIGHT, 4)
+        self._text_view = wx.TextCtrl(
+            right_panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.TE_WORDWRAP)
+        set_accessible_name(self._text_view, "Chapter Text")
+        right_sizer.Add(self._text_view, 1, wx.EXPAND | wx.ALL, 4)
+
         # Controls
         ctrl_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._btn_tts = wx.Button(right_panel, label="Read with TTS")
@@ -121,7 +133,23 @@ class AudiobookPanel(wx.Panel):
 
         self._btn_bookmark = wx.Button(right_panel, label="Add Bookmark")
         set_accessible_name(self._btn_bookmark, "Add Bookmark")
-        ctrl_sizer.Add(self._btn_bookmark, 0)
+        ctrl_sizer.Add(self._btn_bookmark, 0, wx.RIGHT, 4)
+
+        self._btn_bookmarks = wx.Button(right_panel, label="Bookmarks...")
+        set_accessible_name(self._btn_bookmarks, "Show Bookmarks")
+        ctrl_sizer.Add(self._btn_bookmarks, 0, wx.RIGHT, 4)
+
+        self._btn_goto_page = wx.Button(right_panel, label="Go to Page...")
+        set_accessible_name(self._btn_goto_page, "Go to Page")
+        ctrl_sizer.Add(self._btn_goto_page, 0, wx.RIGHT, 4)
+
+        self._btn_prev_page = wx.Button(right_panel, label="Previous Page")
+        set_accessible_name(self._btn_prev_page, "Previous Page")
+        ctrl_sizer.Add(self._btn_prev_page, 0, wx.RIGHT, 4)
+
+        self._btn_next_page = wx.Button(right_panel, label="Next Page")
+        set_accessible_name(self._btn_next_page, "Next Page")
+        ctrl_sizer.Add(self._btn_next_page, 0)
 
         right_sizer.Add(ctrl_sizer, 0, wx.ALIGN_CENTER | wx.ALL, 4)
 
@@ -134,6 +162,10 @@ class AudiobookPanel(wx.Panel):
         self._btn_browse_file.Bind(wx.EVT_BUTTON, self._on_browse_file)
         self._btn_tts.Bind(wx.EVT_BUTTON, self._on_tts)
         self._btn_bookmark.Bind(wx.EVT_BUTTON, self._on_bookmark)
+        self._btn_bookmarks.Bind(wx.EVT_BUTTON, self._on_show_bookmarks)
+        self._btn_goto_page.Bind(wx.EVT_BUTTON, self._on_go_to_page)
+        self._btn_prev_page.Bind(wx.EVT_BUTTON, self._on_prev_page)
+        self._btn_next_page.Bind(wx.EVT_BUTTON, self._on_next_page)
         self._chapter_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_chapter_selected)
         self._chapter_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play)
         self._library_tree.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_tree_sel_changed)
@@ -159,13 +191,17 @@ class AudiobookPanel(wx.Panel):
                 if chapters:
                     for i, chapter in enumerate(chapters):
                         idx = self._chapter_list.InsertItem(i, chapter.get('title', f'Chapter {i+1}'))
-                        self._chapter_list.SetItem(idx, 1, '')  # Duration if available
+                        length = chapter.get('duration')
+                        if length:
+                            from radiomaster.utils.helpers import format_time
+                            self._chapter_list.SetItem(idx, 1, format_time(length))
                         self._chapter_list.SetItemData(idx, i)
                     
                     wx.MessageBox(
                         f"DAISY book loaded: {len(chapters)} chapters found.\n\n"
                         f"Format: {book.get('format', 'Unknown')}\n"
-                        f"Audio files: {len(book.get('audio_files', []))}",
+                        f"Audio files: {len(book.get('audio_files', []))}\n"
+                        f"Page numbers: {len(book.get('pages', []))}",
                         "DAISY Book Loaded",
                         wx.OK | wx.ICON_INFORMATION,
                     )
@@ -266,16 +302,16 @@ class AudiobookPanel(wx.Panel):
             # DAISY book
             chapters = self._current_book.get('chapters', [])
             audio_files = self._current_book.get('audio_files', [])
-            
-            if chapter_idx < len(audio_files):
-                audio_path = audio_files[chapter_idx]
+            chapter = chapters[chapter_idx] if chapter_idx < len(chapters) else {}
+            # A DAISY chapter names its own audio file and start offset; books
+            # without that linkage fall back to the nth audio file.
+            audio_path = chapter.get('audio') or (
+                audio_files[chapter_idx] if chapter_idx < len(audio_files) else None)
+            if audio_path:
                 title = self._current_book.get('title', 'Audiobook')
-                chapter_title = chapters[chapter_idx]['title'] if chapter_idx < len(chapters) else f'Chapter {chapter_idx + 1}'
-
-                self._playing_url = audio_path
-                self._playing_book_id = self._current_book_id
-                self._engine.play(audio_path, title=f"{title} - {chapter_title}")
-                self._apply_resume_seek()
+                chapter_title = chapter.get('title') or f'Chapter {chapter_idx + 1}'
+                self._play_clip(audio_path, f"{title} - {chapter_title}",
+                                float(chapter.get('start') or 0.0))
         else:
             if os.path.isfile(self._current_path):
                 audio_path = self._current_path
@@ -295,6 +331,99 @@ class AudiobookPanel(wx.Panel):
                     self._playing_book_id = self._current_book_id
                     self._engine.play(audio_path, title=os.path.basename(audio_path))
                     self._apply_resume_seek()
+
+    def _play_clip(self, audio_path: str, title: str, start: float = 0.0) -> None:
+        """Play a book's audio file from ``start`` seconds; a saved resume
+        position, when one is pending, takes priority over the start."""
+        self._playing_url = audio_path
+        self._playing_book_id = self._current_book_id
+        self._engine.play(audio_path, title=title)
+        if self._resume_position > 0:
+            self._apply_resume_seek()
+        elif start > 0:
+            self._engine.seek_when_ready(start)
+
+    # ---- DAISY page navigation -------------------------------------
+    def _announce(self, message: str) -> None:
+        if self.on_status is not None:
+            self.on_status(message)
+
+    def _pages(self) -> list[dict]:
+        return (self._current_book or {}).get('pages', []) or []
+
+    def _current_page_index(self) -> int:
+        """Index of the page being heard now: the last page that starts in the
+        playing audio file at or before the playback position (-1 if none)."""
+        pos = self._engine.position
+        playing = self._engine.current_url
+        found = -1
+        for i, page in enumerate(self._pages()):
+            if page.get('audio') == playing and (page.get('start') or 0.0) <= pos + 0.25:
+                found = i
+        return found
+
+    def _play_page(self, index: int) -> str:
+        page = self._pages()[index]
+        title = self._current_book.get('title', 'Audiobook')
+        self._play_clip(page['audio'], f"{title} - Page {page['label']}",
+                        float(page.get('start') or 0.0))
+        return f"Page {page['label']}"
+
+    def navigate_page(self, delta: int) -> str | None:
+        """Previous/next page. Returns the message to announce, or None when
+        the book has no page markers."""
+        pages = [p for p in self._pages() if p.get('audio')]
+        if not pages:
+            return None
+        cur = self._current_page_index()
+        target = cur + delta if cur >= 0 else 0
+        if target < 0:
+            return "First page"
+        if target >= len(self._pages()):
+            return "Last page"
+        return self._play_page(target)
+
+    def go_to_page(self, label: str) -> str:
+        """Play the page whose label matches (e.g. '12', 'iv'). Returns the
+        message to announce."""
+        label = label.strip()
+        pages = self._pages()
+        if not pages:
+            return "This book has no page numbers."
+        wanted = label.casefold()
+        for i, page in enumerate(pages):
+            if str(page.get('label', '')).casefold() == wanted and page.get('audio'):
+                return self._play_page(i)
+        return f"No page {label} in this book."
+
+    def _on_go_to_page(self, event: wx.CommandEvent) -> None:
+        pages = self._pages()
+        if not pages:
+            wx.MessageBox("This book has no page numbers.", "Go to Page",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        dlg = wx.TextEntryDialog(
+            self, f"Page number or label ({pages[0]['label']} to {pages[-1]['label']}):",
+            "Go to Page")
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            label = dlg.GetValue()
+        finally:
+            dlg.Destroy()
+        message = self.go_to_page(label)
+        if message.startswith(("No page", "This book")):
+            wx.MessageBox(message, "Go to Page", wx.OK | wx.ICON_WARNING)
+        else:
+            self._announce(message)
+
+    def _on_prev_page(self, event: wx.CommandEvent) -> None:
+        message = self.navigate_page(-1)
+        self._announce(message or "This book has no page numbers.")
+
+    def _on_next_page(self, event: wx.CommandEvent) -> None:
+        message = self.navigate_page(1)
+        self._announce(message or "This book has no page numbers.")
 
     def _apply_resume_seek(self) -> None:
         """Seek to the saved position once, shortly after playback starts."""
@@ -341,8 +470,12 @@ class AudiobookPanel(wx.Panel):
                     if self._tts is not None:
                         self._tts.stop()
                     self._tts = configured_tts(ConfigManager.get_instance())
-                    self._tts.on_complete(lambda: self._btn_stop_tts.Disable())
-                    self._tts.speak(text)
+                    self._tts.on_complete(self._on_tts_complete)
+                    self._text_view.SetValue(text)
+                    self._sentences = self._split_sentences(text)
+                    self._tts.on_line_change(self._highlight_sentence)
+                    self._tts.speak_lines([sent[2] for sent in self._sentences])
+                    self._highlight_sentence(0)
                     self._btn_stop_tts.Enable()
                 except Exception as e:
                     wx.MessageBox(f"TTS failed: {e}\n\nCheck Settings > Audiobooks.",
@@ -357,10 +490,15 @@ class AudiobookPanel(wx.Panel):
                 wx.OK | wx.ICON_INFORMATION,
             )
 
+    def _on_tts_complete(self) -> None:
+        self._btn_stop_tts.Disable()
+        self._clear_highlight()
+
     def _on_stop_tts(self, event: wx.CommandEvent) -> None:
         if self._tts is not None:
             self._tts.stop()
         self._btn_stop_tts.Disable()
+        self._clear_highlight()
 
     def _on_bookmark(self, event: wx.CommandEvent) -> None:
         """Add a bookmark at the current position."""
@@ -388,12 +526,131 @@ class AudiobookPanel(wx.Panel):
                 source_type="audiobook",
                 url=self._current_path,
                 position=self._engine.position,
+                notes=json.dumps({"chapter": chapter_idx}),
             )
             wx.MessageBox(f"Bookmark added: {chapter_title}", "Bookmark Added",
                          wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
             wx.MessageBox(f"Error adding bookmark: {str(e)}", "Error",
                          wx.OK | wx.ICON_ERROR)
+
+    def navigate(self, kind: str) -> str | None:
+        """Move to a chapter and play it. Returns the message to announce,
+        or None when no book with chapters is loaded."""
+        count = self._chapter_list.GetItemCount()
+        if not self._current_path or count == 0:
+            return None
+        cur = self._chapter_list.GetFirstSelected()
+        target = {"first": 0, "last": count - 1,
+                  "next": cur + 1 if cur >= 0 else 0,
+                  "prev": cur - 1 if cur >= 0 else count - 1}[kind]
+        if not 0 <= target < count:
+            return "Last chapter" if kind == "next" else "First chapter"
+        for i in range(count):
+            self._chapter_list.Select(i, i == target)
+        self._chapter_list.Focus(target)
+        self._on_play(None)
+        return f"Chapter {target + 1} of {count}: {self._chapter_list.GetItemText(target)}"
+
+    def try_auto_advance(self) -> bool:
+        """Called when a track ended naturally. If it was this panel's chapter
+        and another chapter follows, play it and return True."""
+        playing = getattr(self, "_playing_url", None)
+        if not playing or self._engine.current_url != playing:
+            return False
+        count = self._chapter_list.GetItemCount()
+        if count == 0:
+            return False
+        cur = next((i for i in range(count) if self._chapter_list.IsSelected(i)), -1)
+        if cur < 0 or cur + 1 >= count:
+            return False
+        if self._chapter_list.GetItemData(cur) is None:
+            return False
+        self.navigate("next")
+        return True
+
+    def _on_show_bookmarks(self, event: wx.CommandEvent) -> None:
+        """List this book's bookmarks; Go To resumes at the saved spot."""
+        if not self._current_path:
+            wx.MessageBox("Please select an audiobook first.", "No Book Selected",
+                          wx.OK | wx.ICON_WARNING)
+            return
+        from radiomaster.database.repository import BookmarkRepository
+        from radiomaster.ui.audiobook_bookmarks_dialog import AudiobookBookmarksDialog
+        repo = BookmarkRepository(self._db)
+        marks = [b for b in repo.get_all("audiobook") if b.get("url") == self._current_path]
+        if not marks:
+            wx.MessageBox("This book has no bookmarks yet.", "Bookmarks",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        dlg = AudiobookBookmarksDialog(self, marks, self._go_to_bookmark, repo.delete)
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+
+    def _go_to_bookmark(self, bookmark: dict) -> None:
+        """Select the bookmarked chapter and start playing at its position."""
+        try:
+            chapter = int(json.loads(bookmark.get("notes") or "{}").get("chapter", -1))
+        except (ValueError, TypeError):
+            chapter = -1
+        row = -1
+        for i in range(self._chapter_list.GetItemCount()):
+            if self._chapter_list.GetItemData(i) == chapter:
+                row = i
+                break
+        if row < 0:
+            # Older bookmarks carry no chapter; match by title instead.
+            for i in range(self._chapter_list.GetItemCount()):
+                if self._chapter_list.GetItemText(i) == bookmark.get("title"):
+                    row = i
+                    break
+        if row < 0:
+            wx.MessageBox("The bookmarked chapter could not be found in this book.",
+                          "Bookmarks", wx.OK | wx.ICON_WARNING)
+            return
+        for i in range(self._chapter_list.GetItemCount()):
+            self._chapter_list.Select(i, i == row)
+        self._chapter_list.Focus(row)
+        self._resume_position = float(bookmark.get("position") or 0.0)
+        self._on_play(None)
+
+    _SENTENCE_RE = re.compile(r"[^.!?\n]+[.!?]*\s*|\n+")
+
+    def _show_chapter_text(self, text: str) -> None:
+        if self._tts is not None and self._tts.is_speaking:
+            return  # keep the text being read in view
+        self._sentences = []
+        self._text_view.SetValue(text)
+
+    def _split_sentences(self, text: str) -> list[tuple[int, int, str]]:
+        """(start, end, spoken text) for each sentence, offsets into ``text``."""
+        out = []
+        for m in self._SENTENCE_RE.finditer(text):
+            spoken = m.group(0).strip()
+            if spoken:
+                out.append((m.start(), m.end(), spoken))
+        return out
+
+    def _highlight_sentence(self, index: int) -> None:
+        """Highlight sentence ``index`` and scroll it into view."""
+        if not (0 <= index < len(self._sentences)):
+            return
+        view = self._text_view
+        end_all = view.GetLastPosition()
+        view.SetStyle(0, end_all, wx.TextAttr(view.GetForegroundColour(), view.GetBackgroundColour()))
+        start, end, _ = self._sentences[index]
+        from radiomaster.utils.config import ConfigManager
+        colour = wx.Colour(ConfigManager.get_instance().get(
+            "accessibility.highlight_color", default="#FFFF00"))
+        view.SetStyle(start, min(end, end_all), wx.TextAttr(wx.BLACK, colour))
+        view.ShowPosition(start)
+
+    def _clear_highlight(self) -> None:
+        view = self._text_view
+        view.SetStyle(0, view.GetLastPosition(),
+                      wx.TextAttr(view.GetForegroundColour(), view.GetBackgroundColour()))
 
     def _on_chapter_selected(self, event: wx.ListEvent) -> None:
         """Handle chapter selection."""
@@ -402,8 +659,9 @@ class AudiobookPanel(wx.Panel):
             chapter_idx = self._chapter_list.GetItemData(idx)
             chapters = self._current_book.get('chapters', [])
             if chapter_idx < len(chapters):
-                # Could show chapter description or notes here
-                pass
+                self._show_chapter_text(chapters[chapter_idx].get('text', '') or '')
+            else:
+                self._show_chapter_text('')
 
     def _on_tree_sel_changed(self, event: wx.TreeEvent) -> None:
         """Handle tree selection change."""

@@ -196,6 +196,17 @@ _FX_NAME_TO_TYPE = {
     "eq_bass":      _BASS_FX_DX8_PARAMEQ,   # Bass Boost  (~100 Hz +9 dB)
     "eq_treble":    _BASS_FX_DX8_PARAMEQ,   # Treble Boost (~8000 Hz +9 dB)
     "eq_vocal":     _BASS_FX_DX8_PARAMEQ,   # Vocal Boost  (~2500 Hz +6 dB)
+    # Graphic equalizer: one ParamEQ per band (DX8 centres run 80-16000 Hz, so
+    # the UI's 32 and 64 Hz sliders share the 80 Hz filter).
+    "eqb_80":       _BASS_FX_DX8_PARAMEQ,
+    "eqb_125":      _BASS_FX_DX8_PARAMEQ,
+    "eqb_250":      _BASS_FX_DX8_PARAMEQ,
+    "eqb_500":      _BASS_FX_DX8_PARAMEQ,
+    "eqb_1k":       _BASS_FX_DX8_PARAMEQ,
+    "eqb_2k":       _BASS_FX_DX8_PARAMEQ,
+    "eqb_4k":       _BASS_FX_DX8_PARAMEQ,
+    "eqb_8k":       _BASS_FX_DX8_PARAMEQ,
+    "eqb_16k":      _BASS_FX_DX8_PARAMEQ,
 }
 
 # ParamEQ preset parameters: {fCenter_Hz, fBandwidth_semitones, fGain_dB}
@@ -205,6 +216,15 @@ _PARAMEQ_PRESETS = {
     "eq_bass":    (100.0,  18.0,  9.0),
     "eq_treble":  (8000.0, 18.0,  9.0),
     "eq_vocal":   (2500.0, 12.0,  6.0),
+    "eqb_80":     (80.0,    12.0,  0.0),
+    "eqb_125":    (125.0,   12.0,  0.0),
+    "eqb_250":    (250.0,   12.0,  0.0),
+    "eqb_500":    (500.0,   12.0,  0.0),
+    "eqb_1k":     (1000.0,  12.0,  0.0),
+    "eqb_2k":     (2000.0,  12.0,  0.0),
+    "eqb_4k":     (4000.0,  12.0,  0.0),
+    "eqb_8k":     (8000.0,  12.0,  0.0),
+    "eqb_16k":    (16000.0, 12.0,  0.0),
 }
 
 # Runtime gain overrides — populated by set_eq_gain command.

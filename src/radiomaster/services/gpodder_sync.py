@@ -53,7 +53,9 @@ class GpodderSync:
             return False
         try:
             url = f"{self.API_BASE}/subscriptions/{self._username}/{device}.json"
-            resp = self._session.put(url, json={"add": urls}, timeout=self._get_timeout())
+            # The simple API replaces the device's subscription list with a plain
+            # JSON array of feed URLs and needs authentication.
+            resp = self._session.put(url, json=list(urls), timeout=self._get_timeout())
             return resp.status_code in (200, 201)
         except Exception as e:
             logger.error(f"Failed to upload subscriptions: {e}")

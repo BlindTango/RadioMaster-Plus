@@ -109,6 +109,9 @@ def test_book_reading_uses_saved_voice_and_stops_previous_reading(settings):
     book_panel = SimpleNamespace(
         _current_path="book", _current_book={"chapters": [{"text": "Chapter text"}]},
         _chapter_list=chapters, _tts=previous, _btn_stop_tts=MagicMock(),
+        _text_view=MagicMock(), _sentences=[], _on_tts_complete=MagicMock(),
+        _highlight_sentence=MagicMock(), _clear_highlight=MagicMock(),
+        _split_sentences=lambda text: [(0, len(text), text)],
     )
     with patch.object(ConfigManager, "get_instance", return_value=config):
         AudiobookPanel._on_tts(book_panel, wx.CommandEvent())
@@ -116,7 +119,7 @@ def test_book_reading_uses_saved_voice_and_stops_previous_reading(settings):
     engine.set_voice.assert_called_with("voice-b")
     engine.set_rate.assert_called_with(-2)
     engine.set_volume.assert_called_with(80)
-    engine.speak.assert_called_once_with("Chapter text")
+    engine.speak_lines.assert_called_once_with(["Chapter text"])
     AudiobookPanel._on_stop_tts(book_panel, wx.CommandEvent())
     engine.stop.assert_called()
 
@@ -138,3 +141,27 @@ def test_speech_monitor_uses_ui_timer_and_stop_cancels_it():
         engine.speak("Another sample")
         engine.stop()
         later.return_value.Stop.assert_called()
+
+
+def test_daisy_page_navigation_plays_the_page_clip():
+    from radiomaster.ui.audiobook_panel import AudiobookPanel as P
+    pages = [{"label": "1", "audio": "a.mp3", "start": 5.0},
+             {"label": "2", "audio": "a.mp3", "start": 9.5},
+             {"label": "iv", "audio": "b.mp3", "start": 0.0}]
+    played = []
+    panel = SimpleNamespace(
+        _current_book={"title": "T", "pages": pages},
+        _engine=SimpleNamespace(position=6.0, current_url="a.mp3"),
+        _play_clip=lambda audio, title, start=0.0: played.append((audio, start)),
+    )
+    panel._pages = lambda: P._pages(panel)
+    panel._current_page_index = lambda: P._current_page_index(panel)
+    panel._play_page = lambda i: P._play_page(panel, i)
+    assert P.navigate_page(panel, 1) == "Page 2"
+    assert played[-1] == ("a.mp3", 9.5)
+    assert P.navigate_page(panel, -1) == "First page"
+    assert P.go_to_page(panel, "IV") == "Page iv"
+    assert played[-1] == ("b.mp3", 0.0)
+    assert P.go_to_page(panel, "99") == "No page 99 in this book."
+    panel._current_book = {"title": "T", "pages": []}
+    assert P.navigate_page(panel, 1) is None

@@ -3,12 +3,21 @@
 from radiomaster.services.sapi_tts import SAPITTS
 
 
+from radiomaster.services.onecore_tts import OneCoreTTS, winrt_available
+
 TTS_ENGINES = {"sapi5": "Windows SAPI 5"}
+if winrt_available():
+    TTS_ENGINES["onecore"] = "Windows OneCore voices"
 
 
 def create_tts(engine_id: str):
     if engine_id not in TTS_ENGINES:
         raise ValueError(f"The saved TTS engine '{engine_id}' is not supported. Choose an engine in Settings > Audiobooks.")
+    if engine_id == "onecore":
+        engine = OneCoreTTS()
+        if not engine.available:
+            raise RuntimeError("Windows OneCore voices are unavailable. Check your Windows speech installation.")
+        return engine
     engine = SAPITTS()
     if not engine.available:
         raise RuntimeError("Windows SAPI 5 is unavailable. Check your Windows speech installation.")

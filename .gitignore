@@ -73,3 +73,8 @@ tools/*.exe
 @AutomationLog.txt
 acclog.txt
 msg.txt
+
+# Scratch folders left by test and release runs
+tmp-*/
+.test-tmp-*/
+.release-test-*/

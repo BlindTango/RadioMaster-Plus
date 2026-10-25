@@ -17,7 +17,8 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **All audio/video formats** via FFmpeg (MP3, FLAC, OGG, WAV, AAC, Opus, MP4, MKV, AVI, WebM, MOV, and more)
 - **Streaming protocols**: HTTP/HTTPS (Icecast/SHOUTcast), HLS, DASH, UDP/RTP
 - **Transport controls**: Play, Pause, Stop, Seek, Fast Forward, Rewind, Next/Previous/First/Last Track
-- **Real-time effects**: Equalizer (10-band), Echo, Reverb, Dynamic Range, Pitch/Tempo, Chorus, Compressor, Distortion, Flanger, Gargle, Crossfade, Volume Normalization — all dynamic, no restart required, each with an On/Off toggle and a built-in/custom preset picker, and all remembered across restarts
+- **Real-time effects**: Equalizer (10-band), Echo, Reverb, Dynamic Range, Pitch/Tempo, Chorus, Compressor, Distortion, Flanger, Gargle, Volume Normalization — all dynamic, no restart required, each with an On/Off toggle and a built-in/custom preset picker, and all remembered across restarts
+- **Crossfade setting**: the next playlist item starts as soon as the current one ends; the BASS backend does not yet overlap the two
 - **Volume, Pan, and Playback speed** (0.5x to 3.0x) — also dynamic, no restart required, for audio content (radio, podcasts, audiobooks, local audio, YouTube audio). Video playback still restarts on these changes, since it goes through a separate video-rendering path.
 - **Video**: Separate resizable frame with fullscreen support
 
@@ -33,7 +34,7 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **RSS feed subscription** management
 - **Podcast directory** browsing (iTunes/Apple)
 - **OPML import/export**
-- **gpodder.net** sync
+- **gpodder.net** import of public subscriptions and upload of your subscription list
 - **Custom feeds**: Add by URL
 - **Episode management**: Download for offline, auto-download, play progress
 
@@ -50,7 +51,8 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **Sentence highlighting** for learning disabilities
 - **SAPI Text-to-Speech** for books without audio narration
 - **Bookmarks** and resume from last position
-- **ZIP archive** browsing
+- **ZIP archive** browsing and playback of media inside archives
+- **Bookmarks** list with Go To
 
 ### Track Identification
 - **AcoustID** fingerprinting (semi-automatic)
@@ -60,7 +62,7 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **Track renaming** with configurable templates
 
 ### Lyrics
-- **Auto-lookup** from LRCLib, Lyrics.ovh, Genius, Musixmatch
+- **Auto-lookup** from LRCLib and Lyrics.ovh, plus Genius and Musixmatch when you add your own token/key in Settings > Playback
 - **Synced lyrics** (LRC format) with line-by-line highlighting
 - **Lyrics cache** in SQLite
 
@@ -78,7 +80,7 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **Conflict detection** and notifications
 
 ### Sleep Timer
-Smart timer with countdown, end-of-track, and end-of-playlist options.
+Smart timer with countdown, end-of-track (finish the current track, then stop), and end-of-playlist options.
 
 ### Accessibility (First-Class Citizen)
 - **Full keyboard navigation** — every feature accessible without a mouse
@@ -93,7 +95,7 @@ Smart timer with countdown, end-of-track, and end-of-playlist options.
 ### Customization
 - **Theme editor** with live preview (light, dark, custom)
 - **Keyboard shortcut editor** with conflict detection
-- **Multi-language UI** via gettext/PO files
+- **Multi-language UI** via gettext/PO files (English ships today; other languages appear in Settings once a catalogue is added)
 - **Settings dialog** with 9 categories (General, Playback, Radio, Podcasts, Downloads, Recordings, Network, Accessibility, Advanced)
 - **Portable mode** available via installer
 
@@ -181,4 +183,4 @@ RadioMaster+/
 
 ## License
 
-MIT
+GPL-2.0-or-later (see [LICENSE](LICENSE)). The bundled BASS runtime has its own non-commercial terms; see [Third-party notices](THIRD_PARTY_NOTICES.md).
