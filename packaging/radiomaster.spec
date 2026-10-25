@@ -21,6 +21,9 @@ a = Analysis(
         (os.path.join(project_root, 'LICENSE'), '.'),
         (os.path.join(project_root, 'THIRD_PARTY_NOTICES.md'), '.'),
         (os.path.join(src_dir, 'radiomaster', 'i18n', 'en'), 'radiomaster/i18n/en'),
+    ] + [
+        (os.path.join(src_dir, 'radiomaster', 'i18n', code), f'radiomaster/i18n/{code}')
+        for code in ('es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'zh')
     ],
     hiddenimports=[
         'wx',

@@ -289,11 +289,36 @@ class PlaybackEngine:
             "and reinstall RadioMaster+ if its BASS files are missing or damaged."
         )
 
+    @_serialize_play
     def crossfade_to(self, url: str, title: str = "", artist: str = "",
                      duration: float = 0.0, fade_seconds: float = 5.0,
                      is_live: bool = False) -> None:
-        """Advance using BASS's existing stream switch (no overlap mixing)."""
-        self.play(url, title, artist, duration=duration, is_live=is_live)
+        """Advance to the next local file, overlapping it with the end of the
+        current one for ``fade_seconds``. Anything that cannot overlap (video,
+        streams, nothing playing, BASS unavailable) is a normal play()."""
+        bass = self._bass_radio
+        can_overlap = (
+            fade_seconds > 0 and not is_live and not self._is_video_active
+            and self._using_bass_radio and bass is not None
+            and self._state == self.STATE_PLAYING and os.path.isfile(url)
+        )
+        if not can_overlap:
+            self.play(url, title, artist, duration=duration, is_live=is_live)
+            return
+        self._playback_generation += 1
+        self._current_url = url
+        self._current_title = title
+        self._current_artist = artist
+        self._is_live = False
+        self._duration = duration
+        self._reconnect_attempts = 0
+        self._replaygain_db = self._compute_replaygain(url)
+        effective_volume = min(2.0, self._volume * (10.0 ** (self._replaygain_db / 20.0)))
+        bass.set_volume(effective_volume)
+        bass.set_pan(self._pan)
+        bass.set_rate(self._rate)
+        bass.apply_effects(self._effects)
+        bass.crossfade(url, title, artist, duration, fade_seconds)
 
     # ---------------------------------------------------------------------
     # Live time-shift: Jump Back / Jump Forward 15 seconds

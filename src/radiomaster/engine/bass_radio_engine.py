@@ -148,7 +148,7 @@ class BassRadioEngine:
 
     def _request(self, command: dict, generation: int | None = None) -> dict:
         # Include lock waiting so Stop can interrupt a stalled stream open.
-        timeout = self.OPEN_TIMEOUT if command["cmd"] == "play" else self.REQUEST_TIMEOUT
+        timeout = self.OPEN_TIMEOUT if command["cmd"] in ("play", "crossfade_play") else self.REQUEST_TIMEOUT
         with self._response_deadline(timeout):
             with self._io_lock:
                 if generation is not None and generation != self._generation:
@@ -177,13 +177,35 @@ class BassRadioEngine:
                          args=(url, title, artist, generation), daemon=True,
                          name="bass-radio-monitor").start()
 
+    def crossfade(self, url: str, title: str = "", artist: str = "",
+                  duration: float = 0.0, fade_seconds: float = 3.0) -> None:
+        """Overlap the next local file with the end of the current one. The
+        host mixes both streams for ``fade_seconds``; the previous monitor
+        thread is retired by the generation bump without reporting a finish."""
+        local = not url.startswith(("http://", "https://")) and os.path.isfile(url)
+        if fade_seconds <= 0 or not local or self._state != self.STATE_PLAYING:
+            self.play(url, title, artist, duration)
+            return
+        with self._lock:
+            self._generation += 1
+            generation = self._generation
+            self._position = 0.0
+            self._duration = max(0.0, duration)
+            self._timeshift_active = False
+            self._seekable = True
+        threading.Thread(target=self._play_and_monitor,
+                         args=(url, title, artist, generation, fade_seconds),
+                         daemon=True, name="bass-radio-monitor").start()
+
     def _play_and_monitor(self, url: str, title: str, artist: str,
-                          generation: int) -> None:
+                          generation: int, fade_seconds: float = 0.0) -> None:
         completed = False
         try:
-            result = self._request({"cmd": "play", "url": url,
-                                    "volume": self._volume, "seq": generation,
-                                    "seekable": self._seekable}, generation=generation)
+            command = {"cmd": "play", "url": url, "volume": self._volume,
+                       "seq": generation, "seekable": self._seekable}
+            if fade_seconds > 0:
+                command.update({"cmd": "crossfade_play", "fade": fade_seconds})
+            result = self._request(command, generation=generation)
             if not result.get("ok"):
                 raise RuntimeError(result.get("error", "stream open failed"))
             last = time.monotonic()

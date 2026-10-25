@@ -41,6 +41,7 @@ class I18nManager:
     _instance: "I18nManager | None" = None
     _current_language: str = "en"
     _translations: dict[str, Any] = {}
+    _catalogues: dict[str, dict[str, str]] = {}
 
     def __new__(cls) -> "I18nManager":
         if cls._instance is None:
@@ -76,12 +77,38 @@ class I18nManager:
             self._translations[lang].install()
             logger.info(f"Language set to {lang}")
 
+    def _catalogue(self, lang: str) -> dict[str, str]:
+        if lang not in self._catalogues:
+            from radiomaster.i18n.po import catalogue_path, parse_po
+            self._catalogues[lang] = parse_po(
+                catalogue_path(os.path.dirname(__file__), lang))
+        return self._catalogues[lang]
+
     def gettext(self, message: str) -> str:
-        """Translate a message."""
+        """Translate a message: the language's .po first, then gettext."""
+        if self._current_language != "en":
+            found = self._catalogue(self._current_language).get(message)
+            if found:
+                return found
         trans = self._translations.get(self._current_language)
         if trans:
             return trans.gettext(message)
         return message
+
+    def translate_label(self, text: str) -> str:
+        """Translate a widget or menu label, keeping what is not words: a
+        tab-separated shortcut suffix stays as it is, and a label whose exact form
+        (with its ``&`` accelerator) is missing is found without the ``&``."""
+        if self._current_language == "en" or not text:
+            return text
+        head, sep, tail = text.partition("\t")
+        catalogue = self._catalogue(self._current_language)
+        found = catalogue.get(head)
+        if found is None and "&" in head:
+            found = catalogue.get(head.replace("&", ""))
+        if found is None:
+            return text
+        return found + sep + tail
 
     @property
     def language(self) -> str:

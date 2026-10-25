@@ -75,7 +75,7 @@ _BASS_CONFIG_NET_SSL_VERIFY = 74
 _BASS_CONFIG_NET_PLAYLIST = 21
 _BASS_CONFIG_NET_PREBUF   = 15
 _BASS_CONFIG_NET_READTIMEOUT = 37
-_BASS_ERROR_ALREADY       = 8
+_BASS_ERROR_ALREADY       = 14  # BASS_ERROR_ALREADY (8 is BASS_ERROR_INIT)
 _BASS_ERROR_FILEFORM      = 40
 _BASS_ERROR_NOTAVAIL      = 37
 _BASS_ERROR_SSL           = 41
@@ -1724,6 +1724,84 @@ class BassHost:
         self._restart_meta_thread()
         return True, "ok"
 
+    def crossfade(self, url, volume_0_1=1.0, seq=None, seekable=False, fade_seconds=3.0):
+        """Start another local file while the current stream fades out.
+
+        Both streams are mixed by BASS for ``fade_seconds`` (the outgoing one
+        slides to silence, the incoming one up to the playback volume); the
+        outgoing stream is freed once its fade has finished. Only local files
+        can overlap -- anything else, or nothing playing yet, is a plain play().
+        Returns (ok, message) like play().
+        """
+        dll = self._dll
+        is_local = (not url.lower().startswith(("http://", "https://"))
+                    and os.path.isfile(url))
+        with self._lock:
+            old = self._handle
+        if not (dll and old and is_local and fade_seconds > 0):
+            return self.play(url, volume_0_1, seq=seq, seekable=seekable)
+
+        self._stop_meta_thread()
+        with self._lock:
+            self._current_play_seq = seq
+            old_fx = dict(self._fx_handles)
+            # The outgoing stream keeps using its DSP callbacks until it is
+            # freed, so their ctypes wrappers must outlive the swap below.
+            keepalive = [self._dsp_proc_ref, self._bass_dsp_proc_ref, old_fx]
+            self._handle = 0
+            self._fx_handles = {}
+
+        def free_old():
+            try:
+                dll.BASS_ChannelStop(old)
+                dll.BASS_StreamFree(old)
+            except Exception:
+                pass
+            keepalive.clear()
+
+        stream = self._try_create_local_file(url, seekable=seekable)
+        if not stream:
+            err = dll.BASS_ErrorGetCode()
+            free_old()
+            with self._lock:
+                if self._current_play_seq == seq:
+                    self._current_play_seq = None
+            return False, f"StreamCreateFile failed ({_describe_bass_error(err)})"
+
+        try:
+            self._gain = max(0.0, min(2.0, volume_0_1))
+            target = min(1.0, self._gain)
+            dll.BASS_ChannelSetAttribute(stream, _BASS_ATTRIB_VOL, ctypes.c_float(0.0))
+            self._apply_gain_dsp(stream)
+            self._apply_pan(stream)
+            self._apply_fx(stream)
+            if not dll.BASS_ChannelPlay(stream, 0):
+                raise RuntimeError(_describe_bass_error(dll.BASS_ErrorGetCode()))
+        except Exception as exc:
+            try:
+                dll.BASS_StreamFree(stream)
+            except Exception:
+                pass
+            free_old()
+            with self._lock:
+                self._handle = 0
+                if self._current_play_seq == seq:
+                    self._current_play_seq = None
+            return False, f"crossfade failed: {exc}"
+
+        millis = int(fade_seconds * 1000)
+        dll.BASS_ChannelSlideAttribute(stream, _BASS_ATTRIB_VOL, ctypes.c_float(target), millis)
+        dll.BASS_ChannelSlideAttribute(old, _BASS_ATTRIB_VOL, ctypes.c_float(0.0), millis)
+        with self._lock:
+            if self._current_play_seq == seq:
+                self._current_play_seq = None
+            self._handle = stream
+        timer = threading.Timer(fade_seconds + 0.5, free_old)
+        timer.daemon = True
+        timer.start()
+        self._restart_meta_thread()
+        return True, "ok"
+
     def stop(self):
         # Cancel any pending play when stopping
         self._cancel_pending_play()
@@ -2547,6 +2625,22 @@ def main():
                 ok, reason = host.play(u, v, seq=s, seekable=sk)
                 _send({"ok": ok, "error": reason if not ok else None, "seq": s})
             t = threading.Thread(target=_do_play, daemon=True, name="bass-play")
+            host._current_play_thread = t
+            t.start()
+
+        elif cmd == "crossfade_play":
+            url = cmd_obj.get("url", "")
+            vol = float(cmd_obj.get("volume", 1.0))
+            seq = cmd_obj.get("seq", None)
+            seekable = bool(cmd_obj.get("seekable", False))
+            fade = float(cmd_obj.get("fade", 0.0))
+            prev = host._current_play_thread
+            if prev and prev.is_alive():
+                prev.join(timeout=1.0)
+            def _do_crossfade(u=url, v=vol, s=seq, sk=seekable, f=fade):
+                ok, reason = host.crossfade(u, v, seq=s, seekable=sk, fade_seconds=f)
+                _send({"ok": ok, "error": reason if not ok else None, "seq": s})
+            t = threading.Thread(target=_do_crossfade, daemon=True, name="bass-crossfade")
             host._current_play_thread = t
             t.start()
 

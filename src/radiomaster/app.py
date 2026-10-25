@@ -163,6 +163,9 @@ class RadioMasterApp(wx.App):
         # Language in Settings saved a value nothing read, even on restart.
         from radiomaster.i18n import I18nManager
         I18nManager().set_language(self._config.get("general", "language", default="en"))
+        if I18nManager().language != "en":
+            from radiomaster.i18n import wx_hooks
+            wx_hooks.install()
 
         # Initialize services
         max_concurrent = self._config.get("downloads", "max_concurrent", default=3)

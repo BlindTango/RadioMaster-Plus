@@ -1534,7 +1534,10 @@ class MainWindow(wx.Frame):
         # A real crossfade must begin before the outgoing track reports
         # natural completion. The media panel guards ownership/current URL,
         # so position updates from podcasts, radio, and video are harmless.
-        self._media_panel.try_crossfade_advance(position, duration)
+        # End-of-track sleep timer: let this track finish by itself so the
+        # stop happens at its end instead of an overlap starting the next one.
+        if self._sleep_timer.pending_mode != "end_of_track":
+            self._media_panel.try_crossfade_advance(position, duration)
 
     def _on_engine_error(self, message: str) -> None:
         """Handle playback errors."""

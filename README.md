@@ -18,7 +18,7 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **Streaming protocols**: HTTP/HTTPS (Icecast/SHOUTcast), HLS, DASH, UDP/RTP
 - **Transport controls**: Play, Pause, Stop, Seek, Fast Forward, Rewind, Next/Previous/First/Last Track
 - **Real-time effects**: Equalizer (10-band), Echo, Reverb, Dynamic Range, Pitch/Tempo, Chorus, Compressor, Distortion, Flanger, Gargle, Volume Normalization — all dynamic, no restart required, each with an On/Off toggle and a built-in/custom preset picker, and all remembered across restarts
-- **Crossfade setting**: the next playlist item starts as soon as the current one ends; the BASS backend does not yet overlap the two
+- **Crossfade** between local playlist tracks: the outgoing track fades out while the next fades in (Settings > Playback)
 - **Volume, Pan, and Playback speed** (0.5x to 3.0x) — also dynamic, no restart required, for audio content (radio, podcasts, audiobooks, local audio, YouTube audio). Video playback still restarts on these changes, since it goes through a separate video-rendering path.
 - **Video**: Separate resizable frame with fullscreen support
 
@@ -95,7 +95,7 @@ Smart timer with countdown, end-of-track (finish the current track, then stop), 
 ### Customization
 - **Theme editor** with live preview (light, dark, custom)
 - **Keyboard shortcut editor** with conflict detection
-- **Multi-language UI** via gettext/PO files (English ships today; other languages appear in Settings once a catalogue is added)
+- **Multi-language UI**: English, Spanish, French, German, Italian, Portuguese, Russian, Japanese and Chinese (Simplified). The translations are unreviewed drafts covering menus, labels and most dialogs; text built at run time and the manual stay English. Add a language by writing `src/radiomaster/i18n/<code>/LC_MESSAGES/radiomaster.po` (see `tools/i18n/build_po.py`).
 - **Settings dialog** with 9 categories (General, Playback, Radio, Podcasts, Downloads, Recordings, Network, Accessibility, Advanced)
 - **Portable mode** available via installer
 

@@ -93,7 +93,7 @@ def test_gpodder_upload_sends_plain_list(monkeypatch):
 
 def test_language_list_only_offers_available_catalogues():
     assert "en" in LANGUAGES
-    assert set(LANGUAGES) == {"en"}
+    assert set(LANGUAGES) == {"en", "es", "fr", "de", "it", "pt", "ru", "ja", "zh"}
 
 
 def test_m3u_round_trip_keeps_relative_paths_and_urls(tmp_path):

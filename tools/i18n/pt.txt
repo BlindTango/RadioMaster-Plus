@@ -1,0 +1,462 @@
+1|&Arquivo
+2|&Abrir arquivo...
+3|Abrir &URL...
+4|Abrir &pasta...
+5|&Continuar ouvindo...
+6|Importar OPML...
+7|Exportar OPML...
+8|&Sair
+9|E&xibir
+10|Mostrar/ocultar &equalizador
+11|Mostrar/ocultar painel de &letras
+12|&Tela cheia
+13|&Tema
+14|Claro padrão
+15|Escuro padrão
+16|Editor de temas...
+17|&Idioma
+18|Inglês
+19|E&feitos
+20|&Ferramentas
+21|Temporizador de &desligamento...
+22|Gerenciador de &downloads...
+23|Agendador de &gravações...
+24|&Identificador de faixas...
+25|&Dividir faixa...
+26|&Atalhos de teclado...
+27|Verificação do &estado das estações...
+28|Estado do &catálogo de estações...
+29|Est&atísticas de audição...
+30|&Histórico de músicas...
+31|&Configurações...
+32|A&juda
+33|&Manual do usuário
+34|Guia de &início rápido
+35|&Notas da versão
+36|Atualizar biblioteca do &YouTube...
+37|Verificar &atualizações...
+38|&Sobre o RadioMaster+
+39|Rádio
+40|Podcasts
+41|Audiolivros
+42|Reprodutor de mídia
+43|YouTube
+44|Downloads
+45|Agendador
+46|Biblioteca
+47|Título:
+48|Capítulos
+49|Texto do capítulo
+50|Marcadores:
+51|Marcadores
+52|&Ir para
+53|Procurar pasta...
+54|Procurar arquivo...
+55|Ler em voz alta
+56|Parar a voz
+57|Adicionar marcador
+58|Marcadores...
+59|Ir para a página...
+60|Ir para a página
+61|Página anterior
+62|Próxima página
+63|Lista de reprodução
+64|Adicionar à lista
+65|Limpar
+66|Salvar lista...
+67|Salvar lista
+68|Abrir arquivo...
+69|Abrir arquivo compactado...
+70|Procurar...
+71|Categoria
+72|Episódios
+73|Resultados
+74|Meus canais
+75|Qualidade:
+76|&Tipo:
+77|Pesquisar
+78|&Pesquisar
+79|&Pesquisar:
+80|Pesquisar:
+81|Ir
+82|Reproduzir URL...
+83|Inscrever-se no &canal
+84|Carregar lista de reprodução
+85|Baixar
+86|Baixar áudio
+87|Inscrito
+88|Inscrever-se
+89|Downloads ativos
+90|Histórico de downloads
+91|Gravações agendadas
+92|Estação:
+93|Estações:
+94|Letras:
+95|Tocando agora:
+96|Volume:
+97|Vol:
+98|Velocidade:
+99|Balanço:
+100|Estação/Mídia:
+101|Faixa/Programa:
+102|Posição:
+103|Voltar &15 s
+104|Avançar &15 s
+105|● Gravação desativada
+106|🔇 Mudo desativado
+107|▶ Reproduzir
+108|⏹ Parar
+109|Inscrever-&se
+110|&Cancelar inscrição
+111|&Adicionar feed RSS...
+112|Nova &pasta...
+113|Importar inscrições do &gpodder.net
+114|&Enviar inscrições ao gpodder.net...
+115|&Importar OPML...
+116|&Exportar OPML...
+117|Excluir pasta
+118|Marcar tudo como ouvido
+119|Baixar tudo
+120|&Parar
+121|&Baixar
+122|Baixar &tudo
+123|Atuali&zar episódios
+124|&Marcar tudo como ouvido...
+125|Mover para &pasta...
+126|Renomear pa&sta...
+127|Excluir pas&ta...
+128|&Pausar
+129|Digite a URL do feed RSS:
+130|Importação concluída
+131|Pesquise um podcast acima, selecione um resultado e clique em Inscrever-se.
+132|Nada para assinar
+133|Selecione primeiro um podcast nos resultados da pesquisa.
+134|Este resultado da pesquisa não tem URL de feed.
+135|Não é possível se inscrever
+136|Isto é um resultado de pesquisa, ainda não uma inscrição: não há nada para cancelar.
+137|Sem inscrição
+138|Selecione primeiro o podcast cuja inscrição deseja cancelar.
+139|Cancelar inscrição
+140|Configure primeiro seu nome de usuário do gPodder nas configurações.
+141|Importação do gPodder
+142|Envio ao gPodder
+143|Você não tem inscrições para enviar.
+144|O envio falhou. Verifique seu usuário, sua senha e sua conexão.
+145|Selecione primeiro um episódio.
+146|Nenhum episódio para baixar.
+147|O gerenciador de downloads não está disponível.
+148|Download adicionado
+149|Nenhum feed de podcast encontrado neste arquivo OPML.
+150|Importar OPML
+151|Este episódio não tem URL de áudio.
+152|Não é possível baixar
+153|Erro de importação
+154|Exportação concluída
+155|Erro de exportação
+156|&Adicionar estação personalizada
+157|&Aumentar volume
+158|&Diminuir volume
+159|&Silenciar/Reativar som
+160|&Volume
+161|Balanço à &esquerda
+162|Balanço à &direita
+163|&Centralizar
+164|&Balanço
+165|&Mais rápido
+166|Mais &lento
+167|&Redefinir para 1,0x
+168|&Velocidade
+169|Digite a URL da estação:
+170|Digite o nome da estação:
+171|Selecione primeiro uma estação.
+172|Nenhuma estação selecionada
+173|Erro de gravação
+174|Sucesso
+175|Erro
+176|Informações
+177|Confirmar
+178|Erro de reprodução
+179|Adicionar agendamento...
+180|Editar...
+181|Excluir
+182|Excluir este agendamento?
+183|Selecione um agendamento para editar.
+184|Selecione um agendamento para excluir.
+185|URL do stream/podcast:
+186|Tipo de origem:
+187|Hora de início:
+188|Data de início:
+189|Duração (minutos, 0 = até o fim):
+190|Repetição:
+191|Formato de gravação:
+192|Ativado
+193|Digite uma URL.
+194|Erro de validação
+195|Digite um título.
+196|A data e a hora de início de um agendamento ativado devem estar no futuro.
+197|Erro de banco de dados
+198|Atualizar &agora
+199|&Retomar
+200|&Esquecer este
+201|Abrir &pasta do arquivo
+202|Parar &gravação
+203|Reiniciar &tudo
+204|&Remover
+205|Remover &tudo
+206|&Reproduzir
+207|Tentar novamente todos os downloads &com falha
+208|&Remover
+209|Atua&lizar
+210|&Reiniciar
+211|&Tentar novamente
+212|Daqui só é possível parar gravações de rádio manuais (não outros downloads).
+213|Não é uma gravação
+214|Essa gravação não está mais ativa.
+215|Já parada
+216|Remover download
+217|Nada para remover
+218|Remover todos os downloads ativos
+219|Remover do histórico
+220|O histórico de downloads já está vazio.
+221|Remover tudo do histórico
+222|Reiniciar download
+223|Não há downloads ativos para reiniciar.
+224|Nada para reiniciar
+225|Reiniciar todos os downloads
+226|Arquivo não encontrado
+227|Selecione primeiro um download do histórico.
+228|Nenhuma seleção
+229|Selecione primeiro uma gravação ativa.
+230|Selecione primeiro um download.
+231|Gravação ativa
+232|&Pular
+233|&Próxima
+234|Ligar/Desligar
+235|Salvar como predefinição...
+236|Excluir predefinição
+237|Ativar equalizador
+238|Digite o nome da predefinição:
+239|Predefinição:
+240|Nome indisponível
+241|&Aplicar
+242|&Nova...
+243|&Editar...
+244|&Renomear...
+245|&Excluir
+246|Fechar
+247|&Fechar
+248|Novo nome:
+249|Predefinições:
+250|Arquivo ZIP inválido
+251|&Copiar versão
+252|Copiar versão
+253|Digite a URL do stream:
+254|Verificar atualizações
+255|Faixa identificada
+256|Não foi possível identificar esta faixa.\nVerifique se o AcoustID e o MusicBrainz estão configurados.
+257|Falha na identificação
+258|Atualizar biblioteca do YouTube
+259|Não foi possível copiar o número da versão. Tente novamente.
+260|Atualizar
+261|A lista de reprodução está vazia.
+262|Essa lista de reprodução não tem entradas reproduzíveis.
+263|Notas da versão:
+264|&Baixar e instalar
+265|&Ver no GitHub
+266|&Pular esta versão
+267|Lembrar mais &tarde
+268|Falha ao baixar a atualização
+269|A atualização foi baixada. O RadioMaster+ será fechado e o instalador será aberto: siga as instruções dele para concluir a atualização.
+270|Pronto para instalar
+271|&Mostrar RadioMaster+
+272|&Reproduzir/Pausar
+273|Erro de pesquisa
+274|Digite a URL do YouTube:
+275|Digite a URL da lista de reprodução:
+276|Não foi possível determinar a URL deste canal.
+277|Não foi possível determinar a URL desta lista de reprodução.
+278|Selecione primeiro um vídeo, canal ou lista de reprodução.
+279|Não foi possível determinar o canal deste item.
+280|Selecione primeiro um canal em que você esteja inscrito.
+281|Selecione primeiro um vídeo.
+282|Não foi possível obter um stream reproduzível para o vídeo selecionado.
+283|Nenhuma entrada encontrada na lista de reprodução.
+284|Lista de reprodução vazia
+285|Abra primeiro este canal ou lista de reprodução (Enter ou clique duplo) e depois selecione um vídeo para baixar.
+286|Não foi possível determinar a URL do vídeo para baixar.
+287|Não foi possível determinar a URL do vídeo para baixar o áudio.
+288|O YouTube rejeitou novamente o stream deste vídeo após uma nova tentativa. Tente de novo em instantes.
+289|Configurações
+290|&Categorias:
+291|Configurações aplicadas com sucesso.
+292|Geral
+293|Reprodução
+294|Rede
+295|Gravações
+296|Acessibilidade
+297|Avançado
+298|Idioma (aplica-se após reiniciar):
+299|Tema:
+300|Tamanho da fonte:
+301|Iniciar com o Windows
+302|Minimizar para a bandeja do sistema
+303|Fechar para a bandeja do sistema
+304|Mostrar notificação na bandeja quando o RadioMaster+ estiver oculto
+305|Dispositivo de saída de som:
+306|Duração do fade cruzado (segundos):
+307|Reprodução sem pausas
+308|ReplayGain:
+309|Normalizar áudio (EBU R128)
+310|Lembrar a posição de reprodução
+311|Chave de API do AcoustID (para o identificador de faixas, Ctrl+I):
+312|Token de acesso da API do Genius (fonte de letras opcional):
+313|Chave de API do Musixmatch (fonte de letras opcional):
+314|País padrão:
+315|Mostrar estações duplicadas
+316|Reconectar automaticamente se o stream cair
+317|Tentativas de reconexão antes de desistir:
+318|Intervalo entre tentativas de reconexão (segundos):
+319|Reproduzir automaticamente a última estação ao iniciar
+320|Frequência de atualização da lista de estações:
+321|Local de download de podcasts:
+322|Procurar local de download de podcasts...
+323|Baixar automaticamente novos episódios
+324|Episódios a baixar por podcast (-1 para ilimitado):
+325|Episódios a manter (-1 para ilimitado):
+326|Usuário do gPodder (para importar inscrições públicas):
+327|Chave de API do Podcast Index (para um segundo diretório de pesquisa):
+328|Segredo da API do Podcast Index:
+329|Obtenha uma chave gratuita em api.podcastindex.org
+330|Ordem dos episódios:
+331|Avançar automaticamente para o próximo episódio quando um terminar
+332|Mecanismo de voz:
+333|Voz:
+334|Velocidade da voz:
+335|Volume da voz:
+336|&Testar voz
+337|Parar &teste
+338|Prévia da voz
+339|Local de download:
+340|Procurar local de download...
+341|Máximo de downloads simultâneos:
+342|Formato de áudio:
+343|Qualidade de áudio:
+344|Incorporar metadados
+345|Incorporar capa
+346|Entradas do histórico de downloads a mostrar (-1 para ilimitado):
+347|Local das gravações:
+348|Procurar local das gravações...
+349|Qualidade da gravação:
+350|Gravar no formato original da estação quando possível (codec, taxa de bits, taxa de amostragem e canais)
+351|Dividir gravações em faixas
+352|Pular prováveis anúncios com base na curta duração do segmento
+353|Duração máxima provável de um anúncio (segundos):
+354|Adicionar metadados às gravações
+355|Usar servidor proxy
+356|Host do proxy:
+357|Porta do proxy:
+358|Tempo limite de conexão (segundos):
+359|User agent personalizado (em branco usa o padrão do aplicativo):
+360|Usar cores de alto contraste em preto e branco
+361|Usar a fonte OpenDyslexic quando instalada
+362|Anunciar mudanças de estado aos leitores de tela
+363|Usar F6 e Shift+F6 para alternar entre as regiões principais
+364|Reforçar o foco do teclado com destaque de alto contraste
+365|Reduzir movimento
+366|Nível de registro:
+367|Atualizar automaticamente a biblioteca do YouTube (yt-dlp) em segundo plano
+368|Gerencie atalhos de menus, painéis e controles de reprodução. Novo atribui, Editar altera e Excluir remove a atribuição.
+369|&Redefinir tudo para o padrão
+370|Redefinir todos os atalhos de teclado para o padrão?
+371|&Função:
+372|&Tecla principal:
+373|Teclas modificadoras
+374|&Filtrar funções:
+375|Atalho &global (funciona quando o RadioMaster+ não está em foco)
+376|Selecione uma tecla principal.
+377|Atalho de teclado inválido
+378|Atalhos de teclado
+379|O temporizador não está em execução
+380|Iniciar temporizador
+381|Parar temporizador
+382|Duração (minutos):
+383|Modo:
+384|Todas as estações
+385|&Copiar “Artista - Título”
+386|Pesquisar &letra...
+387|&Iniciar varredura
+388|P&arar varredura
+389|Pular estações verificadas nos últimos 7 dias
+390|Nenhuma varredura em andamento.
+391|&Ocultar seleção
+392|Ocultar todas as &inativas
+393|&Verificar seleção novamente
+394|Gerenciar &ocultas...
+395|Verificação do estado das estações
+396|&Exibir seleção
+397|Exibir &todas
+398|Conexões paralelas:
+399|Mostrar:
+400|Já há uma varredura em andamento.
+401|Varredura em andamento
+402|Nenhuma estação para verificar (tudo foi verificado recentemente ou está oculto).
+403|Nada para verificar
+404|Ocultar estação
+405|Ocultar estações inativas
+406|Concluído
+407|Não foi possível encontrar esta estação no catálogo.
+408|Não encontrado
+409|Aplicar
+410|Salvar tema...
+411|Carregar tema...
+412|Redefinir
+413|Texto de exemplo
+414|Botão
+415|Digite o nome do tema:
+416|Cores do tema
+417|Visualização ao vivo
+418|Dividir
+419|Arquivo de áudio de origem:
+420|Pasta de saída:
+421|Método de divisão:
+422|Modelo de nome de arquivo (marcadores: {prefix} {index} {title}):
+423|Selecione um arquivo de áudio de origem válido.
+424|Nenhum arquivo de origem
+425|Escolha uma pasta de saída.
+426|Nenhuma pasta de saída
+427|Selecione primeiro um audiolivro.
+428|Nenhum livro selecionado
+429|Selecione um capítulo para reproduzir.
+430|Nenhum capítulo selecionado
+431|Este livro não tem números de página.
+432|Selecione um capítulo para ler.
+433|Selecione um capítulo para marcar.
+434|Marcador adicionado
+435|Este livro ainda não tem marcadores.
+436|O capítulo marcado não foi encontrado neste livro.
+437|Livro DAISY carregado
+438|Retomar reprodução
+439|Este capítulo não tem texto para ler.
+440|Sem texto
+441|Texto indisponível
+442|Erro de voz
+443|Pronto
+444|Reproduzindo
+445|Em pausa
+446|Parado
+447|Carregando em buffer
+448|Gravando
+449|Baixando
+450|Reproduzir
+451|Pausar
+452|Parar
+453|Volume
+454|Equalizador
+455|Efeitos
+456|Idioma
+457|Tema
+458|Tela cheia
+459|Tudo
+460|Escopo da pesquisa
+461|Sobre o RadioMaster+
+462|Um reprodutor de mídia unificado para rádio, podcasts, YouTube, audiolivros e arquivos locais.

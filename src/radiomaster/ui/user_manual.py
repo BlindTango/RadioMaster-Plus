@@ -602,14 +602,17 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             start automatically. The end of the list stops this progression. Clearing
             the playlist also clears the list used for automatic advancement.
 
-            Settings > Playback has Crossfade Duration and Gapless playback. Crossfade
-            requests a transition between outgoing and incoming items. Gapless takes
-            precedence when both are selected and advances at the natural end instead.
+            Settings > Playback has Crossfade Duration and Gapless playback. With a
+            crossfade of 1 second or more, the next playlist item starts that many
+            seconds before the current one ends: the outgoing track fades out while the
+            incoming one fades in. Gapless takes precedence when both are selected and
+            advances at the natural end instead, with no fade.
 
-            Transition support depends on the playback path. The current BASS path
-            switches streams rather than guaranteeing a true overlapping crossfade.
-            These settings should not be interpreted as a guarantee of uninterrupted
-            audio across every codec or device. They do not create a YouTube playlist queue.
+            Crossfade applies to local audio files in the Media Player playlist. Radio,
+            podcasts, video and online streams cannot overlap and simply change over.
+            A crossfade longer than the track's remaining time is shortened to fit.
+            These settings are not a guarantee of uninterrupted audio across every
+            codec or device. They do not create a YouTube playlist queue.
         """),
         _topic("Video Playback and Fullscreen", """
             Open a local video or activate a YouTube video to use video playback. Video
@@ -1040,7 +1043,11 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
 
             Apply saves the visited categories and keeps Settings open. OK saves and
             closes. Cancel closes without saving changes made since the last Apply;
-            it does not reverse settings already applied. Only languages that ship a translation are listed (currently English). Language changes require a
+            it does not reverse settings already applied. Only languages that ship a translation are listed: English, Spanish,
+            French, German, Italian, Portuguese, Russian, Japanese and Chinese
+            (Simplified). The translations cover menus, tabs, buttons, labels and most dialog
+            messages; status-bar text built while the program runs, and this manual,
+            stay in English. They have not been reviewed by native speakers. Language changes require a
             restart, and reduced-motion startup changes apply on the next launch.
 
             Some choices disable dependent controls: for example, proxy details when
@@ -1066,7 +1073,7 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
 
             Crossfade Duration sets the requested transition length. Gapless playback
             selects natural-end advancement instead of overlapping transitions. See
-            Automatic Advance, Crossfade, and Gapless for backend limitations.
+            Automatic Advance, Crossfade, and Gapless for what each applies to.
 
             ReplayGain offers None, Album, and Track and uses available gain tags.
             Normalize audio (EBU R128) evens out loudness for local files: the first time

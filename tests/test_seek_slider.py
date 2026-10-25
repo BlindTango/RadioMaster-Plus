@@ -119,7 +119,8 @@ def test_new_live_stream_clears_stale_slider(bar):
 def test_position_updates_enable_slider_for_active_buffer(buffered):
     buffered._bass_radio.state = "playing"
     window = SimpleNamespace(_engine=buffered, _now_playing=Mock(), _status_bar=Mock(),
-                             _podcast_panel=Mock(), _audiobook_panel=Mock(), _media_panel=Mock())
+                             _podcast_panel=Mock(), _audiobook_panel=Mock(), _media_panel=Mock(),
+                             _sleep_timer=Mock(pending_mode=None))
     MainWindow._on_engine_position(window, 20, 60)
     window._now_playing.set_time.assert_called_once_with(20, 120, timeshift=True)
     window._now_playing.set_seekable.assert_called_once_with(True)
