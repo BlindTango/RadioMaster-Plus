@@ -1048,18 +1048,16 @@ class RadioPanel(scrolled.ScrolledPanel):
         return download_id in self._recordings
 
     def _on_add_custom(self, event: wx.CommandEvent) -> None:
-        dlg = wx.TextEntryDialog(self, "Enter station URL:", "Add Custom Station")
-        if dlg.ShowModal() == wx.ID_OK:
-            url = dlg.GetValue().strip()
-            if url:
-                name_dlg = wx.TextEntryDialog(self, "Enter station name:", "Station Name")
-                if name_dlg.ShowModal() == wx.ID_OK:
-                    name = name_dlg.GetValue().strip() or url
-                    self.station_db.add_custom(name, url)
-                    self.tree.add_custom_section(self.station_db.get_custom_stations())
-                    wx.MessageBox(f"Custom station '{name}' added.", "Success", wx.OK | wx.ICON_INFORMATION)
-                name_dlg.Destroy()
-        dlg.Destroy()
+        from radiomaster.ui.custom_station_dialog import CustomStationDialog
+        dlg = CustomStationDialog(self)
+        try:
+            if dlg.ShowModal() == wx.ID_OK:
+                name, url = dlg.station_values()
+                self.station_db.add_custom(name, url)
+                self.tree.add_custom_section(self.station_db.get_custom_stations())
+                self.set_status(f"Status: Custom station '{name}' added.")
+        finally:
+            dlg.Destroy()
 
     def _display_custom_stations(self) -> None:
         """Display custom stations in the list."""

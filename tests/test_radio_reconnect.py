@@ -3,6 +3,7 @@
 from unittest.mock import Mock, patch
 import os
 import sys
+import threading
 import time
 
 from radiomaster.engine.bass_radio_engine import BassRadioEngine
@@ -104,6 +105,38 @@ def test_disabling_reconnect_cancels_pending_retry():
     assert engine._reconnect_timer is None
 
 
+def test_initial_open_error_is_reported_once_without_automatic_retry():
+    engine, bass = radio()
+    errors = []
+    engine.on_error(errors.append)
+    with patch("radiomaster.engine.playback_engine.threading.Timer") as timer, \
+            patch.object(engine, "play") as play:
+        engine._on_bass_error(bass, "StreamCreateURL failed")
+        engine._on_bass_state(bass, "stopped")
+        engine._reconnect_radio(bass, engine.playback_generation, False)
+    assert errors == ["StreamCreateURL failed"]
+    timer.assert_not_called()
+    play.assert_not_called()
+
+
+def test_error_after_successful_connection_still_allows_reconnect():
+    engine, bass = radio()
+    engine._on_bass_state(bass, "playing")
+    engine._on_bass_error(bass, "Host exited")
+    with patch("radiomaster.engine.playback_engine.threading.Timer") as timer:
+        engine._on_bass_state(bass, "stopped")
+    timer.assert_called_once()
+
+
+def test_replaced_host_error_does_not_interrupt_current_station():
+    engine, _bass = radio()
+    errors = []
+    engine.on_error(errors.append)
+    engine._on_bass_error(Mock(), "Old station failed")
+    assert not errors
+    assert not engine._radio_open_failed
+
+
 def test_real_host_dropout_is_replaced_without_manual_stop():
     hosts = []
     engine = PlaybackEngine()
@@ -138,6 +171,94 @@ def test_real_host_dropout_is_replaced_without_manual_stop():
             engine.stop(wait=False)
             time.sleep(0.6)
             assert len(hosts) == 2
+    finally:
+        engine.close()
+        for backend in hosts:
+            backend.close()
+
+
+def test_failed_reopen_uses_remaining_reconnect_budget():
+    hosts = []
+    engine = PlaybackEngine()
+    engine.set_auto_reconnect(True)
+    engine.set_reconnect_settings(3, 0.5)
+    errors = []
+    engine.on_error(errors.append)
+
+    def create():
+        index = len(hosts)
+        script = (
+            "import json,sys\n"
+            "print(json.dumps({'ok':True,'ready':True}),flush=True)\n"
+            "statuses=0\n"
+            "for line in sys.stdin:\n"
+            " command=json.loads(line)\n"
+            " statuses += command['cmd']=='status'\n"
+            f" rejected={index == 1!r} and command['cmd']=='play'\n"
+            f" state=0 if {index == 0!r} and statuses>1 else 1\n"
+            " print(json.dumps({'ok':not rejected,'state':state,'error':'Temporary outage'}),flush=True)\n"
+            " if command['cmd']=='quit': break\n"
+        )
+        backend = BassRadioEngine([sys.executable, "-u", "-c", script], os.environ.copy())
+        hosts.append(backend)
+        return backend
+
+    try:
+        with patch.object(BassRadioEngine, "create_if_available", side_effect=create):
+            engine.play("https://station.example/live", "Test radio", is_live=True)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if len(hosts) == 3 and engine.state == "playing":
+                    break
+                time.sleep(0.01)
+            assert len(hosts) == 3
+            assert engine.state == "playing"
+            assert engine._reconnect_attempts == 2
+            assert not engine._radio_open_failed
+            assert len(errors) == 1
+    finally:
+        engine.close()
+        for backend in hosts:
+            backend.close()
+
+
+def test_failed_open_stops_retrying_and_another_station_can_play():
+    hosts = []
+    failed = threading.Event()
+    engine = PlaybackEngine()
+    engine.set_auto_reconnect(True)
+    engine.set_reconnect_settings(2, 0.5)
+    engine.on_error(lambda message: failed.set())
+
+    def create():
+        reject_play = not hosts
+        script = (
+            "import json,sys\n"
+            "print(json.dumps({'ok':True,'ready':True}),flush=True)\n"
+            "for line in sys.stdin:\n"
+            " command=json.loads(line)\n"
+            f" rejected={reject_play!r} and command['cmd']=='play'\n"
+            " print(json.dumps({'ok':not rejected,'state':1,'error':'Invalid stream'}),flush=True)\n"
+            " if command['cmd']=='quit': break\n"
+        )
+        backend = BassRadioEngine([sys.executable, "-u", "-c", script], os.environ.copy())
+        hosts.append(backend)
+        return backend
+
+    try:
+        with patch.object(BassRadioEngine, "create_if_available", side_effect=create):
+            engine.play("https://station.example/broken", "Broken", is_live=True)
+            assert failed.wait(2)
+            time.sleep(0.7)  # longer than the reconnect interval
+            assert engine.state == "stopped"
+            assert len(hosts) == 1
+            assert engine._reconnect_timer is None
+            engine.play("https://station.example/working", "Working", is_live=True)
+            deadline = time.monotonic() + 2
+            while engine.state != "playing" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert engine.state == "playing"
+            assert not engine._radio_open_failed
     finally:
         engine.close()
         for backend in hosts:

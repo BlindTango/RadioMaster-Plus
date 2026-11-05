@@ -27,6 +27,7 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **Categories**: Alphabetical, Countries, Languages, Genres, Networks
 - **Offline database**: Full station catalog stored in SQLite, refreshed automatically on a configurable schedule (off/daily/weekly/monthly/quarterly/6-monthly/yearly)
 - **Custom stations**: Add your own station URLs
+- **Webpage stream finder**: Scan a station webpage for listen links and embedded players, then copy a discovered stream URL or save it as a custom station. Scans run in the background and can be stopped. Players requiring JavaScript execution or a sign-in may not expose a stream.
 - **Stream metadata**: ICY/SHOUTcast parsing for current song info
 - **Resume last station**: optionally auto-plays whatever was on when you last closed the app
 

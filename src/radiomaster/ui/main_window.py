@@ -56,6 +56,7 @@ class MainWindow(wx.Frame):
         # hiding it to the tray; _on_close checks it.
         self._tray_icon: TrayIcon | None = None
         self._exiting = False
+        self._playback_error_visible = False
         self._tray_notice_shown = False
         # engine.position counts seconds since play() was called -- correct
         # as a "seconds into this song" clock for local files/podcasts/etc
@@ -1542,7 +1543,16 @@ class MainWindow(wx.Frame):
     def _on_engine_error(self, message: str) -> None:
         """Handle playback errors."""
         self._status_bar.set_status(f"Error: {message}")
-        wx.MessageBox(message, "Playback Error", wx.OK | wx.ICON_ERROR)
+        # MessageBox runs a nested event loop. A second queued error must
+        # not open another modal dialog and leave the main window disabled
+        # behind a stack of playback errors.
+        if self._playback_error_visible or self._exiting:
+            return
+        self._playback_error_visible = True
+        try:
+            wx.MessageBox(message, "Playback Error", wx.OK | wx.ICON_ERROR, parent=self)
+        finally:
+            self._playback_error_visible = False
 
     def _on_global_search(self, query: str, scope: str) -> None:
         """Handle the search bar. "All" searches the stored catalogues (radio

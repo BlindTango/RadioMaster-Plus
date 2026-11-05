@@ -97,6 +97,30 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "If recovery gives up, select the station and press Enter to try again, "
         "or try another station. The application log records disconnects, stalls, "
         "retry attempts, and retry limits for troubleshooting."
+        " An initial stream-open failure stops after reporting the error; it does not "
+        "keep reopening error dialogs. Dismiss the error and choose another station or "
+        "try the same station again."
+    )),
+    ("Find a Stream on a Webpage", (
+        "1. Open Radio > Add Custom Station and enter a Station Name.\n"
+        "2. Paste the station's homepage or Listen Live address into Webpage URL.\n"
+        "3. Choose Scan Webpage. The dialog remains usable while it checks listen links, "
+        "embedded players, audio sources, and playlists. Stop Scan cancels the scan.\n"
+        "4. Move through Found Streams to inspect the formats and addresses. "
+        "Use Selected Stream fills Stream Address; Copy Stream URL copies the address "
+        "without saving a station.\n"
+        "5. Choose Save Station to add the stream under Custom Stations.\n\n"
+        "If no stream is found or the scan limit is reached, try a more specific "
+        "Listen Live page. Players requiring JavaScript execution or a sign-in may "
+        "not expose a stream. Some addresses expire; scan again if a saved link stops working."
+    )),
+    ("What's New in Version 1.3.1", (
+        "Add Custom Station can now scan a webpage for audio streams. Enter a Webpage URL, "
+        "choose Scan Webpage, then copy a result or use it as the station's Stream Address. "
+        "Scanning runs in the background and can be stopped without waiting for the network.\n\n"
+        "UNISA Radio and other iono.fm /s/ player links resolve to audio before BASS opens them. "
+        "Stream errors retain their original code, and an initial open failure no longer "
+        "starts repeated automatic retries or stacks playback error dialogs."
     )),
     ("What's New in Version 1.3.0", (
         "Crossfade now overlaps local playlist tracks: set Crossfade Duration in "
@@ -227,6 +251,23 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.3.1", (
+        "Webpage stream finder: open Radio > Add Custom Station, enter a Webpage URL, "
+        "and choose Scan Webpage. The finder checks listen links, embedded players, "
+        "audio sources, player configurations, and M3U/PLS/ASX/HLS playlists. "
+        "Use Selected Stream fills Stream Address, and Copy Stream URL copies a result "
+        "without saving a station.\n\n"
+        "Scans run on a worker thread, have time and link limits, and can be stopped. "
+        "Closing the dialog cancels the scan and ignores late results. Controls have "
+        "keyboard shortcuts and screen-reader names. Players requiring JavaScript execution "
+        "or a sign-in may not expose a stream; some stream addresses expire.\n\n"
+        "UNISA Radio and other iono.fm /s/ links resolve to audio before native playback. "
+        "BASS failures retain the original error instead of reporting error 0, and the "
+        "SSL fallback uses the correct error constant. Initial open failures stop retrying; "
+        "playback errors cannot open nested modal dialogs. Reconnection still recovers "
+        "a station that drops after successful playback.\n\n"
+        "Updated the User Manual, Quick Start Guide, release history, and feature sign-off checklist."
+    )),
     ("Version 1.3.0", (
         "Playback: crossfade between local playlist tracks now overlaps them for the chosen "
         "duration. Normalize audio measures local files in the background and adjusts their "

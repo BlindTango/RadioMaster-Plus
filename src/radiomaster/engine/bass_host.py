@@ -76,9 +76,9 @@ _BASS_CONFIG_NET_PLAYLIST = 21
 _BASS_CONFIG_NET_PREBUF   = 15
 _BASS_CONFIG_NET_READTIMEOUT = 37
 _BASS_ERROR_ALREADY       = 14  # BASS_ERROR_ALREADY (8 is BASS_ERROR_INIT)
-_BASS_ERROR_FILEFORM      = 40
+_BASS_ERROR_FILEFORM      = 41
 _BASS_ERROR_NOTAVAIL      = 37
-_BASS_ERROR_SSL           = 41
+_BASS_ERROR_SSL           = 10
 _BASS_STREAM_BLOCK        = 0x100000
 _BASS_STREAM_DECODE       = 0x200000  # source-only stream, feeds into BASS_FX_TempoCreate
 _BASS_FX_FREESOURCE       = 0x10000   # BASS_FX_TempoCreate: free the source stream when the tempo one is freed
@@ -256,14 +256,41 @@ def _event(**kwargs):
 
 
 # Playlist resolver (same logic as radioPlayer.py)
+def _iono_playlist_url(url):
+    """Recognise iono.fm's player pages, which are HTML rather than audio."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    if parts.hostname in ("iono.fm", "www.iono.fm"):
+        match = re.fullmatch(r"/s/(\d+)/?", parts.path)
+        if match:
+            return f"https://iframe.iono.fm/playlists/s/{match.group(1)}"
+    return None
+
+
 def _resolve_playlist_url(url, timeout=8):
     try:
+        iono_playlist = _iono_playlist_url(url)
         req = urllib.request.Request(
-            url, headers={"User-Agent": "FreeRadio-NVDA/1.0", "Icy-MetaData": "1"})
+            iono_playlist or url,
+            headers={"User-Agent": "FreeRadio-NVDA/1.0", "Icy-MetaData": "1"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             final_url = resp.url if hasattr(resp, "url") else url
             ct = (resp.headers.get("content-type") or "").lower().split(";")[0].strip()
-            data = resp.read(8192).decode("utf-8", "ignore")
+            data = resp.read(65536 if iono_playlist else 8192).decode("utf-8", "ignore")
+
+        if iono_playlist:
+            from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+            audio = [entry for entry in json.loads(data).get("audio", [])
+                     if entry.get("mime", "").startswith("audio/")
+                     and entry.get("url", "").startswith(("https://", "http://"))]
+            if audio:
+                best = max(audio, key=lambda entry: int(entry.get("bitrate", 0)))
+                parts = urlsplit(best["url"])
+                # These are JavaScript player placeholders, not stream tokens.
+                query = [(key, value) for key, value in parse_qsl(parts.query)
+                         if not re.fullmatch(r"<[^>]+>", value)]
+                return urlunsplit(parts._replace(query=urlencode(query)))
+            return url
 
         # Calculate base URL to convert relative URL to absolute URL
         from urllib.parse import urljoin
@@ -498,6 +525,7 @@ class BassHost:
         self._dll_dir     = dll_dir
         self._device_index = device_index  # -1 = system default
         self._dll      = None
+        self._last_stream_error = 0
         self._dll_hls  = None
         self._bass_fx_dll = None  # bass_fx.dll - optional, only used for
                                   # pitch-preserving podcast playback speed
@@ -951,7 +979,15 @@ class BassHost:
                 err = self._dll.BASS_ErrorGetCode()
             except Exception:
                 err = -1
+            self._last_stream_error = err
             _debug_log("BASS_StreamCreateFile failed for local file, err=%d: %s" % (err, path))
+        return stream
+
+    def _capture_stream_error(self, create_fn):
+        """Save the native failure before config restoration clears it."""
+        stream = create_fn()
+        if not stream:
+            self._last_stream_error = self._dll.BASS_ErrorGetCode()
         return stream
 
     def _stream_create_url_with_ssl_fallback(self, is_https, host, create_fn):
@@ -982,16 +1018,16 @@ class BassHost:
             try:
                 self._dll.BASS_SetConfig(_BASS_CONFIG_NET_SSL_VERIFY, 0)
             except Exception:
-                return create_fn()
+                return self._capture_stream_error(create_fn)
             try:
-                return create_fn()
+                return self._capture_stream_error(create_fn)
             finally:
                 try:
                     self._dll.BASS_SetConfig(_BASS_CONFIG_NET_SSL_VERIFY, 1)
                 except Exception:
                     pass
 
-        stream = create_fn()
+        stream = self._capture_stream_error(create_fn)
         if stream or not is_https:
             return stream
         try:
@@ -1008,7 +1044,7 @@ class BassHost:
         except Exception:
             return stream
         try:
-            stream = create_fn()
+            stream = self._capture_stream_error(create_fn)
         finally:
             try:
                 self._dll.BASS_SetConfig(_BASS_CONFIG_NET_SSL_VERIFY, 1)
@@ -1191,6 +1227,8 @@ class BassHost:
                                     ctypes.c_uint32(0), ctypes.c_uint32(0 if seekable else _BASS_STREAM_BLOCK),
                                     ctypes.c_void_p(0), ctypes.c_void_p(0),
                                 )
+                                if not stream:
+                                    self._last_stream_error = self._dll.BASS_ErrorGetCode()
                                 if stream:
                                     return stream
                     except:
@@ -1568,6 +1606,7 @@ class BassHost:
 
         if not self._dll:
             return False, "BASS not loaded"
+        self._last_stream_error = 0
 
         # Store seq for this play attempt
         with self._lock:
@@ -1634,7 +1673,9 @@ class BassHost:
         # Uses HLS playlist chain: master.m3u8 → master_128.m3u8 → .aac
         # That's why we make a maximum of 3 levels of resolve.
         _MAX_RESOLVE_DEPTH = 3
-        current_url = url
+        # Resolve known web players before asking a native decoder to open
+        # HTML repeatedly (and spending its connection timeout each time).
+        current_url = _resolve_playlist_url(url) if _iono_playlist_url(url) else url
         visited = {url}
         stream = 0  # reset — cache branch may have left a stale value
 
@@ -1650,7 +1691,7 @@ class BassHost:
             visited.add(resolved)
             current_url = resolved
         if not stream:
-            err = self._dll.BASS_ErrorGetCode()
+            err = self._last_stream_error or self._dll.BASS_ErrorGetCode()
             with self._lock:
                 if self._current_play_seq == seq:
                     self._current_play_seq = None

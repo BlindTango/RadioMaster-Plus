@@ -120,6 +120,9 @@ class PlaybackEngine:
         self._video_inputs: dict = {}
         self._video_stream = None
         self._radio_healthy_since: float | None = None
+        self._radio_connected = False
+        self._radio_reconnecting = False
+        self._radio_open_failed = False
         # Live time-shift (Jump Back/Forward 15s): an ffmpeg tee keeps
         # writing the live stream to a temp buffer file while the user is
         # behind live; the BASS host plays that file instead of the
@@ -144,7 +147,7 @@ class PlaybackEngine:
             bass.on_position_update(
                 lambda p, d: self._on_position_update(p, d) if self._on_position_update else None
             )
-            bass.on_error(lambda m: self._notify_error(m))
+            bass.on_error(lambda m: self._on_bass_error(bass, m))
             bass.on_track_change(
                 lambda title, artist: self._on_track_change(title, artist)
                 if self._on_track_change else None
@@ -163,10 +166,19 @@ class PlaybackEngine:
         self._bass_radio = bass
         return bass
 
+    def _on_bass_error(self, bass, message: str) -> None:
+        if bass is not self._bass_radio or not self._using_bass_radio:
+            return
+        # Auto-reconnect recovers dropped broadcasts. An initial open failure
+        # is terminal: retrying it generates repeated modal error dialogs.
+        self._radio_open_failed = not self._radio_connected
+        self._notify_error(message)
+
     def _on_bass_state(self, bass, state: str) -> None:
         if bass is not self._bass_radio or not self._using_bass_radio:
             return
         if state == self.STATE_PLAYING:
+            self._radio_connected = True
             if self._radio_healthy_since is None:
                 self._radio_healthy_since = time.monotonic()
         else:
@@ -180,7 +192,8 @@ class PlaybackEngine:
 
     def _schedule_radio_reconnect(self, bass, stalled: bool = False) -> None:
         if (bass is not self._bass_radio or not self._using_bass_radio
-                or not self._is_live or self._is_video_active or not self._auto_reconnect):
+                or not self._is_live or self._is_video_active or not self._auto_reconnect
+                or self._radio_open_failed):
             return
         if self._reconnect_attempts >= self._MAX_RECONNECT_ATTEMPTS:
             log.warning("Radio reconnect limit reached for '%s' after %s attempts",
@@ -201,7 +214,8 @@ class PlaybackEngine:
         with self._play_lock:
             if (generation != self._playback_generation or bass is not self._bass_radio
                     or not self._using_bass_radio or not self._is_live
-                    or not self._auto_reconnect or self._is_video_active):
+                    or not self._auto_reconnect or self._is_video_active
+                    or self._radio_open_failed):
                 return
             with self._restart_lock:
                 self._reconnect_timer = None
@@ -215,8 +229,14 @@ class PlaybackEngine:
             attempt = self._reconnect_attempts + 1
             log.warning("Reconnecting radio '%s' (attempt %s of %s)",
                         self._current_title, attempt, self._MAX_RECONNECT_ATTEMPTS)
-            self.play(self._current_url, self._current_title, self._current_artist,
-                      is_live=True)
+            # Keep the recovery session distinct from a new user selection.
+            # A temporary failure on a reopen must use the remaining retry budget.
+            self._radio_reconnecting = True
+            try:
+                self.play(self._current_url, self._current_title, self._current_artist,
+                          is_live=True)
+            finally:
+                self._radio_reconnecting = False
             self._reconnect_attempts = attempt
 
 
@@ -264,6 +284,8 @@ class PlaybackEngine:
         self._video_inputs = video_inputs or {}
         self._reconnect_attempts = 0
         self._radio_healthy_since = None
+        self._radio_connected = self._radio_reconnecting
+        self._radio_open_failed = False
         self._replaygain_db = self._compute_replaygain(url)
 
         if is_video:

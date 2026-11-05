@@ -275,8 +275,17 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             from Favorites removes that favorite designation, not the station catalogue.
 
             To add a stream absent from the catalogue, choose Add Custom Station,
-            enter its name and stream URL when prompted, and confirm. Find it under
-            Custom Stations. Use a direct playable URL rather than the station's homepage.
+            enter its name and Stream Address, then choose Save Station. Find it under
+            Custom Stations.
+
+            If you only have the station's webpage, enter it in Webpage URL and choose
+            Scan Webpage. The scan follows listen links, embedded players, and playlists
+            in the background. Move through Found Streams to inspect the formats and URLs.
+            Use Selected Stream fills Stream Address. Copy Stream URL copies the selected
+            address without saving a station. You can stop a scan or close the dialog at
+            any time. A scan has a time and link limit; try a more specific Listen Live
+            page if no stream is found. Players that generate links through JavaScript
+            or require a sign-in may not expose a stream. Some stream URLs expire.
 
             Favorites and custom stations are stored locally. Back up the application's
             data when moving to a different installation; updating the public catalogue
@@ -302,6 +311,10 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             A failed stream can report a connection, format, or access problem. Try a
             different station to distinguish one unavailable stream from a network or
             output-device problem. A site may restrict access by region or reject clients.
+            An initial stream-open failure does not trigger automatic retries. Dismiss
+            its error and choose another station, or select the same one and press Enter
+            to try again. Automatic recovery applies to broadcasts that connected and
+            subsequently dropped or stalled.
         """),
         _topic("Live Time-Shift: Jump Back and Forward", """
             While a live station is playing, the Jump Back 15s and Jump Forward 15s
@@ -1389,6 +1402,14 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             No sound: check Play/Pause, Volume, Mute, Pan, Sound Output Device, Windows
             volume, and the selected device. Try a known local file and another station.
             A problem limited to one source is different from no audio anywhere.
+
+            A station homepage is usually not a playable audio address. Open Radio >
+            Add Custom Station, put the page in Webpage URL, and choose Scan Webpage.
+            Select a result and choose Use Selected Stream or Copy Stream URL. If no
+            stream is found, try the site's Listen Live or player page. Some players
+            require JavaScript or a sign-in, and some stream addresses expire. The
+            dialog reports no results or a scan limit in Scan status; Stop Scan and
+            Cancel remain available while the network request is running.
 
             Radio disconnects: read the status/error, check the connection and Network
             settings, and review Radio reconnection limits. Try a different stream and

@@ -92,6 +92,25 @@ Have a screen reader running and speaking (JAWS or NVDA).
 - Pass: the dialog lists what played, newest with artist/title/time; Copy,
   and Search Lyrics each work from the context menu.
 
+**R-12. Find and save a webpage stream**
+- Do: Radio > Add Custom Station. Enter `UNISA Radio` in Station Name and
+  `https://iono.fm/s/207` in Webpage URL. Choose Scan Webpage. Read Found Streams,
+  select an audio result, choose Use Selected Stream, then Save Station.
+- Pass: each control has an understandable name; results include a format and URL;
+  Stream Address contains the selected audio URL; the saved custom station plays.
+
+**R-13. Copy and stop without saving**
+- Do: scan a webpage, select a result, and choose Copy Stream URL. Paste into a
+  text editor. Start another scan, choose Stop Scan, then Cancel.
+- Pass: the pasted URL matches the selected result; Stop Scan responds immediately;
+  Cancel closes the dialog; no station is added and no late result reopens the dialog.
+
+**R-14. Recover from an initial stream failure**
+- Do: try a custom station with an unavailable stream URL. Dismiss its playback
+  error, then select a known working station and press Enter.
+- Pass: no repeated error dialogs appear for the initial failure, and another
+  station can play. Reconnection still recovers a previously connected broadcast.
+
 ---
 
 ## Block P — Podcasts
