@@ -154,6 +154,29 @@ Have a screen reader running and speaking (JAWS or NVDA).
 - Pass: the menu closes immediately, focus returns to Episodes, and refreshed
   rows appear without requiring Escape.
 
+## Block Y — YouTube channel subscriptions
+
+**Y-01. Open a saved channel**
+- Do: on YouTube, search for a channel and choose Subscribe to Channel. Select its
+  row in My Channels, then press Enter or choose View Videos.
+- Pass: the intended channel's videos appear, focus moves to the video list, and
+  a video can be selected and played with Enter. The channel URL itself is not played.
+
+**Y-02. Browse older uploads**
+- Do: open a channel with more than 100 uploads. Choose Load More Videos, then
+  continue through the appended rows.
+- Pass: older uploads appear after the existing videos, overlapping entries are not
+  duplicated, and the status eventually reports End of channel videos.
+
+**Y-03. Change channels and retry failures**
+- Do: move quickly between two subscribed channels. Then test an unavailable
+  channel or interrupt the connection while loading older uploads.
+- Pass: only the latest selection's results remain. A failed first load can be
+  retried with View Videos; a failed later page can be retried with Load More Videos
+  without removing the videos already shown. The interface remains responsive.
+
+---
+
 ## Block T — Tools and stats
 
 **T-01. Catalog Status**

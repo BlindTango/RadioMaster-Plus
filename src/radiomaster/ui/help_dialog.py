@@ -114,6 +114,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.3.2", (
+        "YouTube subscriptions now open the intended channel's videos reliably. Select "
+        "a channel in My Channels, then press Enter or choose View Videos to move to its "
+        "videos. Load More Videos appends older uploads in batches of 100.\n\n"
+        "Channel loading runs in the background. Rapid selection changes are combined, "
+        "and late responses cannot replace a newer selection or search. Failed loads "
+        "report an error and can be retried. Fractional video durations no longer "
+        "interrupt the list while it is being filled."
+    )),
     ("What's New in Version 1.3.1", (
         "Add Custom Station can now scan a webpage for audio streams. Enter a Webpage URL, "
         "choose Scan Webpage, then copy a result or use it as the station's Stream Address. "
@@ -220,6 +229,20 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "without downloading the entire video first. "
         "Use Help > Update YouTube Library if extraction stops working."
     )),
+    ("Browse Subscribed YouTube Channels", (
+        "1. On YouTube, select a video or channel search result and choose Subscribe to Channel.\n"
+        "2. In My Channels, select the saved channel. Its videos load in the background.\n"
+        "3. Press Enter or choose View Videos to move focus to its videos. Select a video "
+        "and press Enter to play it.\n"
+        "4. Choose Load More Videos to append older uploads, 100 at a time. Continue until "
+        "the status reports End of channel videos.\n\n"
+        "View Videos refreshes from the beginning and retries an unsuccessful first load. "
+        "If loading more fails, the videos already shown remain available; choose Load More "
+        "Videos again to retry the same page. Saved channel IDs use the public uploads "
+        "playlist, which can include Shorts and archived live uploads. Private, removed, "
+        "or restricted videos may not be available. These are local RadioMaster+ subscriptions, "
+        "not changes to your YouTube account."
+    )),
     ("Download and Reuse Saved Files", (
         "In Podcasts, open the episodes context menu and choose Download or Download All. "
         "In YouTube, choose Download or Download Audio. "
@@ -251,6 +274,22 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.3.2", (
+        "Fixed browsing subscribed YouTube channels. Selection and activation use the "
+        "intended row; Enter or the new View Videos button opens its video list and moves "
+        "focus there. The first video is selected when opening an already loaded channel.\n\n"
+        "Load More Videos appends older uploads in batches of 100 instead of stopping at "
+        "the most recent 30. Saved channel IDs use the public uploads playlist, which can "
+        "include Shorts and archived live uploads. Duplicate videos are suppressed when "
+        "pages overlap, and skipped unavailable items do not hide following pages.\n\n"
+        "Channel loads run in the background. Rapid selections are combined, and old results "
+        "cannot replace a newly selected channel, search, or playlist. Loading errors are "
+        "distinguished from empty channels; failed loads can "
+        "be retried without losing videos already displayed. Fractional durations are "
+        "formatted safely. Interrupted pages retain partial results and can be retried "
+        "with Load More Videos instead of incorrectly reporting the end of the channel.\n\n"
+        "Updated the User Manual, Quick Start Guide, release history, and feature sign-off checklist."
+    )),
     ("Version 1.3.1", (
         "Webpage stream finder: open Radio > Add Custom Station, enter a Webpage URL, "
         "and choose Scan Webpage. The finder checks listen links, embedded players, "

@@ -1,10 +1,13 @@
 """YouTube tab panel with search, playback, and downloads."""
 
+import threading
+
 import wx
-from typing import Any
+
 from radiomaster.database.connection import DatabaseManager
 from radiomaster.engine.playback_engine import PlaybackEngine
 from radiomaster.utils.accessibility import set_accessible_name, set_search_ctrl_accessible_name
+from radiomaster.utils.wx_safe import call_after_safe
 
 
 class YouTubePanel(wx.Panel):
@@ -25,6 +28,12 @@ class YouTubePanel(wx.Panel):
         # would happily try to download an entire channel's uploads).
         self._result_type = "video"
         self._channel_data: list[dict] = []
+        self._browse_request_seq = 0
+        self._channel_context = None
+        self._channel_loading = False
+        self._channel_focus_results = False
+        self._channel_page_size = 100
+        self._channel_selection_timer = None
         # Enter and double-click both fire EVT_LIST_ITEM_ACTIVATED for
         # what a user experiences as one action, but a fast double-click
         # can still land two separate activations (or Enter + a
@@ -64,6 +73,9 @@ class YouTubePanel(wx.Panel):
     def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
         """Clean up any temp playback file when the panel is destroyed."""
         if event.GetEventObject() is self:
+            self._browse_request_seq += 1
+            if self._channel_selection_timer is not None:
+                self._channel_selection_timer.cancel()
             self._cleanup_temp_file()
         event.Skip()
 
@@ -134,6 +146,10 @@ class YouTubePanel(wx.Panel):
         self._channels_list.AppendColumn("Title", width=180)
         set_accessible_name(self._channels_list, "My Channels")
         col_channels_sizer.Add(self._channels_list, 1, wx.EXPAND | wx.ALL, 4)
+        self._btn_view_videos = wx.Button(col_channels, label="&View Videos")
+        set_accessible_name(self._btn_view_videos, "View videos from selected subscribed channel")
+        self._btn_view_videos.Disable()
+        col_channels_sizer.Add(self._btn_view_videos, 0, wx.EXPAND | wx.ALL, 4)
         self._btn_unsubscribe = wx.Button(col_channels, label="&Unsubscribe")
         set_accessible_name(self._btn_unsubscribe, "Unsubscribe from selected channel")
         col_channels_sizer.Add(self._btn_unsubscribe, 0, wx.EXPAND | wx.ALL, 4)
@@ -149,6 +165,10 @@ class YouTubePanel(wx.Panel):
         self._results_list.AppendColumn("Duration", width=70)
         self._results_list.AppendColumn("Channel", width=150)
         col_results_sizer.Add(self._results_list, 1, wx.EXPAND | wx.ALL, 4)
+        self._btn_more_videos = wx.Button(col_results, label="Load &More Videos")
+        set_accessible_name(self._btn_more_videos, "Load more videos from this channel")
+        self._btn_more_videos.Disable()
+        col_results_sizer.Add(self._btn_more_videos, 0, wx.EXPAND | wx.ALL, 4)
         self._btn_subscribe = wx.Button(col_results, label="Su&bscribe to Channel")
         set_accessible_name(self._btn_subscribe, "Subscribe to selected item's channel")
         col_results_sizer.Add(self._btn_subscribe, 0, wx.EXPAND | wx.ALL, 4)
@@ -214,6 +234,8 @@ class YouTubePanel(wx.Panel):
         self._btn_download_audio.Bind(wx.EVT_BUTTON, self._on_download_audio)
         self._btn_subscribe.Bind(wx.EVT_BUTTON, self._on_subscribe)
         self._btn_unsubscribe.Bind(wx.EVT_BUTTON, self._on_unsubscribe)
+        self._btn_view_videos.Bind(wx.EVT_BUTTON, self._on_view_videos)
+        self._btn_more_videos.Bind(wx.EVT_BUTTON, self._on_more_videos)
         self._search_ctrl.Bind(wx.EVT_SEARCHCTRL_SEARCH_BTN, self._on_search)
         self._search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
         # Enter/double-click plays the selected result directly -- every
@@ -227,6 +249,7 @@ class YouTubePanel(wx.Panel):
         self._results_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_result_selected)
         self._channels_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_channel_activated)
         self._channels_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_channel_selected)
+        self._channels_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._on_channel_deselected)
 
         self._load_channels()
 
@@ -259,6 +282,7 @@ class YouTubePanel(wx.Panel):
         if not query:
             return
         search_type = self._selected_search_type()
+        request_seq = self._begin_browse()
 
         self._results_list.DeleteAllItems()
         self._search_results = []
@@ -271,9 +295,9 @@ class YouTubePanel(wx.Panel):
                 service = YouTubeService()
                 results = service.search(query, max_results=100, search_type=search_type)
             except Exception as e:
-                wx.CallAfter(self._on_search_failed, str(e))
+                call_after_safe(self, self._on_search_failed, str(e), request_seq)
                 return
-            wx.CallAfter(self._apply_search_results, results, query, search_type)
+            call_after_safe(self, self._apply_search_results, results, query, search_type, request_seq)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -288,7 +312,9 @@ class YouTubePanel(wx.Panel):
         if hasattr(top, "_status_bar"):
             top._status_bar.set_status(text)
 
-    def _on_search_failed(self, message: str) -> None:
+    def _on_search_failed(self, message: str, request_seq: int | None = None) -> None:
+        if request_seq is not None and request_seq != self._browse_request_seq:
+            return
         self._btn_search.Enable()
         wx.MessageBox(f"Search failed: {message}", "Search Error", wx.OK | wx.ICON_ERROR)
 
@@ -308,7 +334,9 @@ class YouTubePanel(wx.Panel):
             self._results_list.SetColumn(col, item)
 
     def _apply_search_results(self, results: list[dict], query: str,
-                               search_type: str = "video") -> None:
+                               search_type: str = "video", request_seq: int | None = None) -> None:
+        if request_seq is not None and request_seq != self._browse_request_seq:
+            return
         self._btn_search.Enable()
         self._result_type = search_type
         self._set_results_columns_for_type(search_type)
@@ -346,9 +374,13 @@ class YouTubePanel(wx.Panel):
             return f"{count / 1_000:.1f}K subscribers"
         return f"{count} subscribers"
 
-    def _format_duration(self, seconds: int) -> str:
+    def _format_duration(self, seconds: int | float | None) -> str:
         """Format duration in seconds to MM:SS or HH:MM:SS."""
-        if not seconds:
+        try:
+            seconds = int(seconds or 0)
+        except (TypeError, ValueError, OverflowError):
+            return "Unknown"
+        if seconds <= 0:
             return "Unknown"
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
@@ -466,7 +498,9 @@ class YouTubePanel(wx.Panel):
         if not channel_url:
             wx.MessageBox("Could not determine this channel's URL.", "Error", wx.OK | wx.ICON_ERROR)
             return
-        self._load_channel_videos(channel_url, title)
+        self._load_channel_videos(channel_url, title,
+                                  channel_id=channel.get('channel_id') or channel.get('id') or '',
+                                  focus_results=True)
 
     def _open_selected_playlist(self) -> None:
         playlist = self._get_selected_video()
@@ -476,28 +510,143 @@ class YouTubePanel(wx.Panel):
         if not playlist_url:
             wx.MessageBox("Could not determine this playlist's URL.", "Error", wx.OK | wx.ICON_ERROR)
             return
+        request_seq = self._begin_browse()
         self._set_status(f"Status: Loading playlist '{playlist.get('title', '')}'...")
 
         def worker():
             from radiomaster.services.youtube_dl import YouTubeService
             service = YouTubeService()
             entries = service.get_playlist_entries(playlist_url)
-            wx.CallAfter(self._apply_playlist_entries, entries)
+            call_after_safe(self, self._apply_playlist_entries, entries, request_seq)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
-    def _load_channel_videos(self, channel_url: str, title: str) -> None:
-        self._set_status(f"Status: Loading videos for '{title}'...")
+    def _begin_browse(self) -> int:
+        if self._channel_selection_timer is not None:
+            self._channel_selection_timer.cancel()
+            self._channel_selection_timer = None
+        self._browse_request_seq += 1
+        self._channel_context = None
+        self._channel_loading = False
+        self._channel_focus_results = False
+        self._btn_more_videos.Disable()
+        self._btn_search.Enable()
+        self._btn_playlist.Enable()
+        return self._browse_request_seq
+
+    def _load_channel_videos(self, channel_url: str, title: str, *, channel_id: str = "",
+                             focus_results: bool = False, refresh: bool = False) -> None:
+        key = (channel_url, channel_id)
+        if self._channel_context and self._channel_context["key"] == key and not refresh:
+            self._channel_focus_results |= focus_results
+            if self._channel_loading:
+                return
+            if self._search_results or self._channel_context["next_start"] > 1:
+                if focus_results:
+                    if (self._search_results
+                            and self._results_list.GetFirstSelected() == wx.NOT_FOUND):
+                        self._results_list.Select(0)
+                        self._results_list.Focus(0)
+                        self._results_list.EnsureVisible(0)
+                    self._results_list.SetFocus()
+                return
+        if self._channel_loading and self._channel_context["key"] == key:
+            self._channel_focus_results |= focus_results
+            return
+        self._begin_browse()
+        self._channel_context = {"key": key, "url": channel_url, "title": title,
+                                 "id": channel_id, "next_start": 1}
+        self._channel_focus_results = focus_results
+        self._search_results = []
+        self._results_list.DeleteAllItems()
+        self._result_type = "video"
+        self._set_results_columns_for_type("video")
+        self._fetch_channel_page()
+
+    def _fetch_channel_page(self) -> None:
+        if self._channel_loading or not self._channel_context:
+            return
+        context = dict(self._channel_context)
+        request_seq = self._browse_request_seq
+        self._channel_loading = True
+        self._btn_more_videos.Disable()
+        self._set_status(f"Status: Loading videos for '{context['title']}'...")
 
         def worker():
             from radiomaster.services.youtube_dl import YouTubeService
-            service = YouTubeService()
-            entries = service.get_channel_videos(channel_url)
-            wx.CallAfter(self._apply_search_results, entries, title, "video")
+            try:
+                entries = YouTubeService().get_channel_videos(
+                    context['url'], self._channel_page_size,
+                    start=context['next_start'], channel_id=context['id'])
+            except Exception as exc:
+                call_after_safe(self, self._channel_page_failed, request_seq, str(exc))
+                return
+            call_after_safe(self, self._apply_channel_page,
+                            request_seq, context['next_start'], entries)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_channel_page(self, request_seq: int, start: int, entries: list[dict]) -> None:
+        if request_seq != self._browse_request_seq or not self._channel_context:
+            return
+        self._channel_loading = False
+        first_new_row = len(self._search_results)
+        existing = {item.get('id') or item.get('url') for item in self._search_results}
+        for entry in entries:
+            identity = entry.get('id') or entry.get('url')
+            if identity and identity in existing:
+                continue
+            existing.add(identity)
+            index = len(self._search_results)
+            row = self._results_list.InsertItem(index, (entry.get('title') or 'Unknown')[:100])
+            self._results_list.SetItem(row, 1, self._format_duration(entry.get('duration') or 0))
+            self._results_list.SetItem(row, 2, entry.get('channel') or entry.get('uploader')
+                                      or self._channel_context['title'])
+            self._results_list.SetItemData(row, index)
+            self._search_results.append(entry)
+        complete = getattr(entries, 'complete', True)
+        self._channel_context['next_start'] = start + self._channel_page_size if complete else start
+        more = not complete or len(entries) >= self._channel_page_size or any(
+            isinstance(entry.get('playlist_index'), int)
+            and entry['playlist_index'] >= start + self._channel_page_size - 1
+            for entry in entries)
+        self._btn_more_videos.Enable(more)
+        count = len(self._search_results)
+        title = self._channel_context['title']
+        if count:
+            if not complete:
+                suffix = ' This page was interrupted. Use Load More Videos to retry it.'
+            else:
+                suffix = (' Use Load More Videos for older uploads.'
+                          if more else ' End of channel videos.')
+            self._set_status(f"Status: Showing {count} video(s) from '{title}'.{suffix}")
+        else:
+            self._set_status(
+                f"Status: No public videos found for '{title}'. Use View Videos to retry.")
+        if self._channel_focus_results and count:
+            row = min(first_new_row, count - 1)
+            selected = self._results_list.GetFirstSelected()
+            if selected != wx.NOT_FOUND:
+                self._results_list.Select(selected, False)
+            self._results_list.Select(row)
+            self._results_list.Focus(row)
+            self._results_list.EnsureVisible(row)
+            self._results_list.SetFocus()
+        self._channel_focus_results = False
+
+    def _channel_page_failed(self, request_seq: int, message: str) -> None:
+        if request_seq != self._browse_request_seq or not self._channel_context:
+            return
+        self._channel_loading = False
+        self._btn_more_videos.Enable(bool(self._search_results))
+        self._set_status(
+            f"Status: Could not load videos for '{self._channel_context['title']}': {message}")
+
+    def _on_more_videos(self, event) -> None:
+        self._channel_focus_results = True
+        self._fetch_channel_page()
 
     # ------------------------------------------------------------------
     # Channel subscriptions -- mirrors PodcastPanel's Subscribe/
@@ -508,20 +657,45 @@ class YouTubePanel(wx.Panel):
     # ------------------------------------------------------------------
     def _load_channels(self) -> None:
         from radiomaster.database.repository import YouTubeChannelRepository
+        self._begin_browse()
         self._channels_list.DeleteAllItems()
         self._channel_data = YouTubeChannelRepository(self._db).get_all()
         for i, channel in enumerate(self._channel_data):
             self._channels_list.InsertItem(i, channel.get('title', 'Unknown'))
+        self._btn_view_videos.Disable()
 
     def _on_channel_activated(self, event: wx.CommandEvent) -> None:
-        idx = self._channels_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or idx >= len(self._channel_data):
+        index = event.GetIndex()
+        if 0 <= index < len(self._channel_data):
+            selected = self._channels_list.GetFirstSelected()
+            if selected != wx.NOT_FOUND and selected != index:
+                self._channels_list.Select(selected, False)
+            if selected != index:
+                self._channels_list.Select(index)
+            if self._channels_list.GetFocusedItem() != index:
+                self._channels_list.Focus(index)
+            self._open_subscribed_channel(index, focus_results=True)
+
+    def _on_view_videos(self, event) -> None:
+        index = self._channels_list.GetFirstSelected()
+        if index == wx.NOT_FOUND:
+            index = self._channels_list.GetFocusedItem()
+        self._open_subscribed_channel(index, focus_results=True, refresh=True)
+
+    def _open_subscribed_channel(self, index: int, *, focus_results: bool = False,
+                                 refresh: bool = False) -> None:
+        if not 0 <= index < len(self._channel_data):
             return
-        channel = self._channel_data[idx]
-        url = channel.get('url', '')
-        if not url:
-            return
-        self._load_channel_videos(url, channel.get('title', 'Channel'))
+        self._btn_view_videos.Enable()
+        channel = self._channel_data[index]
+        url = channel.get('url') or ("https://www.youtube.com/channel/" + channel['channel_id'])
+        self._load_channel_videos(url, channel.get('title') or 'Channel',
+                                  channel_id=channel.get('channel_id') or '',
+                                  focus_results=focus_results, refresh=refresh)
+
+    def _on_channel_deselected(self, event) -> None:
+        self._btn_view_videos.Disable()
+        event.Skip()
 
     def _on_channel_selected(self, event: wx.ListEvent) -> None:
         """Load the selected subscribed channel's videos into the results list.
@@ -532,15 +706,32 @@ class YouTubePanel(wx.Panel):
         list until the user pressed Enter, which was inconsistent with
         how every other subscription-style list in the app works.
         """
-        idx = self._channels_list.GetFirstSelected()
-        if idx == wx.NOT_FOUND or idx >= len(self._channel_data):
-            return
-        channel = self._channel_data[idx]
-        url = channel.get('url', '')
-        if not url:
-            return
-        self._load_channel_videos(url, channel.get('title', 'Channel'))
+        index = event.GetIndex()
+        if 0 <= index < len(self._channel_data):
+            channel = self._channel_data[index]
+            url = channel.get('url') or ('https://www.youtube.com/channel/' + channel['channel_id'])
+            key = (url, channel.get('channel_id') or '')
+            self._btn_view_videos.Enable()
+            if self._channel_context and self._channel_context['key'] == key:
+                event.Skip()
+                return
+            # Arrow navigation should not launch an extractor for every row
+            # passed on the way to the channel the user actually wants.
+            request_seq = self._begin_browse()
+            self._btn_view_videos.Enable()
+            self._search_results = []
+            self._results_list.DeleteAllItems()
+            self._set_status(f"Status: Loading videos for '{channel['title']}'...")
+            self._channel_selection_timer = threading.Timer(
+                0.25, call_after_safe, args=(self, self._open_debounced_channel, request_seq, index))
+            self._channel_selection_timer.daemon = True
+            self._channel_selection_timer.start()
         event.Skip()
+
+    def _open_debounced_channel(self, request_seq: int, index: int) -> None:
+        if request_seq == self._browse_request_seq:
+            self._channel_selection_timer = None
+            self._open_subscribed_channel(index)
 
     def _on_subscribe(self, event: wx.CommandEvent) -> None:
         item = self._get_selected_video()
@@ -744,6 +935,7 @@ class YouTubePanel(wx.Panel):
         if dlg.ShowModal() == wx.ID_OK:
             url = dlg.GetValue().strip()
             if url:
+                request_seq = self._begin_browse()
                 self._set_status(f"Status: Loading playlist...")
                 self._btn_playlist.Disable()
 
@@ -751,13 +943,15 @@ class YouTubePanel(wx.Panel):
                     from radiomaster.services.youtube_dl import YouTubeService
                     service = YouTubeService()
                     entries = service.get_playlist_entries(url)
-                    wx.CallAfter(self._apply_playlist_entries, entries)
+                    call_after_safe(self, self._apply_playlist_entries, entries, request_seq)
 
                 import threading
                 threading.Thread(target=worker, daemon=True).start()
         dlg.Destroy()
 
-    def _apply_playlist_entries(self, entries: list[dict]) -> None:
+    def _apply_playlist_entries(self, entries: list[dict], request_seq: int | None = None) -> None:
+        if request_seq is not None and request_seq != self._browse_request_seq:
+            return
         self._btn_playlist.Enable()
         if not entries:
             wx.MessageBox("No entries found in playlist.", "Playlist Empty", wx.OK | wx.ICON_WARNING)

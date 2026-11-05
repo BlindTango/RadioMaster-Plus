@@ -1,16 +1,16 @@
 """yt-dlp wrapper for YouTube and video site extraction."""
 
-import os
-import subprocess
 import json
 import logging
+import os
+import re
+import subprocess
 from typing import Any
 
-logger = logging.getLogger("radiomaster")
-
-
-from radiomaster.utils.tools import get_ytdlp, get_tools_dir
 from radiomaster.utils.network import get_yt_dlp_proxy_args
+from radiomaster.utils.tools import get_tools_dir, get_ytdlp
+
+logger = logging.getLogger("radiomaster")
 
 # yt-dlp.exe is a console-subsystem executable -- every subprocess.run()
 # call here flashed a real console window on screen for the process's
@@ -29,6 +29,18 @@ def _extraction_args() -> list[str]:
     if os.path.isfile(deno):
         args.extend(["--js-runtimes", f"deno:{deno}"])
     return args
+
+
+class YouTubeChannelError(RuntimeError):
+    """A channel could not be listed; this is distinct from an empty channel."""
+
+
+class ChannelVideoBatch(list[dict[str, Any]]):
+    """List-compatible results carrying whether the requested page completed."""
+
+    def __init__(self, entries, *, complete: bool = True):
+        super().__init__(entries)
+        self.complete = complete
 
 
 class YouTubeService:
@@ -223,34 +235,63 @@ class YouTubeService:
             logger.error(f"Failed to search YouTube: {e}")
         return []
 
-    def get_channel_videos(self, channel_url: str, max_results: int = 30) -> list[dict[str, Any]]:
-        """List a subscribed channel's most recent videos -- appending
-        "/videos" is what points yt-dlp at the channel's uploads tab
-        specifically instead of its (much slower to enumerate, and not
-        what "browse this channel's videos" means) full tab set."""
-        url = channel_url.rstrip("/")
-        if not url.endswith("/videos"):
-            url += "/videos"
+    def get_channel_videos(self, channel_url: str, max_results: int = 100,
+                           *, start: int = 1, channel_id: str = "") -> ChannelVideoBatch:
+        """List a page of uploads, keeping older videos reachable without a huge fetch."""
+        from urllib.parse import urlsplit, urlunsplit
+        if start < 1 or max_results < 1:
+            raise ValueError("Channel video ranges must be positive.")
+        parts = urlsplit(channel_url)
+        path = parts.path.rstrip("/")
+        if not channel_id:
+            match = re.search(r"/channel/(UC[A-Za-z0-9_-]{22})(?:/|$)", path)
+            channel_id = match.group(1) if match else ""
+        if re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel_id):
+            # The public uploads playlist includes regular uploads, Shorts,
+            # and archived live uploads rather than only the Videos tab.
+            url = "https://www.youtube.com/playlist?list=UU" + channel_id[2:]
+        else:
+            if path.rsplit("/", 1)[-1] in (
+                    "videos", "shorts", "streams", "featured", "playlists", "community", "about"):
+                path = path.rsplit("/", 1)[0]
+            url = urlunsplit(parts._replace(path=path + "/videos", query="", fragment=""))
         try:
             result = subprocess.run(
                 [get_ytdlp(), *_extraction_args(), url,
-                 "-j", "--flat-playlist", "--playlist-end", str(max_results)],
-                capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
+                 "-j", "--flat-playlist", "--skip-download", "--ignore-errors",
+                 "--playlist-items", f"{start}:{start + max_results - 1}"],
+                capture_output=True, text=True, timeout=max(60, 30 + max_results // 2),
+                creationflags=_NO_WINDOW,
             )
             entries = []
             for line in result.stdout.strip().split("\n"):
                 if line:
                     try:
-                        entries.append(json.loads(line))
+                        entry = json.loads(line)
+                        if isinstance(entry, dict):
+                            entries.append(entry)
                     except json.JSONDecodeError:
                         continue
             if not entries and result.returncode != 0:
-                logger.error(f"Channel video listing failed (exit {result.returncode}): "
-                             f"{result.stderr.strip()[-300:]}")
-            return entries
+                message = (result.stderr.strip()[-500:]
+                           or "YouTube did not return the channel's videos.")
+                logger.error("Channel video listing failed: %s", message)
+                raise YouTubeChannelError(message)
+            last_index = max((entry['playlist_index'] for entry in entries
+                              if isinstance(entry.get('playlist_index'), int)), default=0)
+            complete = result.returncode == 0 or last_index >= start + max_results - 1
+            if not complete:
+                logger.warning("Channel page was interrupted; retaining %s videos for retry",
+                               len(entries))
+            return ChannelVideoBatch(entries, complete=complete)
+        except YouTubeChannelError:
+            raise
+        except subprocess.TimeoutExpired as exc:
+            raise YouTubeChannelError(
+                "Loading channel videos timed out. Use View Videos to retry.") from exc
         except Exception as e:
             logger.error(f"Failed to list channel videos: {e}")
-        return []
+            raise YouTubeChannelError(str(e)) from e
 
     def download(self, url: str, output_dir: str, format: str = "best",
                  extract_audio: bool = False) -> bool:

@@ -648,11 +648,12 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             or double-click. A video plays; a channel opens its videos; a playlist opens
             its entries. The results columns change to fit the selected search type.
 
-            The panel also has My Channels, Subscribe to Channel, Unsubscribe, Play URL,
+            The panel also has My Channels, View Videos, Subscribe to Channel, Unsubscribe, Play URL,
             Load Playlist, Download, Download Audio, Quality, and Audio Format. Selecting
             a video shows its available description and details in Content Display.
-            Selecting a subscribed channel in My Channels loads its most recent videos
-            into the results list.
+            Selecting a subscribed channel in My Channels loads its videos into the results
+            list. Press Enter or choose View Videos to open the channel and move to its videos.
+            Use Load More Videos to continue through older uploads.
         """),
         _topic("Playing Videos and Direct Links", """
             To play a search result, select a video and activate it. To use a link,
@@ -673,9 +674,16 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         _topic("Channels and Playlists", """
             Search with Type set to Channels, then activate a result to list its videos.
             Subscribe to Channel saves a channel in My Channels. Selecting or activating
-            a saved channel loads its most recent videos into the results list, where
-            you can select one and press Enter to play it. Unsubscribe removes the local
-            saved entry.
+            a saved channel loads a page of videos into the results list. Enter or View
+            Videos moves focus to that list, where you can select a video and press Enter
+            to play it. Load More Videos appends older uploads without removing the videos
+            already shown. Continue until the status says End of channel videos. View Videos
+            refreshes the channel from the beginning and can retry a failed request.
+            If a page is interrupted after some videos arrive, those rows stay visible.
+            Load More Videos retries that same page and removes duplicate entries.
+            Saved channel IDs use the public uploads playlist, which can include Shorts
+            and archived live uploads. Private, removed, or restricted videos may be unavailable.
+            Unsubscribe removes the local saved entry.
 
             These are RadioMaster+ channel subscriptions, not changes to a signed-in
             YouTube account. The application does not provide a YouTube account manager.

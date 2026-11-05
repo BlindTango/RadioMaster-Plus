@@ -40,6 +40,7 @@ A unified media player for Windows with full accessibility support. Stream radio
 - **Episode management**: Download for offline, auto-download, play progress
 
 ### YouTube & Video Sites
+- **Channel subscriptions**: Select a saved channel to show its videos. Enter or View Videos moves to the list; Load More Videos retrieves older uploads in batches of 100.
 - **yt-dlp** integration for stream extraction
 - **Search YouTube** from within the app
 - **Download videos** (selectable quality)
