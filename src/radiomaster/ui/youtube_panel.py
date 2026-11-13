@@ -93,8 +93,15 @@ class YouTubePanel(wx.Panel):
                           stream: dict | None = None) -> None:
         """Resolve one stream without waiting for a whole video download."""
         from radiomaster.services.youtube_dl import YouTubeService
+        error = ""
         if stream is None:
-            stream = YouTubeService().get_stream_info(url)
+            try:
+                service = YouTubeService()
+                stream = service.get_stream_info(url)
+                if not stream:
+                    error = service.last_stream_error
+            except Exception as exc:
+                error = str(exc)
         if seq != self._play_request_seq:
             return
         if stream:
@@ -102,8 +109,10 @@ class YouTubePanel(wx.Panel):
             duration = float(stream.get("duration") or duration)
         stream_url = (stream or {}).get('url')
         headers = (stream or {}).get('http_headers')
-        wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq, headers,
-                     video_info=stream)
+        options = {"video_info": stream}
+        if error:
+            options['error'] = error
+        wx.CallAfter(self._apply_play_result, stream_url, title, duration, seq, headers, **options)
 
     def _setup_ui(self) -> None:
         """Create the YouTube panel layout."""
@@ -793,14 +802,7 @@ class YouTubePanel(wx.Panel):
                 self._stream_rejected_retried = False
 
                 def worker():
-                    from radiomaster.services.youtube_dl import YouTubeService
-                    service = YouTubeService()
-                    stream = service.get_stream_info(url)
-                    title = (stream or {}).get('title') or url
-                    duration = (stream or {}).get('duration', 0.0)
-                    self._current_source_title = title
-                    self._current_source_duration = duration
-                    self._resolve_and_play(url, title, duration, seq, stream)
+                    self._resolve_and_play(url, url, 0.0, seq)
 
                 import threading
                 threading.Thread(target=worker, daemon=True).start()
@@ -814,6 +816,12 @@ class YouTubePanel(wx.Panel):
         class of freeze as the search button (see _on_search), just
         shorter since it's one video instead of twenty results.
         """
+        if self._result_type == "channel":
+            self._open_selected_channel()
+            return
+        if self._result_type == "playlist":
+            self._open_selected_playlist()
+            return
         video = self._get_selected_video()
         if not video:
             wx.MessageBox("Please select a video first.", "No Selection", wx.OK | wx.ICON_WARNING)
@@ -854,7 +862,7 @@ class YouTubePanel(wx.Panel):
                             duration: float = 0.0, seq: int = 0,
                             http_headers: dict | None = None,
                             is_temp_file: bool = False,
-                            video_info: dict | None = None) -> None:
+                            video_info: dict | None = None, error: str = "") -> None:
         if ((seq and seq != self._play_request_seq)
                 or (self._playback_generation_at_request is not None
                     and self._playback_generation_at_request != self._engine.playback_generation)):
@@ -875,8 +883,11 @@ class YouTubePanel(wx.Panel):
                     pass
             return
         if not stream_url:
-            wx.MessageBox("Unable to resolve a playable stream for the selected video.",
-                         "Error", wx.OK | wx.ICON_ERROR)
+            message = "Unable to resolve a playable stream for the selected video."
+            if error:
+                message += "\n\n" + error
+            self._set_status(f"Status: {error or message}")
+            wx.MessageBox(message, "YouTube Playback Error", wx.OK | wx.ICON_ERROR, parent=self)
             return
         if video_info:
             self._publish_video_info(video_info)

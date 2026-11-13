@@ -52,6 +52,7 @@ class YouTubeService:
     """
 
     def __init__(self) -> None:
+        self.last_stream_error = ""
         self._check_available()
 
     def _check_available(self) -> None:
@@ -103,25 +104,46 @@ class YouTubeService:
         without a User-Agent header and played immediately with one.
         Replaying yt-dlp's own headers on the actual playback request is
         what get_stream_url() alone could never do."""
+        self.last_stream_error = ""
         try:
             result = subprocess.run(
                 [get_ytdlp(), *_extraction_args(), "-j", "--no-playlist",
                  "-f", "bestvideo+bestaudio/best", url],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
-            if result.returncode == 0 and result.stdout.strip():
-                info = json.loads(result.stdout.strip().splitlines()[0])
+            for line in result.stdout.splitlines():
+                try:
+                    info = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(info, dict):
+                    continue
+                if info.get('_type') in ('playlist', 'multi_video', 'url', 'url_transparent'):
+                    continue
                 stream_url = info.get("url")
-                formats = info.get("requested_formats") or []
-                video = next((f for f in formats if f.get("vcodec", "none") != "none"), None)
-                audio = next((f for f in formats if f.get("acodec", "none") != "none"), None)
+                formats = list(info.get("requested_formats") or [])
+                # Some extraction/postprocessing paths nest the selected inputs
+                # under requested_downloads rather than the top-level result.
+                for download in info.get('requested_downloads') or []:
+                    if isinstance(download, dict):
+                        formats.extend(download.get('requested_formats') or [download])
+                formats = [item for item in formats if isinstance(item, dict) and item.get('url')]
+                video = next((f for f in formats if f.get("vcodec") not in (None, "none")), None)
+                audio = next((f for f in formats if f.get("acodec") not in (None, "none")), None)
                 if video and audio:
                     stream_url = video.get("url")
-                if not stream_url:
-                    return None
+                elif not stream_url:
+                    combined = next((f for f in formats
+                                     if f.get('vcodec') not in (None, 'none')
+                                     and f.get('acodec') not in (None, 'none')), None)
+                    stream_url = (combined or {}).get('url')
+                if not isinstance(stream_url, str) or not stream_url.strip():
+                    continue
+                separate = video and audio and video['url'] != audio['url']
                 return {
                     "url": stream_url,
-                    "http_headers": info.get("http_headers") or {},
+                    "http_headers": (info.get("http_headers")
+                                     or (video or audio or {}).get("http_headers") or {}),
                     "title": info.get("title", ""),
                     "duration": float(info.get("duration") or 0.0),
                     "description": info.get("description") or "",
@@ -131,12 +153,28 @@ class YouTubeService:
                     "video_inputs": ({"video_url": video["url"], "audio_url": audio["url"],
                                       "video_headers": video.get("http_headers") or {},
                                       "audio_headers": audio.get("http_headers") or {}}
-                                     if video and audio else None),
+                                     if separate else None),
                 }
-            if result.returncode != 0:
-                logger.error("YouTube stream extraction failed: %s", result.stderr.strip())
+            diagnostic = re.sub(r'\x1b\[[0-9;]*m', '', result.stderr or '').strip()
+            error_lines = [line.strip() for line in diagnostic.splitlines()
+                           if line.strip().startswith('ERROR:')]
+            if error_lines:
+                self.last_stream_error = error_lines[-1].removeprefix('ERROR:').strip()[-1000:]
+            elif result.returncode != 0:
+                self.last_stream_error = diagnostic[-1000:] or (
+                    f"The YouTube extractor exited with code {result.returncode} without a stream.")
+            else:
+                self.last_stream_error = (
+                    "YouTube returned no playable audio/video stream. Select an individual video, "
+                    "or use Help > Update YouTube Library and try again.")
+            logger.error("YouTube stream extraction failed for %s: %s", url, self.last_stream_error)
+        except subprocess.TimeoutExpired:
+            self.last_stream_error = (
+                "Resolving the video timed out. Check your connection and try again.")
+            logger.error("YouTube stream extraction timed out for %s", url)
         except Exception as e:
-            logger.error(f"Failed to get stream info: {e}")
+            self.last_stream_error = str(e) or "The YouTube extractor could not resolve this video."
+            logger.error("Failed to get stream info for %s: %s", url, e)
         return None
 
     def get_info(self, url: str) -> dict[str, Any] | None:
