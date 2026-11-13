@@ -69,6 +69,8 @@ class BassRadioEngine:
         self._seekable = False
         self._timeshift_active = False
         self._effects: dict = {}
+        self._deferred: dict = {}
+        self._pipe_busy = False
         self._generation = 0
         self._lock = threading.RLock()
         self._io_lock = threading.RLock()
@@ -160,6 +162,50 @@ class BassRadioEngine:
                 self._process.stdin.flush()
                 return self._read_response()
 
+    # Controls sent from the UI thread (volume, pan, rate, effects) must never
+    # wait behind a stream that is still being opened: the open call can hold
+    # the pipe for up to OPEN_TIMEOUT, and waiting for it froze the window for
+    # REQUEST_TIMEOUT seconds before killing the audio host.
+    CONTROL_WAIT = 0.1
+    _pipe_busy = False
+
+    def _control(self, command: dict) -> dict:
+        """A short control command that is safe to call from the UI thread.
+
+        If the pipe is busy longer than CONTROL_WAIT the command is kept
+        (the latest per command) and sent by the monitor thread as soon as the
+        pipe is free. Failures are logged, never raised into UI handlers."""
+        # Once the pipe is known to be busy, do not wait again for each of the
+        # several commands one effects change sends.
+        if getattr(self, "_io_lock", None) is None:     # stand-in engines in tests
+            return self._request(command)
+        wait = 0.0 if self._pipe_busy else self.CONTROL_WAIT
+        if not self._io_lock.acquire(timeout=wait):
+            self._pipe_busy = True
+            with self._lock:
+                self._deferred[(command["cmd"], command.get("band"))] = command
+            return {"ok": True, "deferred": True}
+        self._pipe_busy = False
+        try:
+            return self._request(command)
+        except Exception:
+            log.debug("BASS control %s failed", command.get("cmd"), exc_info=True)
+            return {"ok": False}
+        finally:
+            self._io_lock.release()
+
+    def _flush_deferred(self, generation: int) -> None:
+        """Send controls that were held back while the pipe was busy."""
+        with self._lock:
+            pending, self._deferred = list(self._deferred.values()), {}
+        for command in pending:
+            if generation != self._generation:
+                return
+            try:
+                self._request(command, generation=generation)
+            except Exception:
+                log.debug("Deferred BASS control %s failed", command.get("cmd"), exc_info=True)
+
     def play(self, url: str, title: str = "", artist: str = "",
              duration: float = 0.0, seekable: bool | None = None) -> None:
         self.stop()
@@ -208,8 +254,11 @@ class BassRadioEngine:
             result = self._request(command, generation=generation)
             if not result.get("ok"):
                 raise RuntimeError(result.get("error", "stream open failed"))
+            self._flush_deferred(generation)
             last = time.monotonic()
             while generation == self._generation:
+                if self._deferred:
+                    self._flush_deferred(generation)
                 active = self._request({"cmd": "status"}, generation=generation).get("state", -1)
                 if generation != self._generation:
                     return
@@ -265,30 +314,40 @@ class BassRadioEngine:
             self._state = self.STATE_STOPPED
             self._position = 0.0
             self._duration = 0.0
+        self._deferred = {}
         try:
-            self._request({"cmd": "stop"})
+            if self._io_lock.acquire(timeout=0.0 if self._pipe_busy else 0.25):
+                try:
+                    self._request({"cmd": "stop"})
+                finally:
+                    self._io_lock.release()
+            else:
+                # A stream open is holding the pipe. Abandon it at once instead
+                # of waiting for it; the host is started again by the next play.
+                threading.Thread(target=self._terminate_host, daemon=True,
+                                 name="bass-host-abort").start()
         except Exception:
             log.debug("Could not stop BASS host playback", exc_info=True)
         if changed:
             self._notify_state()
 
     def pause(self) -> None:
-        if self._request({"cmd": "pause"}).get("ok"):
+        if self._control({"cmd": "pause"}).get("ok"):
             self._state = self.STATE_PAUSED
             self._notify_state()
 
     def resume(self) -> None:
-        if self._request({"cmd": "resume"}).get("ok"):
+        if self._control({"cmd": "resume"}).get("ok"):
             self._state = self.STATE_PLAYING
             self._notify_state()
 
     def set_volume(self, value: float) -> None:
         self._volume = max(0.0, min(2.0, value))
-        self._request({"cmd": "volume", "value": self._volume})
+        self._control({"cmd": "volume", "value": self._volume})
 
     def set_pan(self, value: float) -> None:
         self._pan = max(-1.0, min(1.0, value))
-        self._request({"cmd": "pan", "value": self._pan})
+        self._control({"cmd": "pan", "value": self._pan})
 
     def seek(self, position_seconds: float) -> None:
         result = self._request({"cmd": "media_seek",
@@ -330,7 +389,7 @@ class BassRadioEngine:
         pitch_tempo = self._effects.get("pitch_tempo", {})
         effect_tempo = (float(pitch_tempo.get("params", {}).get("tempo", 1.0))
                         if pitch_tempo.get("enabled") else 1.0)
-        self._request({"cmd": "set_playback_rate",
+        self._control({"cmd": "set_playback_rate",
                        "rate": max(0.5, min(3.0, self._rate * effect_tempo))})
 
     def apply_effects(self, effects: dict) -> None:
@@ -339,7 +398,7 @@ class BassRadioEngine:
         pitch_tempo = effects.get("pitch_tempo", {})
         cents = (float(pitch_tempo.get("params", {}).get("cents", 0.0))
                  if pitch_tempo.get("enabled") else 0.0)
-        self._request({"cmd": "set_pitch", "semitones": cents / 100.0})
+        self._control({"cmd": "set_pitch", "semitones": cents / 100.0})
         self.set_rate(self._rate)
         direct = {"echo", "reverb", "chorus", "compressor", "distortion",
                   "flanger", "gargle"}
@@ -375,9 +434,10 @@ class BassRadioEngine:
             for band, keys in bands.items():
                 gain = sum(float(params.get(key, 0.0)) for key in keys) / len(keys)
                 active.add(band)
-                self._request({"cmd": "set_eq_gain", "band": band,
+                self._control({"cmd": "set_eq_gain", "band": band,
                                "gain_db": gain})
-        self._request({"cmd": "set_fx", "fx": sorted(active), "params": {name: fx_params.get(name, {}) for name in active}})
+        self._control({"cmd": "set_fx", "fx": sorted(active),
+                       "params": {name: fx_params.get(name, {}) for name in active}})
 
     def set_output_device(self, device_name: str) -> bool:
         devices = self._request({"cmd": "list_devices"}).get("devices", [])

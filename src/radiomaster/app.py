@@ -230,6 +230,13 @@ class RadioMasterApp(wx.App):
         )
         self._main_window.Show()
         self.SetTopWindow(self._main_window)
+        # Records where the UI thread was stuck if the window ever freezes.
+        from radiomaster.utils.ui_watchdog import UiWatchdog
+        self._ui_watchdog = UiWatchdog(self._paths["logs"])
+        self._ui_watchdog.start()
+        import threading
+        threading.Thread(target=self._main_window._engine.prewarm, daemon=True,
+                         name="audio-prewarm").start()
         return True
 
     def _on_download_status_error(self, error: Exception) -> None:
@@ -259,6 +266,9 @@ class RadioMasterApp(wx.App):
     def OnExit(self) -> int:
         """Clean up on exit."""
         self.logger.info(f"Shutting down {__app_name__}")
+        watchdog = getattr(self, "_ui_watchdog", None)
+        if watchdog is not None:
+            watchdog.stop()
         if self._main_window:
             # EVT_CLOSE normally handles this first; keep an idempotent
             # backstop for tests, OS shutdown, and other non-window exits.

@@ -133,6 +133,16 @@ class PlaybackEngine:
         self._timeshift_generation: int = 0
         self._on_timeshift_update = None
 
+    def prewarm(self) -> None:
+        """Start the audio host in the background so the first play does not
+        wait for it (BASS initialisation takes most of a second)."""
+        try:
+            with self._play_lock:
+                if not self._current_url:
+                    self._ensure_bass_radio()
+        except Exception:
+            logging.getLogger("radiomaster").debug("Audio host prewarm failed", exc_info=True)
+
     def _ensure_bass_radio(self):
         if self._bass_radio is not None:
             if self._bass_radio.available:
