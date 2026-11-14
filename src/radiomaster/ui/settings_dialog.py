@@ -198,6 +198,22 @@ class PlaybackPanel(SettingsPanel):
         self.normalize_chk.SetValue(self.config.get("playback.normalize_audio", default=False))
         sizer.Add(self.normalize_chk, 0, wx.ALL, 5)
 
+        sizer.Add(wx.StaticText(self, label="YouTube video quality:"), 0, wx.ALL, 5)
+        from radiomaster.services.youtube_dl import DEFAULT_PLAYBACK_QUALITY, PLAYBACK_QUALITIES
+        self._youtube_quality_keys = list(PLAYBACK_QUALITIES)
+        self.youtube_quality_combo = wx.ComboBox(
+            self, choices=["Best available" if key == "best" else key
+                           for key in self._youtube_quality_keys],
+            style=wx.CB_READONLY,
+        )
+        set_accessible_name(self.youtube_quality_combo, "YouTube video quality")
+        saved_quality = str(self.config.get(
+            "playback.youtube_quality", default=DEFAULT_PLAYBACK_QUALITY)).lower()
+        if saved_quality not in self._youtube_quality_keys:
+            saved_quality = DEFAULT_PLAYBACK_QUALITY
+        self.youtube_quality_combo.SetSelection(self._youtube_quality_keys.index(saved_quality))
+        sizer.Add(self.youtube_quality_combo, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
         self.remember_pos_chk = wx.CheckBox(self, label="Remember playback position")
         self.remember_pos_chk.SetValue(self.config.get("playback.remember_position", default=True))
         sizer.Add(self.remember_pos_chk, 0, wx.ALL, 5)
@@ -236,6 +252,8 @@ class PlaybackPanel(SettingsPanel):
         self.config.set("playback.gapless", value=self.gapless_chk.IsChecked())
         self.config.set("playback.replaygain", value=self.replaygain_combo.GetStringSelection().lower())
         self.config.set("playback.normalize_audio", value=self.normalize_chk.IsChecked())
+        self.config.set("playback.youtube_quality",
+                        value=self._youtube_quality_keys[self.youtube_quality_combo.GetSelection()])
         self.config.set("playback.remember_position", value=self.remember_pos_chk.IsChecked())
         self.config.set("playback.acoustid_api_key", value=self.acoustid_key_txt.GetValue().strip())
         self.config.set("lyrics.genius_token", value=self.genius_token_txt.GetValue().strip())

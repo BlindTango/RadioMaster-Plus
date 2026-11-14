@@ -20,9 +20,32 @@ logger = logging.getLogger("radiomaster")
 # codebase already does this; yt-dlp's own calls never did.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
-# What a video is played at: the best streams up to 1080p, falling back to the
-# best single file. Downloads choose their own quality separately.
-PLAYBACK_FORMAT = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
+# What a video is played at (Settings > Playback > YouTube video quality). A
+# height cap picks the best streams up to that height and falls back to the best
+# single file, then to the best available, so a cap never makes a video fail.
+# Downloads choose their own quality separately.
+PLAYBACK_QUALITIES = {
+    "best": "bestvideo+bestaudio/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best",
+    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best",
+    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best",
+}
+DEFAULT_PLAYBACK_QUALITY = "1080p"
+PLAYBACK_FORMAT = PLAYBACK_QUALITIES[DEFAULT_PLAYBACK_QUALITY]
+
+
+def playback_format(quality: str | None = None) -> str:
+    """The yt-dlp format selector for a saved quality choice; anything
+    unknown falls back to the default rather than failing playback."""
+    if quality is None:
+        try:
+            from radiomaster.utils.config import ConfigManager
+            quality = ConfigManager.get_instance().get(
+                "playback.youtube_quality", default=DEFAULT_PLAYBACK_QUALITY)
+        except Exception:
+            quality = DEFAULT_PLAYBACK_QUALITY
+    return PLAYBACK_QUALITIES.get(str(quality).lower(), PLAYBACK_FORMAT)
 
 
 def _extraction_args() -> list[str]:
@@ -112,10 +135,10 @@ class YouTubeService:
         try:
             result = subprocess.run(
                 [get_ytdlp(), *_extraction_args(), "-j", "--no-playlist",
-                 # Capped at 1080p: the uncapped best video is often 4K AV1 (a
+                 # Capped by default: the uncapped best video is often 4K AV1 (a
                  # 10-minute video measured 712 MB), which a normal connection
                  # cannot stream in real time, so playback stalled and ended.
-                 "-f", PLAYBACK_FORMAT, url],
+                 "-f", playback_format(), url],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
             for line in result.stdout.splitlines():

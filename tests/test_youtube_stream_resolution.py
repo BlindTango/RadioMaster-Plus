@@ -168,3 +168,32 @@ def test_playback_asks_yt_dlp_for_at_most_1080p_and_still_falls_back():
     assert args[args.index("-f") + 1] == PLAYBACK_FORMAT
     assert "height<=1080" in PLAYBACK_FORMAT
     assert PLAYBACK_FORMAT.endswith("bestvideo+bestaudio/best")   # never fails on a short format list
+
+
+@pytest.mark.parametrize("quality,height", [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)])
+def test_each_quality_caps_the_height_and_keeps_a_fallback(quality, height):
+    from radiomaster.services.youtube_dl import playback_format
+    selector = playback_format(quality)
+    assert f"height<={height}" in selector
+    assert selector.endswith("bestvideo+bestaudio/best")
+
+
+def test_best_available_is_uncapped_and_unknown_values_use_the_default():
+    from radiomaster.services.youtube_dl import PLAYBACK_FORMAT, playback_format
+    assert playback_format("best") == "bestvideo+bestaudio/best"
+    assert playback_format("Best") == "bestvideo+bestaudio/best"
+    assert playback_format("8k") == PLAYBACK_FORMAT
+    assert playback_format("") == PLAYBACK_FORMAT
+
+
+def test_saved_setting_is_what_playback_asks_yt_dlp_for(tmp_path, monkeypatch):
+    from radiomaster.utils.config import ConfigManager
+    config = ConfigManager(str(tmp_path))
+    monkeypatch.setattr(ConfigManager, "_instance", config)
+    config.set("playback.youtube_quality", value="480p")
+    service = YouTubeService()
+    with patch("radiomaster.services.youtube_dl.subprocess.run",
+               return_value=Mock(returncode=0, stdout="{}", stderr="")) as run:
+        service.get_stream_info("https://www.youtube.com/watch?v=test")
+    args = run.call_args.args[0]
+    assert "height<=480" in args[args.index("-f") + 1]

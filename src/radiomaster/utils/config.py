@@ -21,6 +21,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "output_device": "",
         "replaygain": "none",
         "normalize_audio": False,
+        "youtube_quality": "1080p",
         "remember_position": True,
         "acoustid_api_key": "",
         "fade_in_duration": 0,

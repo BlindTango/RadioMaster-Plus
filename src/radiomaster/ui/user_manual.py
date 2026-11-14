@@ -1096,6 +1096,15 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             selects natural-end advancement instead of overlapping transitions. See
             Automatic Advance, Crossfade, and Gapless for what each applies to.
 
+            YouTube video quality sets the highest picture quality used when a YouTube
+            video is played: Best available, 1080p, 720p, 480p or 360p. The default is
+            1080p. The very best quality can be 4K and several hundred megabytes for a
+            10-minute video, which many connections cannot stream in real time, so the
+            video stalls or stops part-way; choose a lower quality if that happens. If
+            a video has no stream at or below your choice, the closest available one is
+            used. The setting applies to the next video you play and does not affect
+            downloads, which have their own quality choice.
+
             ReplayGain offers None, Album, and Track and uses available gain tags.
             Normalize audio (EBU R128) evens out loudness for local files: the first time
             a file plays, FFmpeg measures it in the background and its volume is then
