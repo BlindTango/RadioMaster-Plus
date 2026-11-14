@@ -114,6 +114,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.3.4", (
+        "The YouTube results list now has a context menu (right-click, Shift+F10 or the "
+        "Applications key): Play, Download Video, Download Audio Only, Download All Videos "
+        "from Channel, Load More Videos and Subscribe to Channel. Download All Videos from "
+        "Channel lists every upload, tells you how many it found, and asks whether to queue "
+        "them as video, as audio only, or not at all.\n\n"
+        "After choosing Refresh Episodes from the Podcasts episode menu, keyboard focus now "
+        "returns to the episode list with the same episode selected."
+    )),
     ("What's New in Version 1.3.3", (
         "YouTube videos no longer stop part-way through. When YouTube dropped a long or "
         "idle connection the video used to end abruptly; RadioMaster+ now reconnects and "
@@ -289,6 +298,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.3.4", (
+        "YouTube: the results list has a context menu with Play, Download Video, Download "
+        "Audio Only, Download All Videos from Channel (lists every upload, confirms the "
+        "count, then queues video or audio only), Load More Videos and Subscribe to "
+        "Channel.\n\n"
+        "Podcasts: after Refresh Episodes from the episode context menu, focus and "
+        "selection are restored to the episode list."
+    )),
     ("Version 1.3.3", (
         "YouTube: the program that combines a video's separate video and audio streams now "
         "reconnects when the server drops or resets a connection, so videos play to the end "

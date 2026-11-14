@@ -309,6 +309,9 @@ def test_refresh_completion_keeps_episode_selection_and_reports_failure(failed):
     panel._load_episodes_for_index = load
     panel_method("_finish_subscription_refresh")(panel, 3, failed)
     panel._episode_list.Select.assert_called_once_with(1)
+    # The reload empties the list; focus must come back to the episode list.
+    panel._episode_list.Focus.assert_called_once_with(1)
+    panel._episode_list.SetFocus.assert_called_once()
     status = panel._set_status.call_args.args[0]
     assert ("Could not refresh" in status) == failed
     assert panel._refreshing_podcasts == set()

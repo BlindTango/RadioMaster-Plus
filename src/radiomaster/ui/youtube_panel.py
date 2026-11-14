@@ -256,6 +256,8 @@ class YouTubePanel(wx.Panel):
         # see _on_result_activated.
         self._results_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_result_activated)
         self._results_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_result_selected)
+        # EVT_CONTEXT_MENU also fires for the Applications key and Shift+F10.
+        self._results_list.Bind(wx.EVT_CONTEXT_MENU, self._on_results_context_menu)
         self._channels_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_channel_activated)
         self._channels_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_channel_selected)
         self._channels_list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._on_channel_deselected)
@@ -656,6 +658,154 @@ class YouTubePanel(wx.Panel):
     def _on_more_videos(self, event) -> None:
         self._channel_focus_results = True
         self._fetch_channel_page()
+
+    # ------------------------------------------------------------------
+    # Results-list context menu
+    # ------------------------------------------------------------------
+    def _current_channel(self) -> dict | None:
+        """The channel the results belong to: the one being browsed, else
+        the channel of the selected result."""
+        if self._channel_context:
+            ctx = self._channel_context
+            return {"url": ctx["url"], "title": ctx["title"], "id": ctx["id"]}
+        item = self._get_selected_video()
+        if not item:
+            return None
+        if self._result_type == "channel":
+            url = item.get("channel_url") or item.get("url") or ""
+            title = item.get("title") or item.get("channel") or "Channel"
+            cid = item.get("channel_id") or item.get("id") or ""
+        else:
+            url = item.get("channel_url") or ""
+            title = item.get("channel") or item.get("uploader") or "Channel"
+            cid = item.get("channel_id") or ""
+        return {"url": url, "title": title, "id": cid} if url or cid else None
+
+    def _on_results_context_menu(self, event) -> None:
+        position = event.GetPosition()
+        if position != wx.DefaultPosition:
+            # Right-click: act on the row under the pointer.
+            row, _flags = self._results_list.HitTest(self._results_list.ScreenToClient(position))
+            if row != wx.NOT_FOUND:
+                for i in range(self._results_list.GetItemCount()):
+                    self._results_list.Select(i, i == row)
+                self._results_list.Focus(row)
+        has_item = self._results_list.GetFirstSelected() != wx.NOT_FOUND
+        is_video = self._result_type == "video"
+        channel = self._current_channel()
+        menu = wx.Menu()
+
+        def add(label: str, handler, enabled: bool = True) -> None:
+            item = menu.Append(wx.ID_ANY, label)
+            item.Enable(enabled)
+            menu.Bind(wx.EVT_MENU, handler, item)
+
+        add("&Play", self._on_play, has_item)
+        menu.AppendSeparator()
+        add("Download &Video", self._on_download, has_item and is_video)
+        add("Download &Audio Only", self._on_download_audio, has_item and is_video)
+        menu.AppendSeparator()
+        add("Download &All Videos from Channel...", self._on_download_channel, channel is not None)
+        add("Load &More Videos", self._on_more_videos, self._btn_more_videos.IsEnabled())
+        add("&Subscribe to Channel", self._on_subscribe, has_item)
+        self._results_list.PopupMenu(menu)
+        menu.Destroy()
+
+    def _on_download_channel(self, event) -> None:
+        channel = self._current_channel()
+        if not channel:
+            wx.MessageBox("Select a video or channel first.", "No Selection",
+                          wx.OK | wx.ICON_WARNING)
+            return
+        self._set_status(f"Status: Listing every video from '{channel['title']}'...")
+
+        def worker():
+            from radiomaster.services.youtube_dl import YouTubeService
+            service = YouTubeService()
+            videos: list[dict] = []
+            seen: set = set()
+            start = 1
+            try:
+                for _ in range(200):
+                    batch = service.get_channel_videos(
+                        channel["url"], self._channel_page_size, start=start,
+                        channel_id=channel["id"])
+                    fresh = [e for e in batch
+                             if (e.get("id") or e.get("url")) not in seen]
+                    for entry in fresh:
+                        seen.add(entry.get("id") or entry.get("url"))
+                    videos.extend(fresh)
+                    if not fresh or len(batch) < self._channel_page_size:
+                        break
+                    start += self._channel_page_size
+            except Exception as exc:
+                call_after_safe(self, self._bulk_failed, str(exc))
+                return
+            call_after_safe(self, self._confirm_channel_download, channel["title"], videos)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _bulk_failed(self, message: str) -> None:
+        self._set_status(f"Status: Could not list the channel's videos: {message}")
+
+    @staticmethod
+    def _entry_url(entry: dict) -> str:
+        url = entry.get("url") or entry.get("webpage_url") or ""
+        if url and not url.startswith("http") and entry.get("id"):
+            url = ""
+        return url or (f"https://www.youtube.com/watch?v={entry['id']}" if entry.get("id") else "")
+
+    def _confirm_channel_download(self, channel_title: str, videos: list[dict]) -> None:
+        if not videos:
+            self._set_status(f"Status: No videos found for '{channel_title}'.")
+            wx.MessageBox("No videos were found for this channel.", "Nothing to Download",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        self._set_status(f"Status: Found {len(videos)} video(s) from '{channel_title}'.")
+        answer = wx.MessageBox(
+            f"Download all {len(videos)} videos from '{channel_title}'?\n\n"
+            "Yes: download as video.\nNo: download audio only.\nCancel: do nothing.",
+            "Download Channel", wx.YES_NO | wx.CANCEL | wx.ICON_QUESTION)
+        if answer == wx.CANCEL:
+            self._set_status("Status: Channel download cancelled.")
+            return
+        count = self._queue_downloads(videos, audio=(answer == wx.NO))
+        self._set_status(f"Status: Queued {count} download(s) from '{channel_title}'.")
+        wx.MessageBox(f"Added {count} download(s) to the queue.", "Download Added",
+                      wx.OK | wx.ICON_INFORMATION)
+
+    def _queue_downloads(self, videos: list[dict], *, audio: bool) -> int:
+        from radiomaster.database.repository import DownloadRepository
+        from radiomaster.utils.config import ConfigManager
+        from radiomaster.utils.paths import get_downloads_dir
+        repo = DownloadRepository(self._db)
+        output_dir = get_downloads_dir()
+        app = wx.GetApp()
+        manager = getattr(app, "download_manager", None)
+        if audio:
+            fmt = self._audio_format_choice.GetStringSelection()
+            setting = ConfigManager.get_instance().get("downloads.audio_quality", default="192k")
+            audio_quality = "0" if setting.lower() == "best" else setting.upper()
+        else:
+            fmt = self._quality_choice.GetStringSelection()
+        count = 0
+        for entry in videos:
+            url = self._entry_url(entry)
+            if not url:
+                continue
+            title = entry.get("title") or "YouTube Video"
+            if audio:
+                download_id = repo.add(url, title=title, format=fmt, quality=setting,
+                                       output_dir=output_dir, extract_audio=True)
+                extra = {"extract_audio": True, "audio_quality": audio_quality}
+            else:
+                download_id = repo.add(url, title=title, format=fmt, output_dir=output_dir)
+                extra = {}
+            if manager is not None and hasattr(manager, "add_download"):
+                manager.add_download(download_id, url, output_dir=output_dir,
+                                     title=title, format=fmt, **extra)
+            count += 1
+        return count
 
     # ------------------------------------------------------------------
     # Channel subscriptions -- mirrors PodcastPanel's Subscribe/

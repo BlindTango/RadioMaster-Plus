@@ -1130,13 +1130,25 @@ class PodcastPanel(wx.Panel):
         episode_idx = self._episode_list.GetFirstSelected()
         episodes = getattr(self, "_episode_data", [])
         selected_id = episodes[episode_idx].get("id") if 0 <= episode_idx < len(episodes) else None
+        # Reloading empties the list, which drops both selection and keyboard
+        # focus. Put them back so the list (not a stale menu) owns the focus.
+        had_focus = (self._episode_list.HasFocus()
+                     or wx.Window.FindFocus() in (None, self._episode_list))
         self._load_episodes_for_index(idx)
+        restored = -1
         if selected_id is not None:
             for row, episode in enumerate(self._episode_data):
                 if episode.get("id") == selected_id:
-                    self._episode_list.Select(row)
-                    self._episode_list.EnsureVisible(row)
+                    restored = row
                     break
+        if restored < 0 and episode_idx >= 0 and self._episode_data:
+            restored = min(episode_idx, len(self._episode_data) - 1)
+        if restored >= 0:
+            self._episode_list.Select(restored)
+            self._episode_list.Focus(restored)
+            self._episode_list.EnsureVisible(restored)
+        if had_focus and episode_idx >= 0:
+            self._episode_list.SetFocus()
         title = self._podcast_data[idx].get("title", "")
         if failed:
             self._set_status(

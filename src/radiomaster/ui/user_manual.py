@@ -684,6 +684,13 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Saved channel IDs use the public uploads playlist, which can include Shorts
             and archived live uploads. Private, removed, or restricted videos may be unavailable.
             Unsubscribe removes the local saved entry.
+            The YouTube results list has a context menu (right-click, Shift+F10, or the
+            Applications key) with Play, Download Video, Download Audio Only, Download All
+            Videos from Channel, Load More Videos, and Subscribe to Channel. Download All
+            Videos from Channel lists every upload of the channel you are browsing (or the
+            selected video's channel), reports how many it found, and asks whether to queue
+            them as video (Yes), as audio only (No), or not at all (Cancel). Large channels
+            can take a while to list; the status bar shows progress.
 
             These are RadioMaster+ channel subscriptions, not changes to a signed-in
             YouTube account. The application does not provide a YouTube account manager.
