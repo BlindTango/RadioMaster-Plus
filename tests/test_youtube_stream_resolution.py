@@ -141,3 +141,30 @@ def test_transport_play_opens_collections_instead_of_resolving_them_as_videos(ki
     getattr(panel, method).assert_called_once()
     panel._engine.stop.assert_not_called()
     panel._get_selected_video.assert_not_called()
+
+
+def test_combined_stream_reconnects_both_inputs_when_googlevideo_drops_the_connection():
+    from radiomaster.services.video_stream import RECONNECT_ARGS, VideoStream
+    command = VideoStream({
+        "video_url": "https://media.test/video", "audio_url": "https://media.test/audio",
+    })._command()
+    video_at, audio_at = command.index("https://media.test/video"), command.index("https://media.test/audio")
+    for end in (video_at, audio_at):
+        # each input carries its own reconnect options, immediately ahead of its -i
+        window = command[:end]
+        assert window[window.index("-reconnect"):].count("-reconnect") >= 1
+    assert command.count("-reconnect") == 2
+    assert command.count("-reconnect_on_network_error") == 2
+    assert RECONNECT_ARGS[0] == "-reconnect"
+
+
+def test_playback_asks_yt_dlp_for_at_most_1080p_and_still_falls_back():
+    from radiomaster.services.youtube_dl import PLAYBACK_FORMAT
+    service = YouTubeService()
+    with patch("radiomaster.services.youtube_dl.subprocess.run",
+               return_value=Mock(returncode=0, stdout="{}", stderr="")) as run:
+        service.get_stream_info("https://www.youtube.com/watch?v=test")
+    args = run.call_args.args[0]
+    assert args[args.index("-f") + 1] == PLAYBACK_FORMAT
+    assert "height<=1080" in PLAYBACK_FORMAT
+    assert PLAYBACK_FORMAT.endswith("bestvideo+bestaudio/best")   # never fails on a short format list

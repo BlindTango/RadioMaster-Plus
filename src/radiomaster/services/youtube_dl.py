@@ -20,6 +20,10 @@ logger = logging.getLogger("radiomaster")
 # codebase already does this; yt-dlp's own calls never did.
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
+# What a video is played at: the best streams up to 1080p, falling back to the
+# best single file. Downloads choose their own quality separately.
+PLAYBACK_FORMAT = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
+
 
 def _extraction_args() -> list[str]:
     """Make bundled helpers discoverable without modifying the user's PATH."""
@@ -108,7 +112,10 @@ class YouTubeService:
         try:
             result = subprocess.run(
                 [get_ytdlp(), *_extraction_args(), "-j", "--no-playlist",
-                 "-f", "bestvideo+bestaudio/best", url],
+                 # Capped at 1080p: the uncapped best video is often 4K AV1 (a
+                 # 10-minute video measured 712 MB), which a normal connection
+                 # cannot stream in real time, so playback stalled and ended.
+                 "-f", PLAYBACK_FORMAT, url],
                 capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW,
             )
             for line in result.stdout.splitlines():

@@ -11,6 +11,14 @@ from radiomaster.utils.tools import get_ffmpeg
 
 log = logging.getLogger("radiomaster")
 
+RECONNECT_ARGS = [
+    "-reconnect", "1",
+    "-reconnect_streamed", "1",
+    "-reconnect_on_network_error", "1",
+    "-reconnect_delay_max", "5",
+    "-reconnect_max_retries", "30",
+]
+
 
 class VideoStream:
     """Own a loopback stream and its bounded FFmpeg subprocess lifetime."""
@@ -26,6 +34,11 @@ class VideoStream:
         command = [get_ffmpeg(), "-nostdin", "-hide_banner", "-loglevel", "error"]
         for kind in ("video", "audio"):
             command.extend(get_ffmpeg_input_args())
+            # googlevideo.com resets long connections (and idle ones, e.g. while
+            # playback is paused and nothing is read) well before the video ends.
+            # Without these options FFmpeg treats the reset as the end of the
+            # input and the video stops abruptly part-way through.
+            command.extend(RECONNECT_ARGS)
             headers = self.inputs.get(f"{kind}_headers") or {}
             if headers:
                 value = "".join(f"{key}: {value}\r\n" for key, value in headers.items())
