@@ -114,6 +114,21 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.3.3", (
+        "YouTube videos no longer stop part-way through. When YouTube dropped a long or "
+        "idle connection the video used to end abruptly; RadioMaster+ now reconnects and "
+        "carries on. Settings > Playback has a new YouTube video quality choice (Best "
+        "available, 1080p, 720p, 480p or 360p; the default is 1080p), because the very best "
+        "quality can be 4K and too heavy for many connections. If a video still stalls, "
+        "choose a lower quality.\n\n"
+        "The window no longer freezes while playing radio. Changing volume, pan, speed or "
+        "effects, or pressing Stop, while a station is still connecting now responds "
+        "immediately. If the window ever stops responding for two seconds, RadioMaster+ "
+        "writes ui-stalls.log in its logs folder naming the cause; send that file if you "
+        "report a freeze.\n\n"
+        "When a YouTube video cannot be played, the status bar and error message now say "
+        "why (for example, a private video) instead of a generic message."
+    )),
     ("What's New in Version 1.3.2", (
         "YouTube subscriptions now open the intended channel's videos reliably. Select "
         "a channel in My Channels, then press Enter or choose View Videos to move to its "
@@ -274,6 +289,23 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.3.3", (
+        "YouTube: the program that combines a video's separate video and audio streams now "
+        "reconnects when the server drops or resets a connection, so videos play to the end "
+        "instead of stopping abruptly. A new Settings > Playback > YouTube video quality "
+        "choice (Best available, 1080p, 720p, 480p, 360p; default 1080p) limits the "
+        "resolution played, because uncapped 4K streams can be several hundred megabytes "
+        "for ten minutes. Playback now keeps a usable stream even when yt-dlp prints "
+        "warnings, finds streams nested in its results, and opens a channel or playlist "
+        "instead of trying to play it. Failure reasons from yt-dlp are shown in the status "
+        "bar and error dialog.\n\n"
+        "Radio: volume, pan, speed, effects, Pause and Resume no longer wait behind a "
+        "station that is still connecting; they wait at most a tenth of a second and are "
+        "applied when the connection finishes. Stop abandons a stalled connection at once. "
+        "The audio engine starts in the background at launch.\n\n"
+        "Diagnostics: when the window stops responding for two seconds, every thread's "
+        "stack is written to ui-stalls.log in the logs folder, once per freeze."
+    )),
     ("Version 1.3.2", (
         "Fixed browsing subscribed YouTube channels. Selection and activation use the "
         "intended row; Enter or the new View Videos button opens its video list and moves "
