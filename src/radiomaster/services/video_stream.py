@@ -23,8 +23,14 @@ RECONNECT_ARGS = [
 class VideoStream:
     """Own a loopback stream and its bounded FFmpeg subprocess lifetime."""
 
-    def __init__(self, inputs: dict):
+    def __init__(self, inputs: dict, start_at: float = 0.0):
         self.inputs = inputs
+        self.start_at = max(0.0, float(start_at or 0.0))
+        # True once FFmpeg's output ended on its own (the source stopped
+        # supplying data) rather than because the player went away or we
+        # closed the stream. The engine uses it to tell "the connection died
+        # part-way" apart from "the user closed the video window".
+        self.source_ended = False
         self._lock = threading.Lock()
         self._closed = False
         self._process = None
@@ -43,6 +49,8 @@ class VideoStream:
             if headers:
                 value = "".join(f"{key}: {value}\r\n" for key, value in headers.items())
                 command.extend(["-headers", value])
+            if self.start_at:
+                command.extend(["-ss", f"{self.start_at:.3f}"])
             command.extend(["-i", self.inputs[f"{kind}_url"]])
         command.extend(["-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
                         "-f", "matroska", "-flush_packets", "1", "pipe:1"])
@@ -79,6 +87,10 @@ class VideoStream:
                     try:
                         while chunk := process.stdout.read1(65536):
                             self.wfile.write(chunk)
+                        # Reached only when FFmpeg stopped producing output; a
+                        # player that left raises on write above instead.
+                        if not owner._closed:
+                            owner.source_ended = True
                         if process.wait(timeout=2) and not owner._closed:
                             errors.seek(0)
                             log.warning("Video stream could not be combined: %s",

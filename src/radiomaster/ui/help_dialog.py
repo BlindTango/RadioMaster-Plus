@@ -114,6 +114,17 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.3.5", (
+        "YouTube videos that stop part-way because the connection dropped now resume by "
+        "themselves from about two seconds before the drop. RadioMaster+ looks up a fresh "
+        "stream and carries on, up to five times; after that the status bar suggests "
+        "checking your connection or choosing a lower YouTube video quality in Settings > "
+        "Playback. Closing the video window never triggers a resume.\n\n"
+        "The 1080p, 720p, 480p and 360p quality choices now prefer H.264 video where YouTube "
+        "offers it. The player decodes the newer AV1 format in software and, at 1080p60, "
+        "dropped about two thirds of the frames; H.264 plays smoothly. Best available still "
+        "uses whatever YouTube rates highest."
+    )),
     ("What's New in Version 1.3.4", (
         "The YouTube results list now has a context menu (right-click, Shift+F10 or the "
         "Applications key): Play, Download Video, Download Audio Only, Download All Videos "
@@ -298,6 +309,13 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.3.5", (
+        "YouTube: when the video source ends well before the video's length (the connection "
+        "died), playback is resumed from about two seconds before the drop with a freshly "
+        "resolved stream, up to five times per video. Closing the video window does not "
+        "resume. The quality choices up to 1080p now prefer H.264 over AV1, which the "
+        "player decodes in software and dropped most frames at 1080p60."
+    )),
     ("Version 1.3.4", (
         "YouTube: the results list has a context menu with Play, Download Video, Download "
         "Audio Only, Download All Videos from Channel (lists every upload, confirms the "

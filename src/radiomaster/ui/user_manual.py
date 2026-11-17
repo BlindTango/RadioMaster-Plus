@@ -1103,6 +1103,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             selects natural-end advancement instead of overlapping transitions. See
             Automatic Advance, Crossfade, and Gapless for what each applies to.
 
+            If a YouTube video stops part-way because the connection dropped, RadioMaster+
+            resumes it from just before the drop, up to five times. The 1080p to 360p choices
+            prefer H.264 video, which plays more smoothly than AV1.
             YouTube video quality sets the highest picture quality used when a YouTube
             video is played: Best available, 1080p, 720p, 480p or 360p. The default is
             1080p. The very best quality can be 4K and several hundred megabytes for a

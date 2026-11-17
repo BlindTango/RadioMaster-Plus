@@ -67,6 +67,10 @@ class YouTubePanel(wx.Panel):
         self.on_content_changed = None
         self._video_info_seq = 0
         self._engine.on_stream_rejected(self._on_stream_rejected)
+        # A video whose connection died part-way is resumed where it stopped.
+        self._resume_at = 0.0
+        self._early_end_resumes = 0
+        self._engine.on_early_end(self._on_early_end)
         self._setup_ui()
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
@@ -949,7 +953,11 @@ class YouTubePanel(wx.Panel):
                 self._play_request_seq += 1
                 seq = self._play_request_seq
                 self._current_source_url = url
+                self._current_source_title = url
+                self._current_source_duration = 0.0
                 self._stream_rejected_retried = False
+                self._early_end_resumes = 0
+                self._resume_at = 0.0
 
                 def worker():
                     self._resolve_and_play(url, url, 0.0, seq)
@@ -999,6 +1007,8 @@ class YouTubePanel(wx.Panel):
         self._current_source_title = title
         self._current_source_duration = duration
         self._stream_rejected_retried = False
+        self._early_end_resumes = 0
+        self._resume_at = 0.0
         self._video_info_seq += 1
         self._publish_video_info(video)
 
@@ -1051,6 +1061,9 @@ class YouTubePanel(wx.Panel):
         options = {}
         if (video_info or {}).get("video_inputs"):
             options["video_inputs"] = video_info["video_inputs"]
+        if self._resume_at:
+            options["start_at"] = self._resume_at
+            self._resume_at = 0.0
         self._engine.play(stream_url, title=title, is_video=True, duration=duration,
                           http_headers=http_headers, **options)
         self._playback_generation_at_request = self._engine.playback_generation
@@ -1064,6 +1077,34 @@ class YouTubePanel(wx.Panel):
         thread, so marshal back to the UI thread before touching
         anything wx."""
         wx.CallAfter(self._retry_after_stream_rejection)
+
+    MAX_EARLY_END_RESUMES = 5
+
+    def _on_early_end(self, position: float) -> None:
+        """The video stopped part-way because its connection died. Fires on
+        the engine's monitor thread."""
+        generation = self._playback_generation_at_request
+        wx.CallAfter(self._resume_after_early_end, position, generation)
+
+    def _resume_after_early_end(self, position: float, generation) -> None:
+        if (generation != self._engine.playback_generation
+                or not self._current_source_url
+                or self._early_end_resumes >= self.MAX_EARLY_END_RESUMES):
+            if self._early_end_resumes >= self.MAX_EARLY_END_RESUMES:
+                self._set_status("Status: The video keeps stopping. Check your connection "
+                                 "or choose a lower YouTube video quality in Settings > Playback.")
+            return
+        self._early_end_resumes += 1
+        url, title, duration = (self._current_source_url, self._current_source_title,
+                                self._current_source_duration)
+        self._resume_at = max(0.0, position - 2.0)
+        self._set_status(f"Status: The connection dropped. Resuming '{title}'...")
+        self._play_request_seq += 1
+        seq = self._play_request_seq
+        self._playback_generation_at_request = self._engine.playback_generation
+        import threading
+        threading.Thread(target=lambda: self._resolve_and_play(url, title, duration, seq),
+                         daemon=True).start()
 
     def _retry_after_stream_rejection(self) -> None:
         if self._playback_generation_at_request != self._engine.playback_generation:

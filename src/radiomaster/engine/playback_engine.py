@@ -119,6 +119,8 @@ class PlaybackEngine:
         self._playback_generation = 0
         self._video_inputs: dict = {}
         self._video_stream = None
+        self._video_start_at = 0.0
+        self._on_early_end = None
         self._radio_healthy_since: float | None = None
         self._radio_connected = False
         self._radio_reconnecting = False
@@ -269,8 +271,12 @@ class PlaybackEngine:
     def play(self, url: str, title: str = "", artist: str = "",
               is_video: bool = False, duration: float = 0.0,
               http_headers: dict[str, str] | None = None,
-              is_live: bool = False, video_inputs: dict | None = None) -> None:
+              is_live: bool = False, video_inputs: dict | None = None,
+              start_at: float = 0.0) -> None:
         """Start playback of a URL or file.
+
+        start_at (video made from separate streams only): resume this many
+        seconds into the video, used to carry on after the connection died.
 
         http_headers (video only): HTTP headers -- User-Agent above all --
         to replay on ffplay's own request for *url*. A googlevideo.com
@@ -299,7 +305,8 @@ class PlaybackEngine:
         self._replaygain_db = self._compute_replaygain(url)
 
         if is_video:
-            self._position = 0.0
+            self._video_start_at = float(start_at or 0.0) if video_inputs else 0.0
+            self._position = self._video_start_at
             self._state = self.STATE_BUFFERING
             self._notify_state()
             self._start_process(url, is_video)
@@ -973,7 +980,7 @@ class PlaybackEngine:
             from radiomaster.services.video_stream import VideoStream
             if self._video_stream is not None:
                 self._video_stream.close()
-            self._video_stream = VideoStream(self._video_inputs)
+            self._video_stream = VideoStream(self._video_inputs, self._video_start_at)
             url = self._video_stream.start()
         cmd = self._build_ffplay_command(url, is_video)
         # ffplay has no CLI flag for choosing an output device -- it goes
@@ -1288,7 +1295,7 @@ class PlaybackEngine:
 
     def _monitor_loop(self) -> None:
         """Monitor playback and update position (video only)."""
-        start_time = time.time()
+        start_time = time.time() - self._video_start_at
         while self._monitor_running and self._process:
             if self._state == self.STATE_PLAYING:
                 self._position = time.time() - start_time
@@ -1332,8 +1339,29 @@ class PlaybackEngine:
                     # completely separate code path and is unaffected.
                     self._state = self.STATE_STOPPED
                     self._notify_state()
+                    self._maybe_report_early_end()
                     break
             time.sleep(0.25)
+
+    EARLY_END_MARGIN_SECONDS = 15.0
+
+    def _maybe_report_early_end(self) -> None:
+        """The video player exited well before the video's length and the
+        source (not the player, not the user) is what stopped supplying data:
+        the connection died part-way. Tell the owner so it can carry on from
+        where it stopped. Closing the video window never counts, because then
+        the player leaves first and the source has not ended."""
+        stream = self._video_stream
+        if (self._on_early_end is None or stream is None or not stream.source_ended
+                or self._duration <= 0 or self._is_live
+                or self._position >= self._duration - self.EARLY_END_MARGIN_SECONDS):
+            return
+        log.warning("Video ended early at %.0fs of %.0fs; asking to resume",
+                    self._position, self._duration)
+        self._on_early_end(self._position)
+
+    def on_early_end(self, cb: Callable[[float], None] | None) -> None:
+        self._on_early_end = cb
 
     def _notify_state(self) -> None:
         """Notify listeners of state change (always the *effective*

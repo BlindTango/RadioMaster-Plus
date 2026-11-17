@@ -24,12 +24,22 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 # height cap picks the best streams up to that height and falls back to the best
 # single file, then to the best available, so a cap never makes a video fail.
 # Downloads choose their own quality separately.
+#
+# Capped choices prefer H.264 (avc1). The player decodes AV1 in software, which
+# at 1080p60 measured dropping about two thirds of the frames; H.264 is cheap to
+# decode. Other codecs are still used when no H.264 stream exists at that size.
+def _capped(height: int) -> str:
+    return (f"bestvideo[height<={height}][vcodec^=avc1]+bestaudio"
+            f"/bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+            "/bestvideo+bestaudio/best")
+
+
 PLAYBACK_QUALITIES = {
     "best": "bestvideo+bestaudio/best",
-    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
-    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best",
-    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best",
-    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best",
+    "1080p": _capped(1080),
+    "720p": _capped(720),
+    "480p": _capped(480),
+    "360p": _capped(360),
 }
 DEFAULT_PLAYBACK_QUALITY = "1080p"
 PLAYBACK_FORMAT = PLAYBACK_QUALITIES[DEFAULT_PLAYBACK_QUALITY]
