@@ -252,7 +252,7 @@ def test_failed_open_stops_retrying_and_another_station_can_play():
         return backend
 
     try:
-        with patch.object(BassRadioEngine, "create_if_available", side_effect=create):
+        with patch.object(BassRadioEngine, "create_if_available", side_effect=create),                 patch("radiomaster.services.region_block.region_block_status", return_value=None):
             engine.play("https://station.example/broken", "Broken", is_live=True)
             assert failed.wait(2)
             time.sleep(0.7)  # longer than the reconnect interval

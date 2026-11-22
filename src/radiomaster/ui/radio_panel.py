@@ -55,6 +55,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._search_seq = 0
         self._now_playing_generation = 0
         self.engine.on_region_blocked(self._handle_region_blocked)
+        self.engine.on_open_failed(self._handle_open_failed)
 
         # Manual (Record button / hotkey) recordings -- separate from the
         # timed SchedulerService recordings, this just ffmpeg-copies
@@ -582,6 +583,48 @@ class RadioPanel(scrolled.ScrolledPanel):
         except Exception:
             log.exception("Regional routing failed")
         play(station.url, **kwargs)
+        route = manager.route_for(station.country) if station.country else None
+        if route is not None and manager.active == route:
+            self._watch_routed_start(station, route)
+
+    # How long a routed station may sit at "buffering" before the next server is tried.
+    ROUTED_START_TIMEOUT = 20.0
+
+    def _watch_routed_start(self, station: Station, route) -> None:
+        """A VPN server can reach a broadcaster yet fail to carry its audio: the
+        station then hangs at "buffering" with no error. If it has not started
+        playing in time, move to the route's next server. Runs on a worker thread."""
+        from radiomaster.services.routing import get_manager
+        manager = get_manager()
+        deadline = time.monotonic() + self.ROUTED_START_TIMEOUT
+        while time.monotonic() < deadline:
+            if getattr(self, "_playing_station", None) is not station:
+                return  # the listener chose something else
+            if self.engine.state == "playing":
+                return
+            time.sleep(0.5)
+        if (getattr(self, "_playing_station", None) is station and manager.active == route
+                and manager.can_advance()):
+            self._routing_status(
+                f"{station.name} did not start through {manager.server}. Trying another server...")
+            self._retry_through_route(station, route, True)
+
+    def _handle_open_failed(self, url: str) -> bool:
+        """The station failed to open for a reason other than its region. While a
+        route is connected, the failure may be that VPN server's, so try the next."""
+        from radiomaster.services.routing import get_manager
+        station = getattr(self, "_playing_station", None)
+        manager = get_manager()
+        if station is None or station.url != url or not manager.enabled:
+            return False
+        route = manager.route_for(station.country) if station.country else None
+        if route is None or manager.active != route or not manager.can_advance():
+            return False
+        self._routing_status(
+            f"{station.name} did not open through {manager.server}. Trying another server...")
+        threading.Thread(target=self._retry_through_route, args=(station, route, True),
+                         daemon=True, name="region-route").start()
+        return True
 
     def _handle_region_blocked(self, url: str) -> bool:
         """The engine says the station refused us because of our region. If a
@@ -634,6 +677,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._routing_status(f"Trying {station.name} through {manager.server}...")
         live = station.is_live and not station.uuid.startswith("internet_archive:")
         self.engine.play(station.url, title=station.name, is_live=live)
+        self._watch_routed_start(station, route)
 
     def _probe_and_report_format(self, url: str, generation: int) -> None:
         from radiomaster.services.stream_prober import format_stream_format, probe_stream_format

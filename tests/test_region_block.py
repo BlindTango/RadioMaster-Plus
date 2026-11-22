@@ -49,7 +49,7 @@ def make_engine(url="https://radio.test/live", failed_open=True):
     engine = SimpleNamespace(
         _bass_radio="bass", _using_bass_radio=True, _radio_connected=not failed_open,
         _radio_open_failed=False, _current_url=url, _playback_generation=7,
-        _notify_error=MagicMock(), _on_region_blocked=None)
+        _notify_error=MagicMock(), _on_region_blocked=None, _on_open_failed=None)
     engine._explain_open_failure = lambda *a: PlaybackEngine._explain_open_failure(engine, *a)
     return engine
 

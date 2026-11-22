@@ -1250,8 +1250,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             disconnect commands for another VPN. List several ExpressVPN regions or exit
             nodes separated by commas, for example uk-london, uk-manchester, uk-docklands.
             A broadcaster can block one VPN server and not another in the same country,
-            so if a station is still refused after connecting, the next server in the list
-            is tried automatically, one at a time, until it plays or the list ends. Verify
+            so if a station is still refused after connecting, fails to open, or stays at
+            Buffering for 20 seconds without playing, the next server in the list is tried
+            automatically, one at a time, until it plays or the list ends. Verify
             with VPN does the same before calling a station dead. When your VPN is put
             back, ExpressVPN's selected region is restored too. Choose when to switch: Only when a station
             is blocked in my region (the default) tries the station directly first and

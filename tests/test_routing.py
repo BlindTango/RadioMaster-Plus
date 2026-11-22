@@ -238,7 +238,8 @@ def radio_panel_stub(manager, station):
     from radiomaster.ui.radio_panel import RadioPanel
     panel = SimpleNamespace(
         _playing_station=station, _region_retry_url=None, engine=MagicMock(),
-        _routing_status=MagicMock())
+        _routing_status=MagicMock(),
+        _watch_routed_start=MagicMock(), ROUTED_START_TIMEOUT=0.2)
     panel._retry_through_route = lambda s, r, advance=False: RadioPanel._retry_through_route(panel, s, r, advance)
     return RadioPanel, panel
 
@@ -311,7 +312,7 @@ def test_engine_hands_a_region_block_to_the_routing_hook(monkeypatch):
     from radiomaster.engine.playback_engine import PlaybackEngine
     monkeypatch.setattr("radiomaster.services.region_block.region_block_status", lambda url: 403)
     hook = MagicMock(return_value=True)
-    engine = SimpleNamespace(_playback_generation=1, _notify_error=MagicMock(), _on_region_blocked=hook)
+    engine = SimpleNamespace(_playback_generation=1, _notify_error=MagicMock(), _on_region_blocked=hook, _on_open_failed=None)
     PlaybackEngine._explain_open_failure(engine, 1, "https://x/live", "BASS error 2")
     hook.assert_called_once_with("https://x/live")
     engine._notify_error.assert_not_called()           # the retry is underway, no error dialog
@@ -406,3 +407,78 @@ def test_still_blocked_through_the_connected_server_tries_the_next_one(monkeypat
     target(*args)
     assert manager.server == "uk-manchester" and panel.engine.play.call_count == 2
     assert RadioPanel._handle_region_blocked(panel, uk.url) is False       # nothing left to try
+
+
+# --- a server that reaches the broadcaster but cannot carry the audio -----------------------
+
+def routed_panel(monkeypatch, servers="uk-london, uk-manchester"):
+    backend = FakeBackend()
+    manager = manager_with(backend)
+    manager._config.values["routing.routes"] = [uk_route(servers)]
+    monkeypatch.setattr(routing, "_manager", manager)
+    uk = station()
+    RadioPanel, panel = radio_panel_stub(manager, uk)
+    manager.prepare(uk.country)
+    return RadioPanel, panel, manager, uk
+
+
+def test_station_stuck_at_buffering_moves_to_the_next_server(monkeypatch):
+    RadioPanel, panel, manager, uk = routed_panel(monkeypatch)
+    panel.engine.state = "buffering"
+    panel._retry_through_route = MagicMock()
+    RadioPanel._watch_routed_start(panel, uk, manager.active)
+    panel._retry_through_route.assert_called_once_with(uk, manager.active, True)
+    assert "did not start through uk-london" in panel._routing_status.call_args.args[0]
+
+
+def test_a_station_that_starts_playing_is_left_alone(monkeypatch):
+    RadioPanel, panel, manager, uk = routed_panel(monkeypatch)
+    panel.engine.state = "playing"
+    panel._retry_through_route = MagicMock()
+    RadioPanel._watch_routed_start(panel, uk, manager.active)
+    panel._retry_through_route.assert_not_called()
+
+
+def test_no_other_server_means_no_retry_and_a_chosen_other_station_cancels_the_watch(monkeypatch):
+    RadioPanel, panel, manager, uk = routed_panel(monkeypatch, servers="uk-london")
+    panel.engine.state = "buffering"
+    panel._retry_through_route = MagicMock()
+    RadioPanel._watch_routed_start(panel, uk, manager.active)           # nothing to advance to
+    panel._playing_station = station("France")
+    RadioPanel._watch_routed_start(panel, uk, manager.active)           # listener moved on
+    panel._retry_through_route.assert_not_called()
+
+
+def test_a_failed_open_through_a_connected_server_tries_the_next(monkeypatch):
+    RadioPanel, panel, manager, uk = routed_panel(monkeypatch)
+    started = []
+    monkeypatch.setattr("radiomaster.ui.radio_panel.threading.Thread",
+                        lambda target, args, **kw: SimpleNamespace(start=lambda: started.append(args)))
+    assert RadioPanel._handle_open_failed(panel, uk.url) is True
+    assert started == [(uk, manager.active, True)]
+    manager.advance()                                                   # now on the last server
+    assert RadioPanel._handle_open_failed(panel, uk.url) is False
+
+
+def test_a_failed_open_without_routing_shows_the_normal_error(monkeypatch):
+    manager = manager_with(FakeBackend())
+    monkeypatch.setattr(routing, "_manager", manager)
+    uk = station()
+    RadioPanel, panel = radio_panel_stub(manager, uk)
+    assert RadioPanel._handle_open_failed(panel, uk.url) is False       # no route connected
+    assert RadioPanel._handle_open_failed(panel, "https://other") is False
+
+
+def test_engine_sends_a_non_region_failure_to_the_open_failed_hook(monkeypatch):
+    from radiomaster.engine.playback_engine import PlaybackEngine
+    monkeypatch.setattr("radiomaster.services.region_block.region_block_status", lambda url: None)
+    hook = MagicMock(return_value=True)
+    engine = SimpleNamespace(_playback_generation=1, _notify_error=MagicMock(),
+                             _on_region_blocked=MagicMock(), _on_open_failed=hook)
+    PlaybackEngine._explain_open_failure(engine, 1, "https://x/live", "BASS error 2")
+    hook.assert_called_once_with("https://x/live")
+    engine._on_region_blocked.assert_not_called()
+    engine._notify_error.assert_not_called()
+    hook.return_value = False
+    PlaybackEngine._explain_open_failure(engine, 1, "https://x/live", "BASS error 2")
+    engine._notify_error.assert_called_once_with("BASS error 2")

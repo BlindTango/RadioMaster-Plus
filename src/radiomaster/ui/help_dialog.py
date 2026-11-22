@@ -114,6 +114,15 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.4.1", (
+        "Regional routing now moves to the next server in a country's route when a station "
+        "fails to open, or stays at Buffering for 20 seconds without playing, through the "
+        "connected server. Before, it only did so when a station refused you outright. A VPN "
+        "server can reach a broadcaster yet fail to carry its audio: BBC Radio 5 Sports Extra "
+        "hung through a London server but played through Manchester. List several servers "
+        "per country, for example uk-london, uk-manchester, uk-docklands, in Settings > "
+        "Network > Country Routes."
+    )),
     ("What's New in Version 1.4.0", (
         "Regional routing. Many stations only play for listeners in their own country. "
         "With a VPN you already have, RadioMaster+ can point it at a station's country "
@@ -331,6 +340,11 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.4.1", (
+        "Regional routing: the next server in a route is also tried when a station fails to "
+        "open or stays at Buffering for 20 seconds through the connected server, not only "
+        "when it is refused (HTTP 403 or 451)."
+    )),
     ("Version 1.4.0", (
         "Regional routing: Settings > Network > Switch my VPN to a station's country, with "
         "Country Routes for ExpressVPN regions, Tailscale exit nodes or custom connect and "
