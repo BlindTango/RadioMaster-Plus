@@ -54,6 +54,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._selected_station: Optional[Station] = None
         self._search_seq = 0
         self._now_playing_generation = 0
+        self.engine.on_region_blocked(self._handle_region_blocked)
 
         # Manual (Record button / hotkey) recordings -- separate from the
         # timed SchedulerService recordings, this just ffmpeg-copies
@@ -509,14 +510,16 @@ class RadioPanel(scrolled.ScrolledPanel):
         config.set("radio.last_station", value=station.to_dict())
         config.save()
         fade_seconds = config.get("playback.crossfade_duration", default=0)
+        self._region_retry_url = None
         if fade_seconds:
-            threading.Thread(target=self.engine.crossfade_to, args=(station.url,),
-                              kwargs={"title": station.name, "fade_seconds": fade_seconds,
-                                      "is_live": live},
-                              daemon=True).start()
+            threading.Thread(
+                target=self._route_then_play, args=(station, self.engine.crossfade_to),
+                kwargs={"title": station.name, "fade_seconds": fade_seconds, "is_live": live},
+                daemon=True).start()
         else:
-            threading.Thread(target=self.engine.play, args=(station.url,),
-                              kwargs={"title": station.name, "is_live": live}, daemon=True).start()
+            threading.Thread(
+                target=self._route_then_play, args=(station, self.engine.play),
+                kwargs={"title": station.name, "is_live": live}, daemon=True).start()
         if not station.source_id and not station.uuid.startswith(("somafm:", "acb_media:", "internet_archive:")):
             threading.Thread(target=self.station_api.click, args=(station.uuid,), daemon=True).start()
 
@@ -547,6 +550,90 @@ class RadioPanel(scrolled.ScrolledPanel):
             self.on_format_detected(self._reported_stream_format or "Detecting stream format...")
         threading.Thread(target=self._probe_and_report_format, args=(station.url, generation),
                           daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Regional routing (see services/routing.py)
+    # ------------------------------------------------------------------
+    _region_retry_url: str | None = None
+
+    def _routing_status(self, text: str) -> None:
+        call_after_safe(self, self.set_status, f"Status: {text}")
+
+    def _route_then_play(self, station: Station, play, **kwargs) -> None:
+        """Runs on a worker thread. Points the VPN at the station's country when
+        a route is set, then starts playback; playback always starts, even if
+        the route could not be set up."""
+        from radiomaster.services.routing import MODE_ALWAYS, RouteError, get_manager
+        manager = get_manager()
+        try:
+            if manager.enabled and station.country:
+                route = manager.route_for(station.country)
+                wanted = route is not None and (
+                    manager.mode == MODE_ALWAYS or manager.active == route)
+                if wanted:
+                    if manager.active != route:
+                        self._routing_status(
+                            f"Connecting {route.describe()} for {station.name}...")
+                    manager.prepare(station.country)
+                elif manager.active is not None:
+                    manager.release_later(5.0)  # leaving the routed country
+        except RouteError as exc:
+            self._routing_status(f"Could not set up the route for {station.name}: {exc}")
+        except Exception:
+            log.exception("Regional routing failed")
+        play(station.url, **kwargs)
+
+    def _handle_region_blocked(self, url: str) -> bool:
+        """The engine says the station refused us because of our region. If a
+        route is set for its country, connect it and retry. If it is already
+        connected and the station is still refused, that one VPN server may be
+        the problem (a broadcaster can block one server and not another in the
+        same country), so the route's next server is tried."""
+        from radiomaster.services.routing import get_manager
+        station = getattr(self, "_playing_station", None)
+        manager = get_manager()
+        if station is None or station.url != url or not manager.enabled:
+            return False
+        route = manager.route_for(station.country)
+        if route is None:
+            return False
+        if manager.active == route:
+            if not manager.can_advance():
+                return False
+            self._routing_status(
+                f"{station.name} is still refused through {manager.server}. "
+                "Trying another server...")
+            advance = True
+        else:
+            if self._region_retry_url == url:
+                return False
+            self._region_retry_url = url
+            self._routing_status(
+                f"{station.name} is blocked in your region. Connecting {route.describe()}...")
+            advance = False
+        threading.Thread(target=self._retry_through_route, args=(station, route, advance),
+                         daemon=True, name="region-route").start()
+        return True
+
+    def _retry_through_route(self, station: Station, route, advance: bool = False) -> None:
+        from radiomaster.services.routing import RouteError, get_manager
+        manager = get_manager()
+        try:
+            if advance:
+                if manager.advance() is None:
+                    raise RouteError("there is no other server to try")
+            else:
+                manager.prepare(station.country)
+        except RouteError as exc:
+            self.engine._notify_error(
+                f"{station.name} is blocked in your region, and the route "
+                f"({route.describe()}) could not be set up: {exc}")
+            return
+        if getattr(self, "_playing_station", None) is not station:
+            return  # the listener chose something else while the VPN connected
+        self._routing_status(f"Trying {station.name} through {manager.server}...")
+        live = station.is_live and not station.uuid.startswith("internet_archive:")
+        self.engine.play(station.url, title=station.name, is_live=live)
 
     def _probe_and_report_format(self, url: str, generation: int) -> None:
         from radiomaster.services.stream_prober import format_stream_format, probe_stream_format
@@ -1053,7 +1140,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         try:
             if dlg.ShowModal() == wx.ID_OK:
                 name, url = dlg.station_values()
-                self.station_db.add_custom(name, url)
+                self.station_db.add_custom(name, url, dlg.station_country())
                 self.tree.add_custom_section(self.station_db.get_custom_stations())
                 self.set_status(f"Status: Custom station '{name}' added.")
         finally:

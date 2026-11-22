@@ -114,6 +114,28 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.4.0", (
+        "Regional routing. Many stations only play for listeners in their own country. "
+        "With a VPN you already have, RadioMaster+ can point it at a station's country "
+        "while the station plays, then put it back. Turn it on in Settings > Network > "
+        "Switch my VPN to a station's country, then add a route for each country in "
+        "Country Routes: ExpressVPN regions, Tailscale exit nodes, or commands for another "
+        "VPN. List several servers separated by commas and the next is tried when a station "
+        "is still refused, because a broadcaster can block one server and not another. By "
+        "default the VPN is switched only when a station refuses you. RadioMaster+ does not "
+        "supply a VPN.\n\n"
+        "Blocked stations are explained. A station that refuses you because of your region "
+        "now says so and what to do, instead of a generic failure. The Station Health Check "
+        "separates region blocks from dead streams (it no longer hides them with Hide All "
+        "Dead), also catches HLS streams whose playlist opens but whose audio is refused, "
+        "and Verify with VPN confirms which blocked stations really play through a VPN in "
+        "their country. Confirmed stations show (requires VPN) in the station lists.\n\n"
+        "Add Custom Station has two new tools: Find with Browser, for pages whose player "
+        "only starts when you press Play (it uses a temporary, muted Chrome or Edge window "
+        "with none of your logins), and Look Up in Directory, which checks the station "
+        "catalog stored on your computer for the website. Radio Garden station pages are "
+        "recognised. Custom stations can have a country, so routing works for them too."
+    )),
     ("What's New in Version 1.3.5", (
         "YouTube videos that stop part-way because the connection dropped now resume by "
         "themselves from about two seconds before the drop. RadioMaster+ looks up a fresh "
@@ -309,6 +331,21 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.4.0", (
+        "Regional routing: Settings > Network > Switch my VPN to a station's country, with "
+        "Country Routes for ExpressVPN regions, Tailscale exit nodes or custom connect and "
+        "disconnect commands. Several servers can be listed per country; the next is tried "
+        "when a station is still refused. The VPN, and ExpressVPN's selected region, are "
+        "restored after playback stops and on exit. Waits for ExpressVPN's DNS after "
+        "connecting.\n\n"
+        "Station Health Check: region blocks are no longer counted as dead streams or hidden "
+        "with Hide All Dead; HLS streams blocked behind an open playlist are detected; Verify "
+        "with VPN confirms (or reclassifies as dead) blocked stations; confirmed ones show "
+        "(requires VPN) in the station lists. A refused station now gets an explanatory "
+        "message.\n\n"
+        "Custom stations: Find with Browser, Look Up in Directory, Radio Garden links and an "
+        "optional country."
+    )),
     ("Version 1.3.5", (
         "YouTube: when the video source ends well before the video's length (the connection "
         "died), playback is resumed from about two seconds before the drop with a freshly "

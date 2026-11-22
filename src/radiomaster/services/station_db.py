@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS custom_stations (
     uuid TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     url TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    country TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS favorite_stations (
@@ -105,6 +106,15 @@ CREATE TABLE IF NOT EXISTS station_health (
     db_bitrate INTEGER DEFAULT 0,
     format_mismatch INTEGER DEFAULT 0
 );
+
+-- Stations that refuse listeners outside their own country. verified = 1 once
+-- the station was seen playing through a VPN in that country.
+CREATE TABLE IF NOT EXISTS station_vpn (
+    uuid TEXT PRIMARY KEY,
+    country TEXT DEFAULT '',
+    verified INTEGER DEFAULT 0,
+    checked_at TEXT DEFAULT ''
+);
 """
 
 _FIELDS = ["uuid", "name", "url", "favicon", "tags", "country", "language",
@@ -142,11 +152,20 @@ class StationDB:
             conn.execute("ALTER TABLE stations ADD COLUMN network TEXT DEFAULT ''")
         if "languagecodes" not in columns:
             conn.execute("ALTER TABLE stations ADD COLUMN languagecodes TEXT DEFAULT ''")
+        custom_columns = {row[1] for row in conn.execute("PRAGMA table_info(custom_stations)").fetchall()}
+        if "country" not in custom_columns:
+            conn.execute("ALTER TABLE custom_stations ADD COLUMN country TEXT DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_stations_network ON stations(network)")
         fts_count = conn.execute("SELECT COUNT(*) FROM stations_fts").fetchone()[0]
         total = conn.execute("SELECT COUNT(*) FROM stations").fetchone()[0]
         if fts_count == 0 and total > 0:
             conn.execute("INSERT INTO stations_fts(uuid, name) SELECT uuid, name FROM stations")
+        # Health results recorded before the VPN list existed.
+        conn.execute(
+            """INSERT OR IGNORE INTO station_vpn (uuid, country, verified, checked_at)
+               SELECT h.uuid, COALESCE(s.country, ''), 0, h.checked_at
+               FROM station_health h JOIN stations s ON s.uuid = h.uuid
+               WHERE h.geo_blocked = 1""")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -300,22 +319,36 @@ class StationDB:
                          country=r[5], language=r[6], codec=r[7], bitrate=r[8],
                          votes=r[9], homepage=r[10], network=r[11], languagecodes=r[12]) for r in rows]
 
-    def add_custom(self, name: str, url: str) -> Station:
-        """Add a user-entered custom station and return it as a Station."""
+    def add_custom(self, name: str, url: str, country: str = "") -> Station:
+        """Add a user-entered custom station and return it as a Station. The
+        optional *country* lets Regional routing reach a station that only
+        plays for listeners in its own country."""
         station_uuid = f"custom-{uuid_module.uuid4()}"
         with self._lock, self._connect() as conn:
             conn.execute(
-                "INSERT INTO custom_stations (uuid, name, url) VALUES (?, ?, ?)",
-                (station_uuid, name, url),
+                "INSERT INTO custom_stations (uuid, name, url, country) VALUES (?, ?, ?, ?)",
+                (station_uuid, name, url, country),
             )
-        return Station(uuid=station_uuid, name=name, url=url, network="Custom")
+        return Station(uuid=station_uuid, name=name, url=url, country=country, network="Custom")
 
     def get_custom_stations(self) -> list[Station]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT uuid, name, url FROM custom_stations ORDER BY name COLLATE NOCASE ASC"
+                "SELECT uuid, name, url, country FROM custom_stations "
+                "ORDER BY name COLLATE NOCASE ASC"
             ).fetchall()
-        return [Station(uuid=r[0], name=r[1], url=r[2], network="Custom") for r in rows]
+        return [Station(uuid=r[0], name=r[1], url=r[2], country=r[3] or "", network="Custom")
+                for r in rows]
+
+    def mark_vpn_required(self, uuid: str, country: str, verified: bool = False) -> None:
+        """Record by hand that a station only plays in its own country."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO station_vpn (uuid, country, verified, checked_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(uuid) DO UPDATE SET country = excluded.country,
+                       verified = excluded.verified, checked_at = excluded.checked_at""",
+                (uuid, country, int(verified), datetime.now().isoformat()))
 
     def add_favorite(self, station: Station) -> None:
         """Bookmarks *station* -- stores its full metadata (not just a
@@ -388,6 +421,22 @@ class StationDB:
                    WHERE network = ? AND {_NOT_HIDDEN}
                    ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
                 (network, limit),
+            ).fetchall()
+        return self._rows_to_stations(rows)
+
+    def stations_by_website(self, host: str, limit: int = 200) -> list[Station]:
+        """Catalog stations whose homepage mentions *host* (callers narrow the
+        match to the exact site). Hidden stations are left out."""
+        host = host.strip().lower()
+        if not host:
+            return []
+        escaped = host.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""SELECT {_STATION_COLUMNS} FROM stations
+                   WHERE homepage LIKE ? ESCAPE '\\' AND {_NOT_HIDDEN}
+                   ORDER BY votes DESC LIMIT ?""",
+                (f"%{escaped}%", limit),
             ).fetchall()
         return self._rows_to_stations(rows)
 
@@ -545,6 +594,53 @@ class StationDB:
                 VALUES ({', '.join('?' * 15)})""",
                 rows,
             )
+            # Keep the "requires a VPN" list in step with what was just seen.
+            # A station seen playing again is dropped from it unless it was
+            # confirmed through a VPN, which stays until re-verified.
+            conn.executemany(
+                """INSERT INTO station_vpn (uuid, country, verified, checked_at)
+                   SELECT uuid, COALESCE(country, ''), 0, ? FROM stations WHERE uuid = ?
+                   ON CONFLICT(uuid) DO UPDATE SET checked_at = excluded.checked_at""",
+                [(now, r["uuid"]) for r in results if r.get("geo_blocked")])
+            conn.executemany(
+                "DELETE FROM station_vpn WHERE uuid = ? AND verified = 0",
+                [(r["uuid"],) for r in results if not r.get("geo_blocked")])
+
+    def vpn_required_uuids(self, confirmed_only: bool = False) -> set[str]:
+        """Stations that refused the connection from abroad. With *confirmed_only*,
+        just those seen playing through a VPN in their own country."""
+        where = " WHERE verified = 1" if confirmed_only else ""
+        with self._connect() as conn:
+            return {row[0] for row in conn.execute(f"SELECT uuid FROM station_vpn{where}")}
+
+    def mark_dead_through_vpn(self, uuid: str, country: str) -> None:
+        """A station that refused us did not play through a VPN in its own country
+        either, so it is not region-blocked: it is dead (or off the air)."""
+        detail = f"refused the connection, and did not play through a VPN in {country} either"
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE station_health SET geo_blocked = 0, stream_ok = 0, status = 'dead', "
+                "detail = ? WHERE uuid = ?", (detail, uuid))
+            conn.execute("DELETE FROM station_vpn WHERE uuid = ?", (uuid,))
+
+    def vpn_required(self) -> list[dict]:
+        """The VPN list with each station's name and country, for checking."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT v.uuid, COALESCE(s.name, c.name), COALESCE(s.url, c.url),
+                          v.country, v.verified, v.checked_at
+                   FROM station_vpn v
+                   LEFT JOIN stations s ON s.uuid = v.uuid
+                   LEFT JOIN custom_stations c ON c.uuid = v.uuid
+                   WHERE s.uuid IS NOT NULL OR c.uuid IS NOT NULL
+                   ORDER BY v.country, 2 COLLATE NOCASE""").fetchall()
+        return [dict(zip(("uuid", "name", "url", "country", "verified", "checked_at"), r))
+                for r in rows]
+
+    def set_vpn_verified(self, uuid: str, verified: bool) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("UPDATE station_vpn SET verified = ?, checked_at = ? WHERE uuid = ?",
+                         (int(verified), datetime.now().isoformat(), uuid))
 
     def health_results(self, problems_only: bool = True) -> list[dict]:
         """All persisted health rows (newest first), optionally only the

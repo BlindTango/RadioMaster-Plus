@@ -167,6 +167,16 @@ def _check_stream(station: Station) -> tuple[bool, bool, str, str, dict[str, str
                         requests.exceptions.StreamConsumedError):
                     pass
                 if content_type.startswith(_AUDIO_CONTENT_TYPES):
+                    from radiomaster.services.region_block import is_hls, region_block_status
+                    if is_hls(station.url, content_type):
+                        # An HLS playlist can be open while the audio behind it
+                        # is refused to listeners outside the station's country.
+                        blocked = region_block_status(station.url, _scan_timeout())
+                        if blocked:
+                            detail = f"HTTP {blocked}: access denied (possibly geo-restricted)"
+                            if station.country:
+                                detail += f" -- station is based in {station.country}"
+                            return False, True, "blocked", detail, headers
                     return True, False, "alive", "", headers
                 if content_type == "text/html":
                     return False, False, "dead", "server returned a web page, not an audio stream", headers

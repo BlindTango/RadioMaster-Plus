@@ -40,12 +40,22 @@ class CustomStationDialog(wx.Dialog):
 
         self.name_ctrl = field("Station &Name:", "Station name")
         self.url_ctrl = field("Stream &Address:", "Stream URL")
+        layout.Add(wx.StaticText(self, label="Station &Country (optional):"), 0,
+                   wx.LEFT | wx.RIGHT | wx.TOP, 12)
+        self.country_ctrl = wx.ComboBox(self, choices=self._country_choices())
+        set_accessible_name(self.country_ctrl, "Station country, optional. "
+                            "Lets Regional routing reach stations that only play in their own country")
+        layout.Add(self.country_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         self.page_ctrl = field("&Webpage URL:", "Webpage URL to scan")
         scan_row = wx.BoxSizer(wx.HORIZONTAL)
         self.scan_btn = wx.Button(self, label="&Scan Webpage")
+        self.browser_btn = wx.Button(self, label="Find with &Browser")
+        self.directory_btn = wx.Button(self, label="&Look Up in Directory")
         self.stop_btn = wx.Button(self, label="S&top Scan")
         self.stop_btn.Disable()
         scan_row.Add(self.scan_btn, 0, wx.RIGHT, 8)
+        scan_row.Add(self.browser_btn, 0, wx.RIGHT, 8)
+        scan_row.Add(self.directory_btn, 0, wx.RIGHT, 8)
         scan_row.Add(self.stop_btn)
         layout.Add(scan_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         layout.Add(wx.StaticText(self, label="&Found Streams:"), 0, wx.LEFT | wx.RIGHT, 12)
@@ -80,6 +90,8 @@ class CustomStationDialog(wx.Dialog):
         self.SetMinSize(self.GetSize())
         self.CentreOnParent()
         self.scan_btn.Bind(wx.EVT_BUTTON, self._on_scan)
+        self.browser_btn.Bind(wx.EVT_BUTTON, self._on_browser_scan)
+        self.directory_btn.Bind(wx.EVT_BUTTON, self._on_directory_lookup)
         self.stop_btn.Bind(wx.EVT_BUTTON, self._on_stop_scan)
         self.results.Bind(wx.EVT_LISTBOX, self._on_selection)
         self.results.Bind(wx.EVT_LISTBOX_DCLICK, self._on_use)
@@ -91,11 +103,67 @@ class CustomStationDialog(wx.Dialog):
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
         self.name_ctrl.SetFocus()
 
+    @staticmethod
+    def _country_choices() -> list[str]:
+        try:
+            from radiomaster.ui.routing_dialog import known_countries
+            return known_countries()
+        except Exception:
+            return []
+
     def station_values(self) -> tuple[str, str]:
         url = self.url_ctrl.GetValue().strip()
         return self.name_ctrl.GetValue().strip() or url, url
 
+    def station_country(self) -> str:
+        return self.country_ctrl.GetValue().strip()
+
     def _on_scan(self, event):
+        self._empty_message = ""
+        self._start_search(
+            "Scanning webpage and listen links. You can stop the scan at any time.",
+            lambda url, cancel: discover_streams(url, cancel=cancel),
+        )
+
+    def _on_browser_scan(self, event):
+        """For sites that only expose audio after their player starts."""
+        from radiomaster.services.browser_discovery import find_browser, find_with_browser
+        if not find_browser():
+            self.status.SetValue(
+                "Find with Browser needs Google Chrome or Microsoft Edge, and neither is installed."
+            )
+            return
+        self._empty_message = (
+            "The browser did not request an audio stream. The player may need a sign-in or a "
+            "choice on the page. Try the station's Listen Live page."
+        )
+        self._start_search(
+            "Opening the page in a temporary, muted browser and pressing Play. This takes up "
+            "to 20 seconds and uses none of your browser's logins. You can stop at any time.",
+            lambda url, cancel: find_with_browser(url, cancel=cancel),
+        )
+
+    def _on_directory_lookup(self, event):
+        """Check the public Radio Browser catalog for this website's stations."""
+        from radiomaster.services.directory_lookup import lookup_by_website
+
+        def lookup(url, cancel):
+            result = lookup_by_website(url, cancel=cancel)
+            if result.catalog_empty:
+                return DiscoveryResult(
+                    (), 0, error="The station catalog has not been downloaded yet. Open the "
+                    "Radio tab and let it finish loading, then try again.")
+            return DiscoveryResult(result.streams, result.candidates, cancelled=result.cancelled)
+
+        self._empty_message = (
+            "The public directory has no playable stream for this website. It lists only "
+            "stations registered for exactly this site or page."
+        )
+        self._start_search(
+            "Checking the public directory and testing each stream. The address you entered "
+            "is not sent anywhere. You can stop at any time.", lookup)
+
+    def _start_search(self, message: str, search):
         if self._scanning:
             return
         url = _http_url(self.page_ctrl.GetValue())
@@ -110,30 +178,33 @@ class CustomStationDialog(wx.Dialog):
         self._streams = ()
         self.results.Clear()
         self._on_selection(None)
-        self.scan_btn.Disable()
-        self.stop_btn.Enable()
-        self.page_ctrl.Disable()
-        self.status.SetValue(
-            "Scanning webpage and listen links. You can stop the scan at any time."
-        )
+        self._set_busy(True)
+        self.status.SetValue(message)
         self.stop_btn.SetFocus()
 
         def worker():
             try:
-                result = discover_streams(url, cancel=cancel)
+                result = search(url, cancel)
             except Exception as exc:
                 result = DiscoveryResult((), 0, error=str(exc))
             call_after_safe(self, self._finish_scan, generation, result)
 
         threading.Thread(target=worker, daemon=True, name="stream-finder").start()
 
+    def _set_busy(self, busy: bool):
+        for button in (self.scan_btn, self.browser_btn, self.directory_btn):
+            button.Enable(not busy)
+        self.stop_btn.Enable(busy)
+        self.page_ctrl.Enable(not busy)
+
+    _empty_message = ""
+
     def _finish_scan(self, generation: int, result: DiscoveryResult):
         if self._closed or generation != self._scan_generation:
             return
         move_focus = self.FindFocus() is self.stop_btn
         self._scanning = False
-        self.scan_btn.Enable()
-        self.stop_btn.Disable()
+        self._set_busy(False)
         self.page_ctrl.Enable()
         self._streams = result.streams
         self.results.Set([f"{stream.format}: {stream.url}" for stream in self._streams])
@@ -147,11 +218,12 @@ class CustomStationDialog(wx.Dialog):
             if result.limited:
                 text += " The scan limit was reached; more links may be available."
         elif result.error:
-            text = f"Could not read the webpage: {result.error}"
+            text = result.error if self._empty_message else (
+                f"Could not read the webpage: {result.error}")
         else:
-            text = (
+            text = self._empty_message or (
                 "No accessible audio stream found. The player may require JavaScript or a sign-in. "
-                "Try the station's Listen Live page or a direct player link."
+                "Try Find with Browser, the station's Listen Live page or a direct player link."
             )
             if result.limited:
                 text += " The scan limit was reached."
@@ -164,9 +236,7 @@ class CustomStationDialog(wx.Dialog):
         self._scan_cancel.set()
         self._scan_generation += 1
         self._scanning = False
-        self.scan_btn.Enable()
-        self.stop_btn.Disable()
-        self.page_ctrl.Enable()
+        self._set_busy(False)
         self.status.SetValue("Scan stopped. You can scan another webpage or enter a stream URL.")
         self.scan_btn.SetFocus()
 

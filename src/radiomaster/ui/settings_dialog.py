@@ -1012,8 +1012,50 @@ class NetworkPanel(SettingsPanel):
         )
         sizer.Add(self.user_agent_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
+        sizer.Add(wx.StaticLine(self), 0, wx.EXPAND | wx.ALL, 8)
+        self.routing_chk = wx.CheckBox(self, label="Switch my VPN to a station's country")
+        self.routing_chk.SetValue(bool(self.config.get("routing.enabled", default=False)))
+        set_accessible_name(self.routing_chk, "Regional routing: switch my VPN to a station's country")
+        sizer.Add(self.routing_chk, 0, wx.ALL, 5)
+        sizer.Add(
+            wx.StaticText(self, label=(
+                "Uses a VPN you already have (ExpressVPN, a Tailscale exit node, or commands "
+                "for another VPN). Your VPN is put back after playback stops.")),
+            0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+        sizer.Add(wx.StaticText(self, label="Switch the VPN:"), 0, wx.ALL, 5)
+        self._routing_modes = ["when_blocked", "always"]
+        self.routing_mode = wx.Choice(self, choices=[
+            "Only when a station is blocked in my region", "Always before playing"])
+        set_accessible_name(self.routing_mode, "When to switch the VPN")
+        current = self.config.get("routing.mode", default="when_blocked")
+        self.routing_mode.SetSelection(self._routing_modes.index(current)
+                                       if current in self._routing_modes else 0)
+        sizer.Add(self.routing_mode, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+        self.routes_btn = wx.Button(self, label="Country &Routes...")
+        set_accessible_name(self.routes_btn, "Country routes")
+        sizer.Add(self.routes_btn, 0, wx.ALL, 5)
+        self.routes_btn.Bind(wx.EVT_BUTTON, self._on_edit_routes)
+        self.routing_chk.Bind(wx.EVT_CHECKBOX, lambda e: self._update_routing_states())
+        self._routes = None   # replaced only if the routes dialog is accepted
+        self._update_routing_states()
+
         self.proxy_enabled_chk.Bind(wx.EVT_CHECKBOX, self._on_proxy_enabled_changed)
         self._update_proxy_control_states()
+
+    def _update_routing_states(self) -> None:
+        enabled = self.routing_chk.IsChecked()
+        self.routing_mode.Enable(enabled)
+        self.routes_btn.Enable(enabled)
+
+    def _on_edit_routes(self, event: wx.CommandEvent) -> None:
+        from radiomaster.services.routing import Route
+        from radiomaster.ui.routing_dialog import RoutesDialog
+        current = self._routes if self._routes is not None else [
+            r for r in (Route.from_dict(item)
+                        for item in self.config.get("routing.routes", default=[]) or []) if r]
+        with RoutesDialog(self, current) as dialog:
+            if dialog.ShowModal() == wx.ID_OK:
+                self._routes = dialog.routes()
 
     def _on_proxy_enabled_changed(self, event: wx.CommandEvent) -> None:
         self._update_proxy_control_states()
@@ -1030,6 +1072,10 @@ class NetworkPanel(SettingsPanel):
         self.config.set("network.proxy_port", value=self.proxy_port_spin.GetValue())
         self.config.set("network.timeout", value=self.timeout_spin.GetValue())
         self.config.set("network.user_agent", value=self.user_agent_txt.GetValue().strip())
+        self.config.set("routing.enabled", value=self.routing_chk.IsChecked())
+        self.config.set("routing.mode", value=self._routing_modes[max(0, self.routing_mode.GetSelection())])
+        if self._routes is not None:
+            self.config.set("routing.routes", value=[route.to_dict() for route in self._routes])
 
 
 class AccessibilityPanel(SettingsPanel):

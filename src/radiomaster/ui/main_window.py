@@ -601,6 +601,11 @@ class MainWindow(wx.Frame):
                 source_type=source_type, source_id=source_id, title=title,
             )
             wx.CallAfter(self._on_engine_state, state)
+            if state == "stopped":
+                # Put the VPN back after a pause, so changing station does not
+                # disconnect and reconnect it in between.
+                from radiomaster.services.routing import get_manager
+                get_manager().release_later()
 
         self._engine.on_state_change(_state_chain)
         self._engine.on_position_update(lambda pos, dur: wx.CallAfter(self._on_engine_position, pos, dur))

@@ -121,6 +121,7 @@ class PlaybackEngine:
         self._video_stream = None
         self._video_start_at = 0.0
         self._on_early_end = None
+        self._on_region_blocked = None
         self._radio_healthy_since: float | None = None
         self._radio_connected = False
         self._radio_reconnecting = False
@@ -184,7 +185,33 @@ class PlaybackEngine:
         # Auto-reconnect recovers dropped broadcasts. An initial open failure
         # is terminal: retrying it generates repeated modal error dialogs.
         self._radio_open_failed = not self._radio_connected
+        url = self._current_url or ""
+        if self._radio_open_failed and url.startswith(("http://", "https://")):
+            # An open that failed outright may be a region block rather than a
+            # dead station; find out before choosing what to tell the listener.
+            threading.Thread(target=self._explain_open_failure,
+                             args=(self._playback_generation, url, message),
+                             daemon=True, name="region-check").start()
+            return
         self._notify_error(message)
+
+    def _explain_open_failure(self, generation: int, url: str, message: str) -> None:
+        from radiomaster.services.region_block import region_block_message, region_block_status
+        status = region_block_status(url)
+        if generation != self._playback_generation:
+            return  # the listener has moved on to something else
+        if status and self._on_region_blocked is not None:
+            try:
+                if self._on_region_blocked(url):
+                    return  # the owner is routing through the station's country and will retry
+            except Exception:
+                log.exception("Regional routing handler failed")
+        self._notify_error(region_block_message(status) if status else message)
+
+    def on_region_blocked(self, cb: Callable[[str], bool] | None) -> None:
+        """*cb(url)* is called when a station refuses the connection because of
+        the listener's region. Return True when the caller will retry itself."""
+        self._on_region_blocked = cb
 
     def _on_bass_state(self, bass, state: str) -> None:
         if bass is not self._bass_radio or not self._using_bass_radio:

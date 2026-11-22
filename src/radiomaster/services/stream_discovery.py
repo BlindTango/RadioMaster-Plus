@@ -49,6 +49,24 @@ class DiscoveryResult:
     error: str = ""
 
 
+_RADIO_GARDEN = re.compile(r"^/listen/[^/]+/([A-Za-z0-9_-]{6,})/?$")
+
+
+def _radio_garden_url(url: str) -> str | None:
+    """A public Radio Garden station page (radio.garden/listen/<name>/<id>) plays
+    through a fixed address that redirects to the station's own stream."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if (parts.hostname or "").lower() not in ("radio.garden", "www.radio.garden"):
+        return None
+    match = _RADIO_GARDEN.match(parts.path)
+    if not match:
+        return None
+    return f"https://radio.garden/api/ara/content/listen/{match.group(1)}/channel.mp3"
+
+
 def _http_url(value: str, base: str = "") -> str | None:
     value = html.unescape(value.strip()).replace("\\/", "/")
     if not value or any(char in value for char in "\r\n\x00"):
@@ -181,7 +199,7 @@ def discover_streams(
         if current in visited:
             continue
         visited.add(current)
-        request_url = _iono_playlist_url(current) or current
+        request_url = _iono_playlist_url(current) or _radio_garden_url(current) or current
         checked += 1
         try:
             request = urllib.request.Request(

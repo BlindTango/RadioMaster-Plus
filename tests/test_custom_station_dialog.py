@@ -137,8 +137,11 @@ def test_keyboard_tab_order_and_control_names(dialog):
     wx.Yield()
     expected = [
         dialog.url_ctrl,
+        dialog.country_ctrl,
         dialog.page_ctrl,
         dialog.scan_btn,
+        dialog.browser_btn,
+        dialog.directory_btn,
         dialog.results,
         dialog.status,
         dialog.save_btn,

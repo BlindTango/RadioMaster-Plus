@@ -110,10 +110,16 @@ def test_initial_open_error_is_reported_once_without_automatic_retry():
     errors = []
     engine.on_error(errors.append)
     with patch("radiomaster.engine.playback_engine.threading.Timer") as timer, \
-            patch.object(engine, "play") as play:
+            patch.object(engine, "play") as play, \
+            patch("radiomaster.services.region_block.region_block_status", return_value=None):
         engine._on_bass_error(bass, "StreamCreateURL failed")
         engine._on_bass_state(bass, "stopped")
         engine._reconnect_radio(bass, engine.playback_generation, False)
+        # The region check runs on its own thread before the error is shown.
+        for _ in range(100):
+            if errors:
+                break
+            time.sleep(0.02)
     assert errors == ["StreamCreateURL failed"]
     timer.assert_not_called()
     play.assert_not_called()
