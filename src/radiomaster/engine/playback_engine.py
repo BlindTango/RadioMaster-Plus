@@ -202,17 +202,23 @@ class PlaybackEngine:
         if generation != self._playback_generation:
             return  # the listener has moved on to something else
         hook = self._on_region_blocked if status else self._on_open_failed
+        note = ""
         if hook is not None:
             try:
-                if hook(url):
+                handled = hook(url)
+                if handled is True:
                     return  # the owner is routing through the station's country and will retry
+                if isinstance(handled, str):
+                    note = handled  # why routing could not help, to tell the listener
             except Exception:
                 log.exception("Regional routing handler failed")
-        self._notify_error(region_block_message(status) if status else message)
+        text = region_block_message(status) if status else message
+        self._notify_error(f"{text}\n\n{note}" if note else text)
 
     def on_region_blocked(self, cb: Callable[[str], bool] | None) -> None:
         """*cb(url)* is called when a station refuses the connection because of
-        the listener's region. Return True when the caller will retry itself."""
+        the listener's region. Return True when the caller will retry itself, or a sentence saying why it
+        could not, which is added to the message shown to the listener."""
         self._on_region_blocked = cb
 
     def on_open_failed(self, cb: Callable[[str], bool] | None) -> None:

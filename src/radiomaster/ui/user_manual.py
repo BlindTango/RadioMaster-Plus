@@ -1233,8 +1233,13 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             fields and uses the ordinary connection path.
 
             Connection Timeout is measured in seconds and controls how long supported
-            network operations wait. Custom User Agent changes the client identification
-            sent to supported HTTP services; leave it blank for the application default.
+            network operations wait. Identify as chooses the client identification sent
+            to stations and web services: RadioMaster+ (the application default), Chrome,
+            Firefox, or Custom, which uses the Custom User Agent text. Some servers refuse
+            clients that do not look like a web browser, and choosing Chrome or Firefox
+            can get past that. It applies to radio audio, video, podcasts, downloads and
+            searches, and takes effect the next time a station is opened. The default
+            leaves the radio player on its own built-in identification.
 
             Apply changes before retrying a failed operation. A proxy or a different
             user agent does not guarantee access to a station or video that restricts
@@ -1247,8 +1252,12 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             and put it back afterwards. RadioMaster+ does not supply a VPN. Country Routes
             lists one route per country. Each route uses ExpressVPN (a region such as
             uk-london), a Tailscale exit node in that country, or custom connect and
-            disconnect commands for another VPN. List several ExpressVPN regions or exit
-            nodes separated by commas, for example uk-london, uk-manchester, uk-docklands.
+            disconnect commands for another VPN. For ExpressVPN, choosing a country shows
+            that country's servers in a list. Check the ones you want; Move Up and Move
+            Down (or Alt with the Up and Down arrows) set the order they are tried in, and
+            Show servers from all countries lists every server. For Tailscale, the list
+            holds the exit nodes on your tailnet. If the VPN cannot be read, type the
+            servers separated by commas, for example uk-london, uk-manchester.
             A broadcaster can block one VPN server and not another in the same country,
             so if a station is still refused after connecting, fails to open, or stays at
             Buffering for 20 seconds without playing, the next server in the list is tried

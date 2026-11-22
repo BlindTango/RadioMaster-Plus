@@ -558,8 +558,9 @@ class TestNetworkSettings:
             assert panel.proxy_port_spin.GetName() == "Proxy Port"
             assert panel.timeout_spin.GetName() == "Connection Timeout in seconds"
             assert panel.user_agent_txt.GetName() == (
-                "Custom User Agent; blank uses the application default"
+                "Custom User Agent text, used when Custom is chosen"
             )
+            assert panel.ua_choice.GetName().startswith("Identify as")
 
             panel.proxy_enabled_chk.SetValue(False)
             panel._update_proxy_control_states()

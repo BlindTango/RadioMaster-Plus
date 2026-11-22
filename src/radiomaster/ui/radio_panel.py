@@ -579,6 +579,7 @@ class RadioPanel(scrolled.ScrolledPanel):
                 elif manager.active is not None:
                     manager.release_later(5.0)  # leaving the routed country
         except RouteError as exc:
+            log.warning("Could not set up the route for '%s': %s", station.name, exc)
             self._routing_status(f"Could not set up the route for {station.name}: {exc}")
         except Exception:
             log.exception("Regional routing failed")
@@ -605,6 +606,8 @@ class RadioPanel(scrolled.ScrolledPanel):
             time.sleep(0.5)
         if (getattr(self, "_playing_station", None) is station and manager.active == route
                 and manager.can_advance()):
+            log.info("'%s' did not start through %s within %.0fs: trying the next server",
+                     station.name, manager.server, self.ROUTED_START_TIMEOUT)
             self._routing_status(
                 f"{station.name} did not start through {manager.server}. Trying another server...")
             self._retry_through_route(station, route, True)
@@ -635,22 +638,40 @@ class RadioPanel(scrolled.ScrolledPanel):
         from radiomaster.services.routing import get_manager
         station = getattr(self, "_playing_station", None)
         manager = get_manager()
-        if station is None or station.url != url or not manager.enabled:
+        if station is None or station.url != url:
+            log.info("Region block on %s: not the station being played, no routing", url)
             return False
+        if not manager.enabled:
+            return False   # routing is off: the plain message says how to turn it on
+        if not station.country:
+            log.info("Region block on '%s': the station has no country, no routing", station.name)
+            return ("Regional routing is on, but this station has no country set, so it "
+                    "cannot tell which route to use. Edit the station and set its country.")
         route = manager.route_for(station.country)
         if route is None:
-            return False
+            log.info("Region block on '%s': no route for %s", station.name, station.country)
+            return (f"Regional routing is on, but there is no route for {station.country}. "
+                    "Add one in Settings > Network > Country Routes.")
         if manager.active == route:
             if not manager.can_advance():
-                return False
+                log.warning("Region block on '%s' persists through %s, the last server",
+                            station.name, manager.server)
+                return (f"Regional routing was connected through {manager.server}, the last "
+                        "server in the route for this country, and the station still refused it.")
+            log.info("Region block on '%s' through %s: trying the next server",
+                     station.name, manager.server)
             self._routing_status(
                 f"{station.name} is still refused through {manager.server}. "
                 "Trying another server...")
             advance = True
         else:
             if self._region_retry_url == url:
-                return False
+                log.warning("Region block on '%s' again after routing: %s", station.name,
+                            manager.last_error or "no VPN connected")
+                return ("Regional routing could not switch your VPN"
+                        + (f": {manager.last_error}" if manager.last_error else "."))
             self._region_retry_url = url
+            log.info("Region block on '%s': connecting %s", station.name, route.describe())
             self._routing_status(
                 f"{station.name} is blocked in your region. Connecting {route.describe()}...")
             advance = False

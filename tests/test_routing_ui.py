@@ -20,26 +20,29 @@ def app(monkeypatch):
     wx.Yield()
 
 
-def test_edit_dialog_builds_a_route_for_each_method(app):
+def test_edit_dialog_builds_a_route_for_each_method(app, monkeypatch):
+    monkeypatch.setattr(routing_dialog, "tailscale_exit_nodes", lambda: [])    # none found: a text box
     dialog = RouteEditDialog(None, None, ["United Kingdom"])
     dialog.country.SetValue("United Kingdom")
-    dialog.target.SetValue("uk-london")
+    dialog._country_changed()
+    dialog.servers.Check(0, True)                              # ExpressVPN: tick a listed server
     assert dialog.route() == Route("United Kingdom", "expressvpn", "uk-london")
-    assert "uk-london" in dialog.target.GetStrings()          # regions come from ExpressVPN
     dialog.method.SetSelection(2)
-    dialog._refresh_target()
+    dialog._refresh_method()
     dialog.target.SetValue("vpn connect uk")
     dialog.restore.SetValue("vpn disconnect")
     assert dialog.route() == Route("United Kingdom", "command", "vpn connect uk", "vpn disconnect")
     assert dialog.restore.IsShown()
-    dialog.method.SetSelection(1)
-    dialog._refresh_target()
+    dialog.method.SetSelection(1)                              # Tailscale with no nodes found: a text box
+    dialog._refresh_method()
+    dialog.target.SetValue("pi-1, pi-2")
     assert not dialog.restore.IsShown()
-    assert dialog.route().restore == ""                       # only custom commands keep one
+    assert dialog.route() == Route("United Kingdom", "tailscale", "pi-1, pi-2")   # only custom keeps a disconnect
     dialog.Destroy()
 
 
-def test_edit_dialog_shows_an_existing_route(app):
+def test_edit_dialog_shows_an_existing_route(app, monkeypatch):
+    monkeypatch.setattr(routing_dialog, "tailscale_exit_nodes", lambda: [])
     existing = Route("France", "tailscale", "paris-pi")
     dialog = RouteEditDialog(None, existing, ["France"])
     assert dialog.route() == existing

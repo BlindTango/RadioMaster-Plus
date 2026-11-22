@@ -64,7 +64,10 @@ class Route:
         another in the same country plays."""
         if self.method == "command":
             return (self.target,)
-        return tuple(part.strip() for part in re.split(r"[,;\n]", self.target) if part.strip())
+        names = [part.strip() for part in re.split(r"[,;\n]", self.target) if part.strip()]
+        if self.method == "expressvpn":
+            names = [name.lower() for name in names]   # its region names are all lowercase
+        return tuple(names)
 
     def single(self, server: str) -> "Route":
         """This route pointed at just one of its servers."""
@@ -279,6 +282,7 @@ class RoutingManager:
         self._lock = threading.RLock()
         self._applied: _Applied | None = None
         self._timer = None
+        self.last_error = ""      # why the most recent attempt to switch the VPN failed
 
     # settings
     def _get(self, key: str, default):
@@ -329,8 +333,16 @@ class RoutingManager:
                 # A different VPN, or another custom connection, is undone first.
                 self._release_locked()
                 snapshot = backend.snapshot()
-            backend.apply(route.single(route.targets[0]))
+            try:
+                backend.apply(route.single(route.targets[0]))
+            except RouteError as exc:
+                self.last_error = str(exc)
+                log.warning("Regional routing: could not connect %s for %s: %s",
+                            route.targets[0], route.country, exc)
+                raise
+            self.last_error = ""
             self._applied = _Applied(route, backend, snapshot, 0)
+            log.info("Regional routing: connected %s for %s", route.targets[0], route.country)
             return route
 
     @property
@@ -352,10 +364,26 @@ class RoutingManager:
             applied = self._applied
             if applied is None or not self.can_advance():
                 return None
-            server = applied.route.targets[applied.index + 1]
-            applied.backend.apply(applied.route.single(server))
-            applied.index += 1
-            return server
+            last_error: RouteError | None = None
+            # A server that cannot be reached (a misspelt or retired region) is
+            # skipped, so one bad entry never blocks the ones after it.
+            position = applied.index + 1
+            while position < len(applied.route.targets):
+                server = applied.route.targets[position]
+                try:
+                    applied.backend.apply(applied.route.single(server))
+                    applied.index = position   # only a server that connected counts as current
+                    self.last_error = ""
+                    log.info("Regional routing: moved to %s for %s", server, applied.route.country)
+                    return server
+                except RouteError as exc:
+                    log.warning("Regional routing: could not connect %s: %s", server, exc)
+                    last_error = exc
+                    position += 1
+            if last_error is not None:
+                self.last_error = str(last_error)
+                raise last_error
+            return None
 
     def release(self) -> None:
         """Put the VPN back as it was before the first route was applied."""
@@ -375,13 +403,26 @@ class RoutingManager:
         except RouteError as exc:
             log.warning("Could not restore the VPN: %s", exc)
 
-    def release_later(self, delay: float = RESTORE_DELAY_SECONDS) -> None:
-        """Restore after *delay* unless another route is prepared first."""
+    def release_later(self, delay: float = RESTORE_DELAY_SECONDS,
+                      keep_while: Callable[[], bool] | None = None) -> None:
+        """Restore after *delay* unless another route is prepared first. If
+        *keep_while* is given and still true when the delay ends (something is
+        playing), the VPN is left connected instead."""
+        def release_if_idle() -> None:
+            if keep_while is not None and keep_while():
+                return
+            self.release()
+
         with self._lock:
             if self._applied is None:
                 return
             self._cancel_timer()
-            self._timer = self._schedule(delay, self.release)
+            self._timer = self._schedule(delay, release_if_idle)
+
+    def cancel_release(self) -> None:
+        """Leave the VPN as it is: playback is running, so it is still needed."""
+        with self._lock:
+            self._cancel_timer()
 
     def _cancel_timer(self) -> None:
         timer, self._timer = self._timer, None
@@ -405,3 +446,16 @@ def get_manager() -> RoutingManager:
     if _manager is None:
         _manager = RoutingManager()
     return _manager
+
+
+def follow_playback(manager: "RoutingManager", state: str, is_active: Callable[[], bool]) -> None:
+    """Keep the VPN in step with what is playing.
+
+    The player reports "stopped" at the start of every play (it stops the old
+    station first), so a restore scheduled then must be cancelled as soon as
+    playback starts, and must not fire while anything is still playing.
+    """
+    if state in ("playing", "buffering"):
+        manager.cancel_release()
+    elif state == "stopped":
+        manager.release_later(keep_while=is_active)

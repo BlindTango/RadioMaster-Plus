@@ -26,6 +26,15 @@ BASS_ACTIVE_STALLED = 2
 BASS_ACTIVE_PAUSED = 3
 
 
+def _chosen_user_agent() -> str:
+    """The User-Agent the listener picked in Settings > Network, or "" for BASS's own."""
+    try:
+        from radiomaster.utils.network import user_agent_override
+        return user_agent_override()
+    except Exception:
+        return ""
+
+
 def _host_launch() -> tuple[list[str], dict[str, str]] | None:
     tools_root = Path(get_tools_dir())
     bass = tools_root / "bass" / "x64" / "bass.dll"
@@ -248,7 +257,8 @@ class BassRadioEngine:
         completed = False
         try:
             command = {"cmd": "play", "url": url, "volume": self._volume,
-                       "seq": generation, "seekable": self._seekable}
+                       "seq": generation, "seekable": self._seekable,
+                       "user_agent": _chosen_user_agent()}
             if fade_seconds > 0:
                 command.update({"cmd": "crossfade_play", "fade": fade_seconds})
             result = self._request(command, generation=generation)

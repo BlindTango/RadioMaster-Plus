@@ -57,11 +57,32 @@ def get_proxies() -> dict[str, str] | None:
     return {"http": proxy_url, "https": proxy_url}
 
 
-def get_user_agent(fallback: str) -> str:
-    """Configured User-Agent override, or *fallback* (the app's own
-    identifying UA) if the user hasn't set one."""
+USER_AGENT_PRESETS = {
+    "chrome": ("Chrome (Windows)",
+               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+    "firefox": ("Firefox (Windows)",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"),
+}
+
+
+def user_agent_override() -> str:
+    """The User-Agent the listener chose (a browser preset or their own text), or
+    "" when they left it at the application default."""
     config = _config()
-    value = config.get("network.user_agent", default="").strip()
+    preset = str(config.get("network.user_agent_preset", default="") or "").strip().lower()
+    custom = str(config.get("network.user_agent", default="") or "").strip()
+    if preset in USER_AGENT_PRESETS:
+        return USER_AGENT_PRESETS[preset][1]
+    if preset == "default":
+        return ""
+    return custom   # "custom", or a setting saved before presets existed
+
+
+def get_user_agent(fallback: str) -> str:
+    """The chosen User-Agent, or the app's own identifying one (or *fallback*)
+    if the listener hasn't picked one."""
+    value = user_agent_override()
     if value:
         return value
     try:

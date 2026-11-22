@@ -601,11 +601,13 @@ class MainWindow(wx.Frame):
                 source_type=source_type, source_id=source_id, title=title,
             )
             wx.CallAfter(self._on_engine_state, state)
-            if state == "stopped":
-                # Put the VPN back after a pause, so changing station does not
-                # disconnect and reconnect it in between.
-                from radiomaster.services.routing import get_manager
-                get_manager().release_later()
+            # Put the VPN back after a pause once playback has stopped, so changing
+            # station does not disconnect and reconnect it in between, and never
+            # while something is playing (the player reports "stopped" at the start
+            # of every play, which must not schedule a restore that fires mid-song).
+            from radiomaster.services.routing import follow_playback, get_manager
+            follow_playback(get_manager(), state,
+                            lambda: self._engine.state in ("playing", "buffering", "paused"))
 
         self._engine.on_state_change(_state_chain)
         self._engine.on_position_update(lambda pos, dur: wx.CallAfter(self._on_engine_position, pos, dur))

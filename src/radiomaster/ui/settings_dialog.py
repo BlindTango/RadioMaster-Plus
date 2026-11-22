@@ -1000,17 +1000,26 @@ class NetworkPanel(SettingsPanel):
         set_accessible_name(self.timeout_spin, "Connection Timeout in seconds")
         sizer.Add(self.timeout_spin, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
 
-        sizer.Add(
-            wx.StaticText(self, label="Custom User Agent (blank uses the application default):"),
-            0, wx.ALL, 5,
-        )
-        self.user_agent_txt = wx.TextCtrl(
-            self, value=self.config.get("network.user_agent", default=""),
-        )
-        set_accessible_name(
-            self.user_agent_txt, "Custom User Agent; blank uses the application default"
-        )
+        from radiomaster.utils.network import USER_AGENT_PRESETS
+        sizer.Add(wx.StaticText(self, label="Identify as (User Agent):"), 0, wx.ALL, 5)
+        self._ua_keys = ["default", *USER_AGENT_PRESETS, "custom"]
+        self.ua_choice = wx.Choice(self, choices=[
+            "RadioMaster+ (application default)",
+            *(label for label, _agent in USER_AGENT_PRESETS.values()),
+            "Custom"])
+        set_accessible_name(self.ua_choice, "Identify as: application default, Chrome, Firefox or custom")
+        saved = str(self.config.get("network.user_agent_preset", default="") or "").lower()
+        custom_text = self.config.get("network.user_agent", default="") or ""
+        if saved not in self._ua_keys:
+            saved = "custom" if custom_text.strip() else "default"   # a setting from before presets
+        self.ua_choice.SetSelection(self._ua_keys.index(saved))
+        sizer.Add(self.ua_choice, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+        sizer.Add(wx.StaticText(self, label="Custom User Agent text:"), 0, wx.ALL, 5)
+        self.user_agent_txt = wx.TextCtrl(self, value=custom_text)
+        set_accessible_name(self.user_agent_txt, "Custom User Agent text, used when Custom is chosen")
         sizer.Add(self.user_agent_txt, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+        self.ua_choice.Bind(wx.EVT_CHOICE, lambda e: self._update_ua_states())
+        self._update_ua_states()
 
         sizer.Add(wx.StaticLine(self), 0, wx.EXPAND | wx.ALL, 8)
         self.routing_chk = wx.CheckBox(self, label="Switch my VPN to a station's country")
@@ -1042,6 +1051,9 @@ class NetworkPanel(SettingsPanel):
         self.proxy_enabled_chk.Bind(wx.EVT_CHECKBOX, self._on_proxy_enabled_changed)
         self._update_proxy_control_states()
 
+    def _update_ua_states(self) -> None:
+        self.user_agent_txt.Enable(self._ua_keys[max(0, self.ua_choice.GetSelection())] == "custom")
+
     def _update_routing_states(self) -> None:
         enabled = self.routing_chk.IsChecked()
         self.routing_mode.Enable(enabled)
@@ -1072,6 +1084,8 @@ class NetworkPanel(SettingsPanel):
         self.config.set("network.proxy_port", value=self.proxy_port_spin.GetValue())
         self.config.set("network.timeout", value=self.timeout_spin.GetValue())
         self.config.set("network.user_agent", value=self.user_agent_txt.GetValue().strip())
+        self.config.set("network.user_agent_preset",
+                        value=self._ua_keys[max(0, self.ua_choice.GetSelection())])
         self.config.set("routing.enabled", value=self.routing_chk.IsChecked())
         self.config.set("routing.mode", value=self._routing_modes[max(0, self.routing_mode.GetSelection())])
         if self._routes is not None:

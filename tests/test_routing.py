@@ -297,7 +297,7 @@ def test_blocked_station_is_routed_and_retried_once(monkeypatch):
     target(*args)
     assert len(backend.applied) == 1
     panel.engine.play.assert_called_once()
-    assert RadioPanel._handle_region_blocked(panel, uk.url) is False   # only one retry
+    assert isinstance(RadioPanel._handle_region_blocked(panel, uk.url), str)   # only one retry
 
 
 def test_blocked_station_without_a_route_shows_the_normal_message(monkeypatch):
@@ -305,7 +305,8 @@ def test_blocked_station_without_a_route_shows_the_normal_message(monkeypatch):
     monkeypatch.setattr(routing, "_manager", manager)
     de = station("Germany")
     RadioPanel, panel = radio_panel_stub(manager, de)
-    assert RadioPanel._handle_region_blocked(panel, de.url) is False
+    note = RadioPanel._handle_region_blocked(panel, de.url)
+    assert isinstance(note, str) and "no route for Germany" in note
 
 
 def test_engine_hands_a_region_block_to_the_routing_hook(monkeypatch):
@@ -406,7 +407,7 @@ def test_still_blocked_through_the_connected_server_tries_the_next_one(monkeypat
     target, args = started.pop()
     target(*args)
     assert manager.server == "uk-manchester" and panel.engine.play.call_count == 2
-    assert RadioPanel._handle_region_blocked(panel, uk.url) is False       # nothing left to try
+    assert isinstance(RadioPanel._handle_region_blocked(panel, uk.url), str)   # nothing left to try
 
 
 # --- a server that reaches the broadcaster but cannot carry the audio -----------------------
@@ -482,3 +483,109 @@ def test_engine_sends_a_non_region_failure_to_the_open_failed_hook(monkeypatch):
     hook.return_value = False
     PlaybackEngine._explain_open_failure(engine, 1, "https://x/live", "BASS error 2")
     engine._notify_error.assert_called_once_with("BASS error 2")
+
+
+# --- telling the listener why routing could not help ------------------------------------------
+
+def test_last_server_still_refused_says_so(monkeypatch):
+    RadioPanel, panel, manager, uk = routed_panel(monkeypatch, servers="uk-london")
+    note = RadioPanel._handle_region_blocked(panel, uk.url)
+    assert isinstance(note, str) and "uk-london" in note and "last server" in note
+
+
+def test_a_vpn_that_could_not_be_switched_is_named_in_the_message(monkeypatch):
+    backend = FakeBackend()
+    backend.apply = MagicMock(side_effect=RouteError("ExpressVPN: the app is not running"))
+    manager = manager_with(backend)
+    monkeypatch.setattr(routing, "_manager", manager)
+    uk = station()
+    RadioPanel, panel = radio_panel_stub(manager, uk)
+    with pytest.raises(RouteError):
+        manager.prepare(uk.country)
+    assert manager.last_error == "ExpressVPN: the app is not running"
+    panel._region_retry_url = uk.url                   # the retry already happened once
+    note = RadioPanel._handle_region_blocked(panel, uk.url)
+    assert isinstance(note, str) and "the app is not running" in note
+
+
+def test_a_station_without_a_country_explains_why_it_was_not_routed(monkeypatch):
+    manager = manager_with(FakeBackend())
+    monkeypatch.setattr(routing, "_manager", manager)
+    nowhere = station("")
+    RadioPanel, panel = radio_panel_stub(manager, nowhere)
+    note = RadioPanel._handle_region_blocked(panel, nowhere.url)
+    assert isinstance(note, str) and "no country" in note
+
+
+def test_engine_adds_the_routing_note_to_the_region_message(monkeypatch):
+    from radiomaster.engine.playback_engine import PlaybackEngine
+    monkeypatch.setattr("radiomaster.services.region_block.region_block_status", lambda url: 403)
+    engine = SimpleNamespace(_playback_generation=1, _notify_error=MagicMock(),
+                             _on_region_blocked=lambda url: "Routing could not switch your VPN: off.",
+                             _on_open_failed=None)
+    PlaybackEngine._explain_open_failure(engine, 1, "https://x/live", "BASS error 2")
+    shown = engine._notify_error.call_args.args[0]
+    assert "refused the connection (HTTP 403)" in shown and shown.endswith("could not switch your VPN: off.")
+
+
+def test_expressvpn_region_names_are_lowercased_and_a_bad_server_is_skipped():
+    assert Route("UK", "expressvpn", "uk-east-London, UK-Wembley").targets == ("uk-east-london", "uk-wembley")
+    assert Route("UK", "tailscale", "Pi-1").targets == ("Pi-1",)             # exit node names keep their case
+    backend = FakeBackend()
+    manager = manager_with(backend)
+    manager._config.values["routing.routes"] = [uk_route("uk-london, uk-bogus, uk-manchester")]
+    manager.prepare("United Kingdom")
+    real_apply = backend.apply
+    backend.apply = lambda route: (_ for _ in ()).throw(RouteError("unknown region"))         if route.target == "uk-bogus" else real_apply(route)
+    assert manager.advance() == "uk-manchester"                              # skipped the bad one
+    assert manager.server == "uk-manchester" and not manager.can_advance()
+
+
+# --- the VPN must not be put back while a station is playing ---------------------------------
+
+def timers_for(manager):
+    timers = []
+
+    def schedule(delay, action):
+        timer = SimpleNamespace(delay=delay, action=action, cancel=MagicMock())
+        timers.append(timer)
+        return timer
+
+    manager._schedule = schedule
+    return timers
+
+
+def test_a_stop_at_the_start_of_play_does_not_release_the_vpn_while_playing():
+    backend = FakeBackend()
+    manager = manager_with(backend)
+    timers = timers_for(manager)
+    manager.prepare("United Kingdom")
+    # the player reports "stopped" first (it stops the old station), then plays
+    routing.follow_playback(manager, "stopped", lambda: False)
+    assert len(timers) == 1
+    routing.follow_playback(manager, "buffering", lambda: True)
+    timers[0].cancel.assert_called_once()                 # the pending restore is cancelled
+    routing.follow_playback(manager, "playing", lambda: True)
+    assert backend.restored == []
+
+
+def test_a_restore_that_fires_while_something_still_plays_leaves_the_vpn_connected():
+    backend = FakeBackend()
+    manager = manager_with(backend)
+    timers = timers_for(manager)
+    manager.prepare("United Kingdom")
+    routing.follow_playback(manager, "stopped", lambda: True)   # never cancelled, but playing
+    timers[0].action()
+    assert backend.restored == [] and manager.active is not None
+
+
+def test_the_vpn_is_put_back_after_playback_really_stops():
+    backend = FakeBackend()
+    manager = manager_with(backend)
+    timers = timers_for(manager)
+    manager.prepare("United Kingdom")
+    routing.follow_playback(manager, "playing", lambda: True)
+    routing.follow_playback(manager, "stopped", lambda: False)
+    timers[-1].action()
+    assert backend.restored == [{"before": True}] and manager.active is None
+    routing.follow_playback(manager, "paused", lambda: True)    # other states change nothing

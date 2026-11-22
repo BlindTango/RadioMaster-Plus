@@ -74,6 +74,7 @@ _BASS_CONFIG_NET_SSL      = 73
 _BASS_CONFIG_NET_SSL_VERIFY = 74
 _BASS_CONFIG_NET_PLAYLIST = 21
 _BASS_CONFIG_NET_PREBUF   = 15
+_BASS_CONFIG_NET_AGENT    = 16  # pointer option: the User-Agent BASS sends
 _BASS_CONFIG_NET_READTIMEOUT = 37
 _BASS_ERROR_ALREADY       = 14  # BASS_ERROR_ALREADY (8 is BASS_ERROR_INIT)
 _BASS_ERROR_FILEFORM      = 41
@@ -644,6 +645,12 @@ class BassHost:
             if err != _BASS_ERROR_ALREADY:
                 return False, f"BASS_Init failed (err={err})"
 
+        try:
+            dll.BASS_GetConfigPtr.restype = ctypes.c_char_p
+            dll.BASS_GetConfigPtr.argtypes = [ctypes.c_uint32]
+            self._default_agent = dll.BASS_GetConfigPtr(_BASS_CONFIG_NET_AGENT)
+        except Exception:
+            self._default_agent = None
         dll.BASS_SetConfig(_BASS_CONFIG_NET_HTTPS_FLAG, 1)
         dll.BASS_SetConfig(_BASS_CONFIG_NET_TIMEOUT, 12000)     # ms — 12s; Increased for slow servers (qingting.fm etc.)
         dll.BASS_SetConfig(_BASS_CONFIG_NET_READTIMEOUT, 12000) # ms
@@ -823,6 +830,27 @@ class BassHost:
         except Exception:
             pass
         return True, "ok"
+
+    def set_user_agent(self, agent):
+        """Choose the User-Agent BASS sends to stations (and HLS playlists). An
+        empty value goes back to BASS's own default. Takes effect for the next
+        stream that is opened."""
+        dll = self._dll
+        if not dll:
+            return
+        if getattr(self, "_agent_applied", None) == (agent or ""):
+            return
+        value = agent.encode("utf-8") if agent else getattr(self, "_default_agent", None)
+        if value is None:
+            return
+        try:
+            dll.BASS_SetConfigPtr.argtypes = [ctypes.c_uint32, ctypes.c_char_p]
+            dll.BASS_SetConfigPtr.restype = ctypes.c_int
+            self._agent_bytes = value        # must outlive the call: BASS keeps the pointer
+            dll.BASS_SetConfigPtr(_BASS_CONFIG_NET_AGENT, self._agent_bytes)
+            self._agent_applied = agent or ""
+        except Exception:
+            pass
 
     def _cancel_pending_play(self):
         """Cancel any pending play operation and stop current stream."""
@@ -2658,6 +2686,7 @@ def main():
             vol = float(cmd_obj.get("volume", 1.0))
             seq = cmd_obj.get("seq", None)
             seekable = bool(cmd_obj.get("seekable", False))
+            host.set_user_agent(str(cmd_obj.get("user_agent") or ""))
             host._cancel_pending_play()
             prev = host._current_play_thread
             if prev and prev.is_alive():

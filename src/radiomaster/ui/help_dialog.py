@@ -114,6 +114,24 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.4.2", (
+        "A station routed through your VPN no longer drops about 20 seconds after it starts. "
+        "The VPN was being put back as soon as the player reported its brief stop at the "
+        "start of playing; it is now kept connected for as long as anything plays and put back "
+        "only after you stop.\n\n"
+        "Editing a route is easier. Choose a country and Edit Route lists that country's "
+        "ExpressVPN servers. Check the ones you want and use Move Up and Move Down (or Alt "
+        "with the Up and Down arrows) to set the order they are tried in. Show servers from "
+        "all countries lists every server, and Tailscale routes list the exit nodes on your "
+        "tailnet.\n\n"
+        "Settings > Network > Identify as lets you present as RadioMaster+ (the default), "
+        "Chrome, Firefox or a custom user agent. It now applies to radio audio too, which "
+        "ignored the old setting.\n\n"
+        "When a station still cannot be played, the message now says why routing could not "
+        "help, and routing writes what it does to the log. ExpressVPN region names are read "
+        "in lowercase, and a server that fails to connect is skipped instead of stopping the "
+        "rest."
+    )),
     ("What's New in Version 1.4.1", (
         "Regional routing now moves to the next server in a country's route when a station "
         "fails to open, or stays at Buffering for 20 seconds without playing, through the "
@@ -340,6 +358,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.4.2", (
+        "Regional routing: fixed the VPN being restored about 20 seconds into a routed station "
+        "(the player's brief stop at the start of playing scheduled a restore that nothing "
+        "cancelled); it is now cancelled when playback starts and skipped while anything plays. "
+        "Edit Route shows a country's servers as a checkable list with Move Up and Move Down; "
+        "Tailscale routes list exit nodes. Unreachable servers are skipped; ExpressVPN region "
+        "names are lowercased; failures explain why routing could not help and are logged.\n\n"
+        "Network: Identify as (RadioMaster+, Chrome, Firefox or custom) now also applies to "
+        "radio audio."
+    )),
     ("Version 1.4.1", (
         "Regional routing: the next server in a route is also tried when a station fails to "
         "open or stays at Buffering for 20 seconds through the connected server, not only "
