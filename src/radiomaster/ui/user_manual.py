@@ -376,13 +376,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             Blocked in region lists stations that refused the connection from where you
             are, including HLS streams whose playlist opens but whose audio is refused. A
             refusal alone does not prove a region block: some hosts refuse stations that
-            are off the air. Verify with VPN settles it. It needs Regional routing (Settings
-            > Network) with a route for the station's country. It connects your VPN to
-            each country in turn, tests that country's blocked stations, and puts your VPN
-            back. A station that plays there is confirmed as requiring a VPN, and the
-            station lists then show "(requires VPN)" after its name. A station that does
-            not play there either is moved to the dead streams. All of your computer's
-            traffic uses the VPN while this runs.
+            are off the air. To find out, connect a VPN in the station's country yourself
+            and use Recheck Selected or Play. RadioMaster+ does not connect or switch a VPN.
+            Blocked stations are not counted as dead and are not hidden by Hide All Dead.
             Your selected station is retained when the results update, as long as it
             still matches the filter.
 
@@ -1246,31 +1242,9 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             clients or geographic regions. The dialog has no proxy-authentication fields.
             The proxy applies to downloads, searches and video; radio audio does not use it.
 
-            Switch my VPN to a station's country turns on Regional routing. Many stations
-            are licensed only for listeners in their own country. With a VPN you already
-            have, RadioMaster+ can point it at the station's country while the station plays
-            and put it back afterwards. RadioMaster+ does not supply a VPN. Country Routes
-            lists one route per country. Each route uses ExpressVPN (a region such as
-            uk-london), a Tailscale exit node in that country, or custom connect and
-            disconnect commands for another VPN. For ExpressVPN, choosing a country shows
-            that country's servers in a list. Check the ones you want; Move Up and Move
-            Down (or Alt with the Up and Down arrows) set the order they are tried in, and
-            Show servers from all countries lists every server. For Tailscale, the list
-            holds the exit nodes on your tailnet. If the VPN cannot be read, type the
-            servers separated by commas, for example uk-london, uk-manchester.
-            A broadcaster can block one VPN server and not another in the same country,
-            so if a station is still refused after connecting, fails to open, or stays at
-            Buffering for 20 seconds without playing, the next server in the list is tried
-            automatically, one at a time, until it plays or the list ends. Verify
-            with VPN does the same before calling a station dead. When your VPN is put
-            back, ExpressVPN's selected region is restored too. Choose when to switch: Only when a station
-            is blocked in my region (the default) tries the station directly first and
-            switches only if it refuses you, or Always before playing. A VPN changes the
-            route for the whole computer, so every program uses it until it is put back:
-            about 20 seconds after playback stops, when you play a station from another
-            country, and when RadioMaster+ exits. The station's country comes from the
-            station catalog, so custom stations without a country are never switched. If a
-            VPN cannot be switched, the station still plays and the status bar says why.
+            RadioMaster+ does not connect or switch a VPN. Many stations are licensed only
+            for listeners in their own country; if one refuses you, connect your own VPN to
+            that country before choosing the station.
         """),
         _topic("Accessibility Settings", """
             Use black and white high contrast colors overrides the usual palette.

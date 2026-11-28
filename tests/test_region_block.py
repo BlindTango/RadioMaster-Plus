@@ -42,14 +42,15 @@ def test_refusal_codes_are_a_region_block_but_a_missing_stream_is_not(station_se
 
 def test_message_gives_the_listener_something_to_do():
     text = region_block_message(403)
-    assert "HTTP 403" in text and "VPN" in text and "Regional routing" in text
+    assert "HTTP 403" in text and "VPN" in text and "yourself" in text
+    assert "routing" not in text.lower()
 
 
 def make_engine(url="https://radio.test/live", failed_open=True):
     engine = SimpleNamespace(
         _bass_radio="bass", _using_bass_radio=True, _radio_connected=not failed_open,
         _radio_open_failed=False, _current_url=url, _playback_generation=7,
-        _notify_error=MagicMock(), _on_region_blocked=None, _on_open_failed=None)
+        _notify_error=MagicMock())
     engine._explain_open_failure = lambda *a: PlaybackEngine._explain_open_failure(engine, *a)
     return engine
 

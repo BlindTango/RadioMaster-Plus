@@ -269,18 +269,6 @@ class RadioMasterApp(wx.App):
         watchdog = getattr(self, "_ui_watchdog", None)
         if watchdog is not None:
             watchdog.stop()
-        try:
-            # Never leave the VPN pointed at a station's country after exit,
-            # but do not let a slow VPN hold the program open for long.
-            import threading
-            from radiomaster.services.routing import get_manager
-            manager = get_manager()
-            if manager.active is not None:
-                restore = threading.Thread(target=manager.release, daemon=True, name="vpn-restore")
-                restore.start()
-                restore.join(timeout=10)
-        except Exception:
-            self.logger.exception("Could not restore the VPN on exit")
         if self._main_window:
             # EVT_CLOSE normally handles this first; keep an idempotent
             # backstop for tests, OS shutdown, and other non-window exits.

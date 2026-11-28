@@ -121,8 +121,6 @@ class PlaybackEngine:
         self._video_stream = None
         self._video_start_at = 0.0
         self._on_early_end = None
-        self._on_region_blocked = None
-        self._on_open_failed = None
         self._radio_healthy_since: float | None = None
         self._radio_connected = False
         self._radio_reconnecting = False
@@ -201,31 +199,7 @@ class PlaybackEngine:
         status = region_block_status(url)
         if generation != self._playback_generation:
             return  # the listener has moved on to something else
-        hook = self._on_region_blocked if status else self._on_open_failed
-        note = ""
-        if hook is not None:
-            try:
-                handled = hook(url)
-                if handled is True:
-                    return  # the owner is routing through the station's country and will retry
-                if isinstance(handled, str):
-                    note = handled  # why routing could not help, to tell the listener
-            except Exception:
-                log.exception("Regional routing handler failed")
-        text = region_block_message(status) if status else message
-        self._notify_error(f"{text}\n\n{note}" if note else text)
-
-    def on_region_blocked(self, cb: Callable[[str], bool] | None) -> None:
-        """*cb(url)* is called when a station refuses the connection because of
-        the listener's region. Return True when the caller will retry itself, or a sentence saying why it
-        could not, which is added to the message shown to the listener."""
-        self._on_region_blocked = cb
-
-    def on_open_failed(self, cb: Callable[[str], bool] | None) -> None:
-        """*cb(url)* is called when a station failed to open and was not refused
-        by region (a VPN server can reach a broadcaster's site yet fail to carry
-        its audio). Return True when the caller will retry itself."""
-        self._on_open_failed = cb
+        self._notify_error(region_block_message(status) if status else message)
 
     def _on_bass_state(self, bass, state: str) -> None:
         if bass is not self._bass_radio or not self._using_bass_radio:

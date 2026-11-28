@@ -136,6 +136,10 @@ _LEGACY_LANGUAGE_CODES = {
     "chinese": "zh",
 }
 
+# Settings sections written by features that no longer exist. They are dropped when the
+# settings file is loaded, so they disappear from it the next time it is saved.
+_RETIRED_SECTIONS = ("routing",)
+
 
 class ConfigManager:
     """Manages application configuration stored as JSON."""
@@ -168,6 +172,8 @@ class ConfigManager:
             migrated = _LEGACY_LANGUAGE_CODES.get(language.casefold())
             if migrated:
                 self._data["general"]["language"] = migrated
+        for section in _RETIRED_SECTIONS:
+            self._data.pop(section, None)
 
     def _deep_merge(self, base: dict, override: dict) -> None:
         """Recursively merge override dict into base dict."""

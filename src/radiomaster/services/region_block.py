@@ -71,8 +71,7 @@ def region_block_status(url: str, timeout: float = 6.0) -> int | None:
 def region_block_message(status: int) -> str:
     return (
         f"This station refused the connection (HTTP {status}). Many stations are licensed "
-        "only for listeners in their own country, so it may play through a VPN in that "
-        "country. Settings > Network > Regional routing can switch your VPN to the "
-        "station's country automatically. Otherwise, choose a similar station, or look "
-        "for the broadcaster's international stream or podcasts, which often play anywhere."
+        "only for listeners in their own country, so it may play if you connect a VPN in "
+        "that country yourself. Otherwise, choose a similar station, or look for the "
+        "broadcaster's international stream or podcasts, which often play anywhere."
     )

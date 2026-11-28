@@ -138,8 +138,6 @@ class StationHealthDialog(wx.Dialog):
         self._hidden_uuids: set[str] = set()
         self._unhidden_uuids: set[str] = set()
         self._hiding = False
-        self._verifying = False
-        self._verify_cancel = threading.Event()
         self._reported_errors: set[str] = set()
         self._setup_ui()
         self._view_thread = threading.Thread(target=self._view_worker, daemon=True,
@@ -272,11 +270,6 @@ class StationHealthDialog(wx.Dialog):
         set_accessible_name(self._btn_play, "Play Selected Station")
         self._btn_play.Bind(wx.EVT_BUTTON, self._on_play_selected)
         buttons.Add(self._btn_play, 0, wx.RIGHT, 4)
-
-        self._btn_verify_vpn = wx.Button(self, label="Verify with &VPN")
-        set_accessible_name(self._btn_verify_vpn, "Verify Stations That Require a VPN")
-        self._btn_verify_vpn.Bind(wx.EVT_BUTTON, self._on_verify_vpn)
-        buttons.Add(self._btn_verify_vpn, 0, wx.RIGHT, 4)
 
         self._btn_hidden = wx.Button(self, label="Manage &Hidden...")
         set_accessible_name(self._btn_hidden, "Manage Hidden Stations")
@@ -581,9 +574,8 @@ class StationHealthDialog(wx.Dialog):
             lines.append(
                 "This station refused the connection from here, which may mean it is "
                 "restricted to listeners in another country. It is not counted as dead or "
-                "hidden with the dead streams until that is ruled out. Verify with VPN "
-                "connects a VPN in its country and tests it: a station that plays there is "
-                "marked as requiring a VPN, and one that does not is marked dead.")
+                "hidden with the dead streams. If you connect a VPN in its country yourself "
+                "and it plays, it needs a VPN.")
         lines.append(f"Checked: {row.get('checked_at', 'unknown')}")
         text = "\n".join(lines)
         if self._detail_text.GetValue() != text:
@@ -604,50 +596,6 @@ class StationHealthDialog(wx.Dialog):
         self._btn_hide_dead.Enable(not self._hiding and any(_is_dead(row)
                                        for uuid, row in self._results.items()
                                        if uuid not in self._hidden_uuids))
-
-    def _on_verify_vpn(self, event: wx.CommandEvent) -> None:
-        """Connect the VPN to each blocked station's country (using the routes in
-        Settings > Network) and mark the ones that really play through it."""
-        from radiomaster.services.routing import get_manager
-        manager = get_manager()
-        if self._verifying:
-            self._verify_cancel.set()
-            return
-        if not manager.enabled or not manager.routes():
-            wx.MessageBox(
-                "Verifying needs Regional routing. Turn on Switch my VPN to a station's "
-                "country in Settings > Network and add a route for each country.",
-                "Verify with VPN", wx.OK | wx.ICON_INFORMATION, self)
-            return
-        if wx.MessageBox(
-                "This switches your VPN to each country in turn, tests the blocked stations, "
-                "then puts your VPN back. All of your computer's traffic uses the VPN while "
-                "it runs. Continue?", "Verify with VPN", wx.YES_NO | wx.ICON_QUESTION, self) != wx.YES:
-            return
-        from radiomaster.services.vpn_verify import verify_vpn_stations
-        self._verifying = True
-        self._verify_cancel = cancel = threading.Event()
-        self._btn_verify_vpn.SetLabel("Stop &VPN Check")
-        self._progress_label.SetLabel("Verifying VPN stations...")
-
-        def say(text: str) -> None:
-            call_after_safe(self, self._progress_label.SetLabel, text)
-
-        def work():
-            try:
-                result = verify_vpn_stations(self._db, manager, cancel=cancel, progress=say)
-                text = result.summary()
-            except Exception as exc:
-                text = f"VPN check failed: {exc}"
-            call_after_safe(self, self._finish_verify, text)
-
-        threading.Thread(target=work, name="vpn-verify", daemon=True).start()
-
-    def _finish_verify(self, text: str) -> None:
-        self._verifying = False
-        self._btn_verify_vpn.SetLabel("Verify with &VPN")
-        self._progress_label.SetLabel(text)
-        self._update_button_states()
 
     def _on_hide_selected(self, event: wx.CommandEvent) -> None:
         if self._hiding:

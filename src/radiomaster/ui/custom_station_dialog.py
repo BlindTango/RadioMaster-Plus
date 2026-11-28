@@ -44,7 +44,7 @@ class CustomStationDialog(wx.Dialog):
                    wx.LEFT | wx.RIGHT | wx.TOP, 12)
         self.country_ctrl = wx.ComboBox(self, choices=self._country_choices())
         set_accessible_name(self.country_ctrl, "Station country, optional. "
-                            "Lets Regional routing reach stations that only play in their own country")
+                            "Records where the station is from")
         layout.Add(self.country_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         self.page_ctrl = field("&Webpage URL:", "Webpage URL to scan")
         scan_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -106,8 +106,8 @@ class CustomStationDialog(wx.Dialog):
     @staticmethod
     def _country_choices() -> list[str]:
         try:
-            from radiomaster.ui.routing_dialog import known_countries
-            return known_countries()
+            from radiomaster.services.station_db import StationDB
+            return [name for name, _count in StationDB().country_groups() if name]
         except Exception:
             return []
 

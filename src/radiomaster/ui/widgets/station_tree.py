@@ -165,18 +165,13 @@ class _VirtualStationList(_TypeAheadMixin, wx.ListCtrl):
             return ""
         station = self.stations[item]
         if column == 0:
-            # Stations that refuse listeners outside their own country say so,
-            # so nobody picks one and meets a failure with no explanation.
-            return f"{station.name} (requires VPN)" if station.uuid in self.vpn_uuids else station.name
+            return station.name
         if column == 1:
             return station.country
         return str(station.bitrate) if station.bitrate else ""
 
-    vpn_uuids: frozenset[str] | set[str] = frozenset()
-
-    def set_stations(self, stations: list[Station], vpn_uuids=frozenset()) -> None:
+    def set_stations(self, stations: list[Station]) -> None:
         self.source_rows = []
-        self.vpn_uuids = vpn_uuids
         self.stations = stations
         self.SetItemCount(len(stations))
         if stations:
@@ -550,11 +545,7 @@ class StationTree(wx.Panel):
     def _populate_station_list(self, stations: list[Station]) -> None:
         stations = self._dedupe_stations(stations)
         self._current_stations = stations
-        try:
-            vpn_uuids = set(self.db.vpn_required_uuids(confirmed_only=True))
-        except Exception:
-            vpn_uuids = frozenset()   # the list is an extra; never block showing stations
-        self.station_list.set_stations(stations, vpn_uuids)
+        self.station_list.set_stations(stations)
         if stations:
             self.station_list.Select(0)
             self.station_list.Focus(0)
