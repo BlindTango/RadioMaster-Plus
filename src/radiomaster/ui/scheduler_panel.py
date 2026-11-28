@@ -13,9 +13,13 @@ from radiomaster.utils.accessibility import set_accessible_name
 class SchedulerPanel(wx.Panel):
     """Panel for managing recording schedules."""
 
-    def __init__(self, parent: wx.Window, db: DatabaseManager, scheduler_service: Any = None) -> None:
+    def __init__(self, parent: wx.Window, db: DatabaseManager, scheduler_service: Any = None,
+                 sources: Any = None) -> None:
         super().__init__(parent)
         self._db = db
+        # ScheduleSources: lets the Add/Edit dialog fill in the address from what is
+        # playing, a station or a podcast episode.
+        self._sources = sources
         self._repo = ScheduleRepository(db)
         self._scheduler_service = scheduler_service
         self._setup_ui()
@@ -87,7 +91,7 @@ class SchedulerPanel(wx.Panel):
 
     def _on_add(self, event: wx.CommandEvent) -> None:
         """Add a new recording schedule."""
-        dlg = ScheduleDialog(self, self._db)
+        dlg = ScheduleDialog(self, self._db, sources=self._sources)
         if dlg.ShowModal() == wx.ID_OK:
             self._load_schedules()
             self._resync_service()
@@ -110,7 +114,7 @@ class SchedulerPanel(wx.Panel):
                 break
         
         if schedule_data:
-            dlg = ScheduleDialog(self, self._db, schedule_data)
+            dlg = ScheduleDialog(self, self._db, schedule_data, sources=self._sources)
             if dlg.ShowModal() == wx.ID_OK:
                 self._load_schedules()
                 self._resync_service()

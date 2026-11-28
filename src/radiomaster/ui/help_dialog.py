@@ -114,6 +114,16 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.4.4", (
+        "Scheduling a recording no longer means typing a stream address. In Add Schedule, "
+        "Use Now Playing takes the station, podcast episode or audiobook that is playing; "
+        "Choose Station lists your favorites and custom stations and searches the whole "
+        "station catalog; Choose Podcast Episode lets you pick one of your subscribed "
+        "podcasts and then an episode. Each fills in the address, the source type and the "
+        "title, and focus moves to Title so you can check it. A title you typed yourself is "
+        "never replaced. A video, or a file on your computer, cannot be scheduled, and Use Now "
+        "Playing says so."
+    )),
     ("What's New in Version 1.4.3", (
         "The VPN feature has been removed. RadioMaster+ no longer connects, switches or "
         "disconnects a VPN, because reconnecting the last station at start-up could make the "
@@ -324,6 +334,12 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.4.4", (
+        "Scheduler: Add Schedule can fill in the address, source type and title from what is "
+        "playing now (Use Now Playing), from a station (Choose Station: favorites, custom "
+        "stations and a catalog search) or from a subscribed podcast's episode (Choose "
+        "Podcast Episode), instead of typing the URL."
+    )),
     ("Version 1.4.3", (
         "Removed Regional routing, Verify with VPN and the (requires VPN) label: the program no longer deals with a VPN. "
         "Reconnecting the last station at start-up could freeze it while it waited for the VPN. "

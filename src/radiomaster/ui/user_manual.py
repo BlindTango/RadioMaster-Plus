@@ -884,7 +884,15 @@ MANUAL_SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             different from exiting. The scheduler is not a Windows wake-up service.
         """),
         _topic("Creating and Editing a Schedule", """
-            1. Choose Add Schedule and enter Stream/Podcast URL and a descriptive Title.
+            1. Choose Add Schedule. Either type the Stream/Podcast URL, or fill it in with
+               one of the buttons beside it. Use Now Playing takes the station, podcast
+               episode or audiobook that is playing (a video, or a file on this computer,
+               cannot be scheduled and the button says so). Choose Station opens a list of
+               your favorites and custom stations; type part of a name and choose Search to
+               look through the whole station catalog. Choose Podcast Episode lets you pick
+               one of your subscribed podcasts, then one of its episodes. Each button sets
+               the URL and Source Type and fills the Title, unless you already typed a title
+               of your own. Focus then moves to Title so you can check or change it.
             2. Choose Source Type: Radio Station, Podcast, Audiobook, or YouTube.
             3. Set Start Date and Start Time using the computer's local clock.
             4. Set Duration in minutes. Zero means until the source ends; a continuous

@@ -458,7 +458,10 @@ class MainWindow(wx.Frame):
         self._downloads_panel = DownloadsPanel(self._listbook, self._db, self._engine)
         self._downloads_panel.on_stop_recording = self._radio_panel.stop_recording_by_download_id
         self._downloads_panel.on_check_recording_active = self._radio_panel.is_recording_active
-        self._scheduler_panel = SchedulerPanel(self._listbook, self._db, self._scheduler_service)
+        from radiomaster.services.schedule_sources import ScheduleSources
+        self._scheduler_panel = SchedulerPanel(
+            self._listbook, self._db, self._scheduler_service,
+            sources=ScheduleSources(self._station_db, self._db, self._schedule_now_playing))
 
         self._listbook.AddPage(self._radio_panel, "Radio")
         self._listbook.AddPage(self._podcast_panel, "Podcasts")
@@ -1922,6 +1925,16 @@ class MainWindow(wx.Frame):
         grouping. Derived from the selected tab, matching how each panel
         calls engine.play()."""
         return self._stats_source_context()[0]
+
+    def _schedule_now_playing(self):
+        """What is playing now, as a source for a recording schedule: (pick, "") or
+        (None, why it cannot be scheduled)."""
+        from radiomaster.services.schedule_sources import pick_from_now_playing
+        engine = self._engine
+        url, title = engine.current_url, engine.current_title
+        kind, _ident, name = self._stats_source_context() if url else ("media", "", "")
+        return pick_from_now_playing(url, title, kind, is_video=bool(engine.is_video),
+                                     show_title=name if kind == "podcast" else "")
 
     def _stats_source_context(self) -> tuple[str, str, str]:
         """Identify the playing item without touching wx from engine threads."""

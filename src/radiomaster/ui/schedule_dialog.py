@@ -17,6 +17,7 @@ class ScheduleDialog(wx.Dialog):
         parent: wx.Window,
         db: DatabaseManager,
         schedule_data: dict[str, Any] | None = None,
+        sources: Any = None,
     ) -> None:
         """Initialize the schedule dialog.
         
@@ -24,6 +25,8 @@ class ScheduleDialog(wx.Dialog):
             parent: Parent window
             db: Database manager instance
             schedule_data: Existing schedule data for edit mode, None for add mode
+            sources: Optional ScheduleSources; enables the buttons that fill in the
+                address from what is playing, a station or a podcast episode
         """
         title = "Edit Recording Schedule" if schedule_data else "Add Recording Schedule"
         super().__init__(parent, title=title, size=(500, 600))
@@ -31,6 +34,8 @@ class ScheduleDialog(wx.Dialog):
         self._db = db
         self._repo = ScheduleRepository(db)
         self._schedule_data = schedule_data
+        self._sources = sources
+        self._auto_title = ""   # title the last pick filled in, so a later pick may replace it
         self._result: dict[str, Any] | None = None
         
         self._setup_ui()
@@ -48,12 +53,28 @@ class ScheduleDialog(wx.Dialog):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         
         # URL
-        url_label = wx.StaticText(panel, label="Stream/Podcast URL:")
+        url_label = wx.StaticText(panel, label="Stream/Podcast &URL:")
         main_sizer.Add(url_label, 0, wx.ALL, 4)
         self._url_ctrl = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
         set_accessible_name(self._url_ctrl, "Schedule URL")
         self._url_ctrl.SetMaxLength(1000)
         main_sizer.Add(self._url_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+
+        # Fill in the address without typing it
+        pick_row = wx.BoxSizer(wx.HORIZONTAL)
+        self._btn_now = wx.Button(panel, label="Use &Now Playing")
+        set_accessible_name(self._btn_now, "Use the item that is playing now")
+        self._btn_station = wx.Button(panel, label="Choose &Station...")
+        set_accessible_name(self._btn_station, "Choose a station")
+        self._btn_episode = wx.Button(panel, label="Choose &Podcast Episode...")
+        set_accessible_name(self._btn_episode, "Choose a podcast episode")
+        for button in (self._btn_now, self._btn_station, self._btn_episode):
+            pick_row.Add(button, 0, wx.RIGHT, 4)
+            button.Enable(self._sources is not None)
+        main_sizer.Add(pick_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self._btn_now.Bind(wx.EVT_BUTTON, self._on_use_now_playing)
+        self._btn_station.Bind(wx.EVT_BUTTON, self._on_choose_station)
+        self._btn_episode.Bind(wx.EVT_BUTTON, self._on_choose_episode)
         
         # Title
         title_label = wx.StaticText(panel, label="Title:")
@@ -202,6 +223,42 @@ class ScheduleDialog(wx.Dialog):
             # Set enabled
             enabled = self._schedule_data.get('enabled', 1)
             self._enabled_check.SetValue(bool(enabled))
+    # ------------------------------------------------------------------
+    # Filling in the address
+    # ------------------------------------------------------------------
+    def _apply_pick(self, pick) -> None:
+        """Put a picked source into the form. The title is only replaced when it is
+        empty or was filled in by an earlier pick, never over what was typed."""
+        self._url_ctrl.SetValue(pick.url)
+        index = self._type_combo.FindString(pick.source_type)
+        if index != wx.NOT_FOUND:
+            self._type_combo.SetSelection(index)
+        current = self._title_ctrl.GetValue().strip()
+        if not current or current == self._auto_title:
+            self._title_ctrl.SetValue(pick.title[:200])
+            self._auto_title = self._title_ctrl.GetValue().strip()
+        # Land on the title so a screen reader reads what was filled in.
+        wx.CallAfter(self._title_ctrl.SetFocus)
+
+    def _on_use_now_playing(self, event: wx.CommandEvent) -> None:
+        pick, reason = self._sources.now_playing()
+        if pick is None:
+            wx.MessageBox(reason, "Use Now Playing", wx.OK | wx.ICON_INFORMATION, self)
+            return
+        self._apply_pick(pick)
+
+    def _on_choose_station(self, event: wx.CommandEvent) -> None:
+        from radiomaster.ui.source_picker_dialogs import StationPickerDialog
+        with StationPickerDialog(self, self._sources) as dialog:
+            if dialog.ShowModal() == wx.ID_OK and dialog.pick():
+                self._apply_pick(dialog.pick())
+
+    def _on_choose_episode(self, event: wx.CommandEvent) -> None:
+        from radiomaster.ui.source_picker_dialogs import EpisodePickerDialog
+        with EpisodePickerDialog(self, self._sources) as dialog:
+            if dialog.ShowModal() == wx.ID_OK and dialog.pick():
+                self._apply_pick(dialog.pick())
+
     def _on_ok(self, event: wx.CommandEvent) -> None:
         """Handle OK button - validate and save."""
         # Validate
