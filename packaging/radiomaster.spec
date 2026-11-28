@@ -11,6 +11,34 @@ project_root = os.getcwd()
 src_dir = os.path.join(project_root, 'src')
 resources_dir = os.path.join(project_root, 'resources')
 
+# Windows version details for the launcher (file Properties > Details). Without
+# them the unsigned exe names no product, publisher or version, which counts
+# against it with antivirus heuristics such as Defender's Bearfoos.A!ml.
+sys.path.insert(0, src_dir)
+from radiomaster import __app_name__, __author__, __copyright__, __version__
+from PyInstaller.utils.win32.versioninfo import (
+    FixedFileInfo, StringFileInfo, StringStruct, StringTable, VarFileInfo,
+    VarStruct, VSVersionInfo)
+
+_numbers = tuple(int(part) for part in __version__.split('.'))
+_numbers += (0,) * (4 - len(_numbers))
+version_info = VSVersionInfo(
+    ffi=FixedFileInfo(filevers=_numbers, prodvers=_numbers),
+    kids=[
+        StringFileInfo([StringTable('040904B0', [
+            StringStruct('CompanyName', __author__),
+            StringStruct('FileDescription', __app_name__),
+            StringStruct('FileVersion', __version__),
+            StringStruct('InternalName', __app_name__),
+            StringStruct('LegalCopyright', __copyright__),
+            StringStruct('OriginalFilename', __app_name__ + '.exe'),
+            StringStruct('ProductName', __app_name__),
+            StringStruct('ProductVersion', __version__),
+        ])]),
+        VarFileInfo([VarStruct('Translation', [0x0409, 0x04B0])]),
+    ],
+)
+
 a = Analysis(
     [os.path.join(src_dir, 'radiomaster', '__main__.py')],
     pathex=[src_dir],
@@ -105,8 +133,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,   # packed executables are a common antivirus false positive
     upx_exclude=[],
+    version=version_info,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -122,7 +151,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='RadioMaster+',
 )

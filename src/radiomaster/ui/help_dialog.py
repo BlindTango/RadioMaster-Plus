@@ -114,6 +114,14 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
         "Listen Live page. Players requiring JavaScript execution or a sign-in may "
         "not expose a stream. Some addresses expire; scan again if a saved link stops working."
     )),
+    ("What's New in Version 1.4.5", (
+        "Windows Defender flagged the 1.4.4 program file as Trojan:Win32/Bearfoos.A!ml, a "
+        "machine-learning guess. The file was checked and no sign of a virus was found: its "
+        "code matched the program's sources and the standard launcher. The program file now "
+        "carries its product name, publisher and version, and the 1.4.5 build was scanned "
+        "with Windows Defender before release. Nothing else in the program changed. If Defender "
+        "removed your copy, install 1.4.5; you do not need to add a Defender exclusion."
+    )),
     ("What's New in Version 1.4.4", (
         "Scheduling a recording no longer means typing a stream address. In Add Schedule, "
         "Use Now Playing takes the station, podcast episode or audiobook that is playing; "
@@ -334,6 +342,11 @@ QUICK_START_TOPICS: list[tuple[str, str]] = [
 
 
 RELEASE_NOTES_TOPICS: list[tuple[str, str]] = [
+    ("Version 1.4.5", (
+        "Packaging: the program file now carries Windows version details and is never "
+        "compressed, after Windows Defender wrongly flagged the 1.4.4 program file. No change "
+        "to how the program works."
+    )),
     ("Version 1.4.4", (
         "Scheduler: Add Schedule can fill in the address, source type and title from what is "
         "playing now (Use Now Playing), from a station (Choose Station: favorites, custom "
